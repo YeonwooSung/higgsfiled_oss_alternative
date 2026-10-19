@@ -8,8 +8,10 @@ import os
 import signal
 import socket
 import threading
+import time
 import uuid
 
+from oc_api.cleanup import run_cleanup
 from oc_api.db import make_sessionmaker, utcnow
 from oc_api.settings import Settings
 from oc_api.storage import make_storage
@@ -101,8 +103,12 @@ def main() -> None:
     def loop(i: int) -> None:
         ctx = build_context(settings)
         ctx.worker_id = f"{ctx.worker_id}-{i}"
+        last_cleanup = 0.0
         while not stop.is_set():
             try:
+                if i == 0 and time.monotonic() - last_cleanup > 60:
+                    last_cleanup = time.monotonic()
+                    run_cleanup(ctx.db_factory, ctx.storage)
                 if not run_once(ctx):
                     stop.wait(args.idle_sleep)
             except Exception:  # noqa: BLE001

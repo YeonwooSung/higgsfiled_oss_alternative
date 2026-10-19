@@ -1,0 +1,18 @@
+FROM node:20-slim AS build
+RUN corepack enable
+# Next.js resolves rewrites at build time, so the API origin is a build argument.
+ARG API_ORIGIN=http://api:8000
+ENV API_ORIGIN=$API_ORIGIN
+WORKDIR /app
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY packages packages
+COPY apps/product-lock apps/product-lock
+RUN pnpm install --frozen-lockfile && pnpm --filter @oc/product-lock build
+
+FROM node:20-slim
+RUN corepack enable
+WORKDIR /app
+COPY --from=build /app /app
+ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1
+EXPOSE 3000
+CMD ["pnpm", "--filter", "@oc/product-lock", "start"]

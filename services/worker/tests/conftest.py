@@ -14,7 +14,9 @@ from worker_helpers import make_ctx
 
 @pytest.fixture
 def settings(tmp_path):
-    return Settings(database_url=f"sqlite+pysqlite:///{tmp_path / 'w.db'}", storage_dir=tmp_path / "storage",
+    from conftest_db import database_url_for_tests
+
+    return Settings(database_url=database_url_for_tests(tmp_path), storage_dir=tmp_path / "storage",
                     signing_secret="test-secret", default_profile="mock_v1", work_dir=tmp_path / "work")
 
 

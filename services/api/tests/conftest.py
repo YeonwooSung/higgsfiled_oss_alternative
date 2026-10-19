@@ -1,6 +1,8 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from conftest_db import database_url_for_tests
+
 from oc_api.app import create_app
 from oc_api.settings import Settings
 
@@ -8,7 +10,7 @@ from oc_api.settings import Settings
 @pytest.fixture
 def settings(tmp_path):
     return Settings(
-        database_url=f"sqlite+pysqlite:///{tmp_path / 'test.db'}",
+        database_url=database_url_for_tests(tmp_path),
         storage_dir=tmp_path / "storage",
         signing_secret="test-secret",
         cookie_secure=False,
@@ -19,7 +21,7 @@ def settings(tmp_path):
 
 @pytest.fixture
 def app(settings):
-    return create_app(settings)
+    return create_app(settings, create_tables=True)
 
 
 @pytest.fixture
