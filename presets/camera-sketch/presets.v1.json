@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "solver_version": "cs_framing_ls_v1",
+  "params": {
+    "lateral_ratio": {"unit": "target_depth", "label_en": "Lateral", "label_ko": "좌우 이동"},
+    "push_ratio": {"unit": "target_depth", "label_en": "Push", "label_ko": "접근"},
+    "arc_deg": {"unit": "deg", "label_en": "Arc angle", "label_ko": "아크 각도"}
+  },
+  "presets": [
+    {
+      "id": "push_in",
+      "label_en": "Push in",
+      "label_ko": "푸시 인",
+      "bounds": {"lateral_ratio": [0, 0], "push_ratio": [0, 0.10], "arc_deg": [0, 0]},
+      "default": {"lateral_ratio": 0, "push_ratio": 0.06, "arc_deg": 0}
+    },
+    {
+      "id": "slide",
+      "label_en": "Slide",
+      "label_ko": "슬라이드",
+      "bounds": {"lateral_ratio": [-0.05, 0.05], "push_ratio": [0, 0], "arc_deg": [0, 0]},
+      "default": {"lateral_ratio": 0.04, "push_ratio": 0, "arc_deg": 0}
+    },
+    {
+      "id": "small_arc",
+      "label_en": "Small arc",
+      "label_ko": "작은 아크",
+      "bounds": {"lateral_ratio": [0, 0], "push_ratio": [0, 0], "arc_deg": [-6, 6]},
+      "default": {"lateral_ratio": 0, "push_ratio": 0, "arc_deg": 4}
+    }
+  ]
+}
