@@ -76,6 +76,7 @@ def test_presets_content():
     assert p["push_in"]["bounds"]["lateral_ratio"] == [0, 0]
     assert p["slide"]["bounds"]["lateral_ratio"] == [-0.05, 0.05]
     assert p["small_arc"]["bounds"]["arc_deg"] == [-6, 6]
+    assert all(pr["bounds"]["push_ratio"] == [0, 0.10] for pr in p.values())
     for pr in p.values():
         assert pr["label_en"] and pr["label_ko"] and set(pr["default"]) == set(pr["bounds"])
 
@@ -151,6 +152,15 @@ def test_preset_center_formulas():
         assert c[1] == 0.0
         assert np.linalg.norm(c - T) == pytest.approx(np.linalg.norm(T), abs=1e-12)
     assert np.allclose(preset_center("small_arc", {"arc_deg": 6.0}, 0.0, T), 0.0)
+    # Positive arc and positive lateral both move the camera toward +x.
+    assert preset_center("small_arc", {"arc_deg": 6.0}, 1.0, np.array([0.0, 0.0, 1.0]))[0] > 0
+    assert preset_center("small_arc", {"arc_deg": -6.0}, 1.0, np.array([0.0, 0.0, 1.0]))[0] < 0
+    # Push is additive on every preset.
+    assert np.allclose(preset_center("slide", {"lateral_ratio": 0.02, "push_ratio": 0.05}, 1.0, T),
+                       [0.02, 0, 0.05])
+    c0 = preset_center("small_arc", {"arc_deg": 6.0}, 0.5, T)
+    c1 = preset_center("small_arc", {"arc_deg": 6.0, "push_ratio": 0.08}, 0.5, T)
+    assert np.allclose(c1 - c0, [0, 0, 0.04])
 
 
 # ---- compile_path ----------------------------------------------------------
@@ -202,7 +212,9 @@ def test_small_arc_keeps_distance_and_7_deg_is_invalid(room):
 
 
 def test_params_of_other_presets_are_out_of_bounds(room):
-    cp = compile_path(cfg("slide", lateral_ratio=0.02, push_ratio=0.05), room, OUT_W, OUT_H)
+    cp = compile_path(cfg("slide", lateral_ratio=0.02, arc_deg=2.0), room, OUT_W, OUT_H)
+    assert cp.status == "invalid" and "param_out_of_bounds" in cp.reasons
+    cp = compile_path(cfg("small_arc", arc_deg=2.0, lateral_ratio=0.01), room, OUT_W, OUT_H)
     assert cp.status == "invalid" and "param_out_of_bounds" in cp.reasons
 
 
@@ -275,3 +287,58 @@ def test_unknown_preset_or_easing_is_invalid(room):
     assert compile_path(cfg("orbit"), room, OUT_W, OUT_H).reasons == ["unknown_preset"]
     c = {**cfg("slide", lateral_ratio=0.01), "easing": "bounce"}
     assert compile_path(c, room, OUT_W, OUT_H).reasons == ["unknown_easing"]
+
+
+def test_push_is_additive_on_slide_and_arc(room):
+    cp = compile_path(cfg("slide", lateral_ratio=0.02, push_ratio=0.05), room, OUT_W, OUT_H)
+    assert cp.status in ("ok", "warning")
+    assert centers(cp)[-1] == pytest.approx([0.02, 0, 0.05], abs=1e-12)
+    cp = compile_path(cfg("small_arc", arc_deg=5.0, push_ratio=0.08), room, OUT_W, OUT_H)
+    assert cp.status == "ok" and cp.diagnostics["framing_rms_rel"] <= 0.01
+    arc_only = preset_center("small_arc", {"arc_deg": 5.0}, 1.0, room.target_world)
+    assert arc_only[0] > 0
+    assert centers(cp)[-1] == pytest.approx(arc_only + [0, 0, 0.08], abs=1e-12)
+
+
+def test_suggestion_halves_only_nonzero_params(room):
+    cp = compile_path(cfg("slide", lateral_ratio=0.08, push_ratio=0.0), room, OUT_W, OUT_H)
+    assert cp.status == "invalid"
+    assert cp.suggested_params == {"lateral_ratio": 0.04, "push_ratio": 0.0, "arc_deg": 0.0}
+
+
+@pytest.mark.parametrize("c", [
+    cfg("slide", lateral_ratio=float("nan")),
+    cfg("slide", lateral_ratio="abc"),
+    cfg("slide", [(0.0, 0.5, 0.5), (0.5, float("nan"), 0.5), (1.0, 0.6, 0.5)], lateral_ratio=0.0),
+    cfg("slide", [(0.0, 0.5, float("inf"))], lateral_ratio=0.0),
+    {**cfg("slide", lateral_ratio=0.0), "sketch_points": [{"t": 0, "u": 0.5}]},
+])
+def test_invalid_input_is_json_safe(room, c):
+    cp = compile_path(c, room, OUT_W, OUT_H)
+    assert cp.status == "invalid" and "invalid_input" in cp.reasons
+    d = cp.to_dict()
+    assert d["keyframes"] == [] and d["samples"] == [] and d["control_points"] == []
+    assert_json_safe(cp)
+    assert "nan" not in json.dumps(d).lower() and "abc" not in json.dumps(d)
+
+
+@pytest.mark.parametrize("n", [0, 1])
+def test_too_few_frames_is_invalid_input(room, n):
+    cp = compile_path(cfg("slide", lateral_ratio=0.02), room, OUT_W, OUT_H, n_frames=n)
+    assert cp.status == "invalid" and cp.reasons == ["invalid_input"]
+    assert_json_safe(cp)
+
+
+def test_non_finite_poses_clear_artifact(room, monkeypatch):
+    real = cs_path.preset_center
+
+    def broken(preset, params, s, target):
+        c = real(preset, params, s, target)
+        return c * np.nan if 0.0 < s < 1.0 else c
+
+    monkeypatch.setattr(cs_path, "preset_center", broken)
+    cp = compile_path(cfg("slide", [(0, 0.5, 0.5), (1, 0.55, 0.5)], lateral_ratio=0.02), room, OUT_W, OUT_H)
+    assert cp.status == "invalid" and "non_finite" in cp.reasons
+    d = cp.to_dict()
+    assert d["keyframes"] == d["samples"] == d["control_points"] == []
+    assert_json_safe(cp)

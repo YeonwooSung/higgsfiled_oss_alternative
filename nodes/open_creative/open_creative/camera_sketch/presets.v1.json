@@ -18,14 +18,14 @@
       "id": "slide",
       "label_en": "Slide",
       "label_ko": "슬라이드",
-      "bounds": {"lateral_ratio": [-0.05, 0.05], "push_ratio": [0, 0], "arc_deg": [0, 0]},
+      "bounds": {"lateral_ratio": [-0.05, 0.05], "push_ratio": [0, 0.10], "arc_deg": [0, 0]},
       "default": {"lateral_ratio": 0.04, "push_ratio": 0, "arc_deg": 0}
     },
     {
       "id": "small_arc",
       "label_en": "Small arc",
       "label_ko": "작은 아크",
-      "bounds": {"lateral_ratio": [0, 0], "push_ratio": [0, 0], "arc_deg": [-6, 6]},
+      "bounds": {"lateral_ratio": [0, 0], "push_ratio": [0, 0.10], "arc_deg": [-6, 6]},
       "default": {"lateral_ratio": 0, "push_ratio": 0, "arc_deg": 4}
     }
   ]

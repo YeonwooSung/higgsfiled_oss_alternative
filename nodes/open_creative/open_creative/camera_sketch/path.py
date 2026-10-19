@@ -192,7 +192,10 @@ def solve_framing(
     right-hand side and the free block is solved with ``np.linalg.solve``. Active set: solve;
     then up to 5 rounds of {free entries outside ``[lo, hi]`` (in index order) are fixed at
     the violated bound; re-solve}, stopping early when none violate; finally free entries are
-    clipped to ``[lo, hi]``.
+    clipped to ``[lo, hi]``. A bound, once fixed, is never released (no dual check), so the
+    result is the active-set iterate, not necessarily the exact box-QP optimum. The velocity
+    and acceleration penalties are per key INDEX (consecutive control points), not per unit
+    time: unequal key spacing in t is deliberately ignored.
     """
     d = np.asarray(desired, dtype=float).reshape(-1, 2)
     n = len(d)
@@ -221,22 +224,28 @@ def solve_framing(
 def preset_center(preset: str, params: dict, s: float, target_world: np.ndarray) -> np.ndarray:
     """Camera center at eased progress ``s`` in [0, 1]; every preset starts at the origin.
 
-    slide: ``(lateral_ratio*s, 0, 0)``; push_in: ``(0, 0, push_ratio*s)``; small_arc: the
-    source camera rotated by ``arc_deg*s`` about the vertical (world y) axis through the
-    target, ``c = T + Ry(a) @ (0 - T)`` with ``Ry(a) = [[cos,0,sin],[0,1,0],[-sin,0,cos]]``.
+    Base curve: slide ``(lateral_ratio*s, 0, 0)`` (positive = camera moves +x, right);
+    push_in ``(0, 0, 0)``; small_arc: the source camera rotated about the vertical (world y)
+    axis through the target, ``c = T + Ry(-a) @ (0 - T)`` with ``a = radians(arc_deg*s)`` and
+    ``Ry(b) = [[cos b,0,sin b],[0,1,0],[-sin b,0,cos b]]`` (positive arc_deg = camera moves
+    toward +x, same sign as lateral_ratio). Push is additive on EVERY preset:
+    ``c = base + (0, 0, push_ratio*s)`` (positive = forward, toward the scene).
     """
     s = float(s)
     if preset == "slide":
-        return np.array([float(params.get("lateral_ratio", 0.0)) * s, 0.0, 0.0])
-    if preset == "push_in":
-        return np.array([0.0, 0.0, float(params.get("push_ratio", 0.0)) * s])
-    if preset == "small_arc":
-        a = math.radians(float(params.get("arc_deg", 0.0)) * s)
+        c = np.array([float(params.get("lateral_ratio", 0.0)) * s, 0.0, 0.0])
+    elif preset == "push_in":
+        c = np.zeros(3)
+    elif preset == "small_arc":
+        a = -math.radians(float(params.get("arc_deg", 0.0)) * s)
         T = np.asarray(target_world, dtype=float)
-        c, sn = math.cos(a), math.sin(a)
-        Ry = np.array([[c, 0.0, sn], [0.0, 1.0, 0.0], [-sn, 0.0, c]])
-        return T + Ry @ (-T)
-    raise ValueError(f"unknown preset {preset!r}")
+        co, sn = math.cos(a), math.sin(a)
+        Ry = np.array([[co, 0.0, sn], [0.0, 1.0, 0.0], [-sn, 0.0, co]])
+        c = T + Ry @ (-T)
+    else:
+        raise ValueError(f"unknown preset {preset!r}")
+    c[2] += float(params.get("push_ratio", 0.0)) * s
+    return c
 
 
 # ---- compile ---------------------------------------------------------------------------
@@ -280,6 +289,11 @@ class CompiledPath:
         }
 
 
+def _finite_number(x: object) -> bool:
+    return (isinstance(x, (int, float, np.integer, np.floating)) and not isinstance(x, bool)
+            and math.isfinite(float(x)))
+
+
 def _mat(M: np.ndarray) -> list:
     return [[float(x) for x in row] for row in np.asarray(M)]
 
@@ -299,6 +313,8 @@ def compile_path(
     ``e_k`` sampled at ``ease(s_i)`` with linear easing; center = ``preset_center(ease(s_i))``
     exactly (equal to the key interpolation for slide/push_in; keeps the arc on its circle).
     Statuses: ``invalid`` (no GPU use), ``warning``, ``ok``; reasons are machine codes.
+    Non-numeric / non-finite params or sketch values, a malformed sketch or ``n_frames < 2``
+    -> ``invalid_input`` (the offending field is named, its value is never echoed).
     """
     presets = load_presets()
     name = str(cfg.get("preset", ""))
@@ -312,7 +328,7 @@ def compile_path(
         depth_mapping=None if conv is None else
         {**{k: (float(v) if k != "kind" else v) for k, v in asdict(conv).items()},
          "z_far_cap": float(Z_FAR_CAP), "target_z": 1.0},
-        preset=name, params={}, easing=easing, control_points=[],
+        preset=name, params={}, easing=str(easing), control_points=[],
         diagnostics={"framing_rms_px": None, "framing_rms_rel": None,
                      "target_in_front_min_z": None, "target_in_frame_fraction": None,
                      "hole_ratio": None, "framing_clamped": False, "details": []},
@@ -335,15 +351,33 @@ def compile_path(
 
     if name not in presets:
         fail("unknown_preset", preset=name)
-    if easing not in ("linear", "ease_in_out"):
-        fail("unknown_easing", easing=str(easing))
+    if not isinstance(easing, str) or easing not in ("linear", "ease_in_out"):
+        fail("unknown_easing")
+    if not isinstance(n_frames, int) or isinstance(n_frames, bool) or n_frames < 2:
+        fail("invalid_input", field="n_frames")
+    raw: list[tuple[float, float, float]] = []
+    try:
+        for p in cfg.get("sketch_points") or []:
+            tri = (p["t"], p["u"], p["v"]) if isinstance(p, dict) else tuple(p)
+            if len(tri) != 3 or not all(_finite_number(x) for x in tri):
+                raise ValueError
+            raw.append(tuple(float(x) for x in tri))
+    except (ValueError, TypeError, KeyError):
+        fail("invalid_input", field="sketch_points")
+        raw = []
     if out.reasons:
         return finish()
     preset = presets[name]
-    params = {p: float(cfg.get(p, preset["default"][p])) for p in PARAMS}
+    vals = {p: cfg.get(p, preset["default"][p]) for p in PARAMS}
+    bad = [p for p in PARAMS if not _finite_number(vals[p])]
+    for p in bad:
+        fail("invalid_input", field=p)
+    if bad:
+        return finish()
+    params = {p: float(vals[p]) for p in PARAMS}
     out.params = params
     for p, (lo, hi) in preset["bounds"].items():
-        if not (math.isfinite(params[p]) and lo - 1e-12 <= params[p] <= hi + 1e-12):
+        if not lo - 1e-12 <= params[p] <= hi + 1e-12:
             fail("param_out_of_bounds", param=p, value=params[p], bounds=[lo, hi])
     T = np.asarray(scene.target_world, dtype=float)
     if not np.isfinite(T).all() or T[2] <= NEAR:
@@ -355,8 +389,6 @@ def compile_path(
     tu, tv = scene.target_uv01
     t_out = np.array([(tu * scene.src_w * fit.scale + fit.offset_x) / out_w,
                       (tv * scene.src_h * fit.scale + fit.offset_y) / out_h])
-    raw = [(p["t"], p["u"], p["v"]) if isinstance(p, dict) else tuple(p)
-           for p in cfg.get("sketch_points") or []]
     if raw:
         ctrl, warning = simplify_sketch(raw)
         if warning:
@@ -406,6 +438,7 @@ def compile_path(
         uv[i], z[i] = uv_i[0], z_i[0]
     if not all(np.isfinite(Ti).all() for Ti in Ts):
         fail("non_finite")
+        out.keyframes, out.control_points = [], []
         return finish()
     front = z > NEAR
     inside = front & (uv[:, 0] >= 0) & (uv[:, 0] <= out_w) & (uv[:, 1] >= 0) & (uv[:, 1] <= out_h)
@@ -427,11 +460,14 @@ def compile_path(
 def _suggest_params(
     cfg: dict, params: dict, scene: SceneInfo, out_w: int, out_h: int, n_frames: int
 ) -> dict | None:
-    """Largest ``params * 0.5**k`` (k = 1..4) whose compile has no motion reason; else None."""
+    """Largest ``params * 0.5**k`` (k = 1..4) whose compile has no motion reason; else None.
+
+    Only nonzero params are halved; zero params stay exactly ``0.0``.
+    """
     if not params:
         return None
     for k in range(1, 5):
-        trial = {p: params[p] * 0.5**k for p in PARAMS}
+        trial = {p: (params[p] * 0.5**k if params[p] != 0 else 0.0) for p in PARAMS}
         res = compile_path({**cfg, **trial}, scene, out_w, out_h, n_frames, _suggest=False)
         if not any(r in MOTION_REASONS for r in res.reasons):
             return trial
