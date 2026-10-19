@@ -60,18 +60,20 @@ export function ResultView() {
 
   const m = integrity.data?.postencode_metrics;
   return (
-    <div className="flex w-full max-w-5xl flex-col gap-4 lg:flex-row">
-      <div className="flex flex-1 flex-col items-center gap-3">
-        <div className="w-56"><Segmented label="compare" value={mode} onChange={setMode}
+    // lg+: media column fills the stage height, details column scrolls by itself.
+    // Narrower: stacked, and the stage area scrolls.
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 lg:h-full lg:flex-row">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col items-center gap-3">
+        <div className="w-56 shrink-0"><Segmented label="compare" value={mode} onChange={setMode}
           options={[{ value: "result", label: t("result") }, { value: "original", label: t("original") }]} /></div>
-        <div className="flex max-h-[60vh] items-center justify-center">
+        <div className="flex h-[min(56dvh,560px)] w-full min-h-0 items-center justify-center lg:h-auto lg:flex-1">
           {mode === "result"
-            ? videoUrl && <video data-stage-video src={videoUrl} poster={coverUrl} controls muted autoPlay loop playsInline className="max-h-[60vh] rounded-[4px] shadow" />
+            ? videoUrl && <video data-stage-video src={videoUrl} poster={coverUrl} controls muted autoPlay loop playsInline className="h-full max-h-full w-auto max-w-full rounded-[4px] object-contain shadow" />
             // eslint-disable-next-line @next/next/no-img-element
-            : productUrl && <img src={productUrl} alt={t("original")} className="checker max-h-[60vh] rounded-[4px]" />}
+            : productUrl && <img src={productUrl} alt={t("original")} className="checker h-full max-h-full w-auto max-w-full rounded-[4px] object-contain" />}
         </div>
       </div>
-      <aside className="w-full space-y-4 rounded-panel border border-border bg-panel p-4 lg:w-80">
+      <aside className="scroll-panel w-full shrink-0 space-y-4 rounded-panel border border-border bg-panel p-4 lg:max-h-full lg:w-80">
         <div className="flex flex-wrap gap-2">
           {job.input_revision < revision && <Badge>{t("previousVersion")}</Badge>}
           {job.model_profile === "mock_v1" && <Badge tone="mock" title={t("mockExplain")}>{t("mock")}</Badge>}

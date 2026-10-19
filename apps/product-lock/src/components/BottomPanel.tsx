@@ -45,7 +45,7 @@ function Thumb({ assetId, selected, onClick, label }: { assetId: string; selecte
   const url = useAssetUrl(assetById(project, assetId));
   return (
     <button type="button" onClick={onClick} aria-pressed={selected}
-      className={cx("relative h-20 w-14 shrink-0 overflow-hidden rounded-button border-2 bg-stage", selected ? "border-accent" : "border-transparent")}>
+      className={cx("relative h-[68px] w-12 shrink-0 overflow-hidden rounded-button border-2 bg-stage", selected ? "border-accent" : "border-transparent")}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       {url && <img src={url} alt={label} className="h-full w-full object-cover" />}
       {selected && <span className="absolute bottom-0 inset-x-0 bg-accent text-[10px] text-white">{label}</span>}
@@ -121,18 +121,18 @@ export function BottomPanel() {
           <Tabs.Trigger value="backgrounds" className="py-1.5 text-muted data-[state=active]:font-semibold data-[state=active]:text-ink">{t("backgrounds")}</Tabs.Trigger>
           <Tabs.Trigger value="renders" className="py-1.5 text-muted data-[state=active]:font-semibold data-[state=active]:text-ink">{t("renders")}</Tabs.Trigger>
         </Tabs.List>
-        <Tabs.Content value="backgrounds" className="flex h-24 items-center gap-2 overflow-x-auto px-3 pb-2">
+        <Tabs.Content value="backgrounds" className="flex h-[84px] items-center gap-2 overflow-x-auto px-3 pb-2 data-[state=inactive]:hidden">
           {backgrounds.length === 0 && <p className="text-xs text-muted">{t("noBackgrounds")}</p>}
           {backgrounds.map((b) => (
             <Thumb key={b.id} assetId={b.id} selected={config!.scene.background_asset_id === b.id} label={t("selected")}
               onClick={() => update((c) => { c.scene.background_asset_id = b.id; })} />
           ))}
         </Tabs.Content>
-        <Tabs.Content value="renders" className="flex h-24 items-center gap-2 overflow-x-auto px-3 pb-2">
+        <Tabs.Content value="renders" className="flex h-[84px] items-center gap-2 overflow-x-auto px-3 pb-2 data-[state=inactive]:hidden">
           {renders.length === 0 && <p className="text-xs text-muted">{t("noRenders")}</p>}
           {renders.map((j) => (
             <button key={j.id} type="button" onClick={() => j.state === "succeeded" && selectRender(j.id)}
-              className="flex h-20 w-40 shrink-0 flex-col justify-between rounded-button border border-border p-2 text-left text-xs hover:bg-app">
+              className="flex h-[68px] w-40 shrink-0 flex-col justify-between rounded-button border border-border p-2 text-left text-xs hover:bg-app">
               <span className="font-medium">rev {j.input_revision}</span>
               <span className="text-muted">{j.state === "succeeded" ? t("jobDone") : j.state === "failed" ? t("jobFailed") : jobLabel(j, t)}</span>
               {j.input_revision < revision && j.state === "succeeded" && <Badge>{t("previousVersion")}</Badge>}

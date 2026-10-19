@@ -16,3 +16,15 @@ h1 { font-size: 20px; line-height: 28px; font-weight: 600; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0ms !important; animation-duration: 0ms !important; }
 }
+
+/* Visible, thin scrollbars so scrollable panels read as scrollable (macOS hides overlay bars). */
+.scroll-panel {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #c4c8c1 transparent;
+  scrollbar-gutter: stable;
+}
+.scroll-panel::-webkit-scrollbar { width: 8px; height: 8px; }
+.scroll-panel::-webkit-scrollbar-thumb { background: #c4c8c1; border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+.scroll-panel::-webkit-scrollbar-track { background: transparent; }

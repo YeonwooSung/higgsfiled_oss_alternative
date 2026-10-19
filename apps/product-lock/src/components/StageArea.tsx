@@ -70,9 +70,9 @@ export function StageArea() {
   const scale = zoom === "fit" ? fit : zoom;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-stage">
+    <div className="flex h-[62dvh] min-h-[320px] shrink-0 flex-col bg-stage md:h-auto md:min-h-0 md:flex-1 md:shrink">
       <div className="flex flex-wrap items-center gap-2 border-b border-border bg-panel/70 px-3 py-2">
-        <div className="w-60">
+        <div className="w-full sm:w-60">
           <Segmented<View> label="view" value={view} onChange={setView} options={[
             { value: "compose", label: t("output") },
             { value: "mask", label: t("product") },
@@ -103,8 +103,9 @@ export function StageArea() {
           </button>
         )}
       </div>
-      <div ref={ref} className={`relative min-h-0 flex-1 overflow-auto ${showGrid && view === "mask" ? "checker" : ""}`}>
-        <div className="flex min-h-full min-w-full items-center justify-center p-4">
+      <div ref={ref} className={`scroll-panel relative min-h-0 flex-1 overflow-auto ${showGrid && view === "mask" ? "checker" : ""}`}>
+        {/* m-auto centers when there is room and keeps the top reachable when content is taller */}
+        <div className={view === "result" ? "h-full min-h-fit p-3 md:p-4" : "flex min-h-full min-w-full p-4 [&>*]:m-auto"}>
           {view === "result" ? (
             <ResultView />
           ) : view === "mask" ? (

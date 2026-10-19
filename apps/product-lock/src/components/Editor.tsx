@@ -82,23 +82,25 @@ export function Editor({ projectId }: { projectId: string }) {
   if (!project) return <main className="p-8 text-muted">…</main>;
 
   return (
-    <div className="flex h-[100dvh] flex-col overflow-hidden">
+    // Desktop: fixed app shell (panels scroll on their own) that never gets shorter than 640px —
+    // below that the page itself scrolls instead of clipping. Mobile: a normal scrolling page.
+    <div className="flex min-h-[100dvh] flex-col md:h-[100dvh] md:min-h-[640px]">
       <TopBar />
-      <div className="flex min-h-0 flex-1">
-        <aside className="hidden w-[260px] shrink-0 overflow-y-auto border-r border-border bg-panel md:block">
+      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+        <aside className="scroll-panel hidden w-[260px] shrink-0 border-r border-border bg-panel md:block">
           <LeftPanel />
         </aside>
-        <main className="flex min-w-0 flex-1 flex-col">
+        <main className="flex min-h-0 min-w-0 flex-1 flex-col">
           <StageArea />
           <BottomPanel />
         </main>
-        <aside className="hidden w-[320px] shrink-0 overflow-y-auto border-l border-border bg-panel md:block">
+        <aside className="scroll-panel hidden w-[320px] shrink-0 border-l border-border bg-panel md:block">
           <Inspector />
         </aside>
       </div>
-      {/* Mobile: stage on top, inspector as a bottom sheet with tabs */}
+      {/* Mobile: stage on top, inspector below with sticky tabs; the page scrolls */}
       <nav className="border-t border-border bg-panel md:hidden">
-        <div role="tablist" className="flex">
+        <div role="tablist" className="sticky top-0 z-10 flex border-b border-border bg-panel">
           {(["product", "scene", "output"] as const).map((tab) => (
             <button key={tab} role="tab" aria-selected={mobileTab === tab} onClick={() => setMobileTab(tab)}
               className={cx("min-h-[44px] flex-1 text-[13px]", mobileTab === tab ? "font-semibold text-accent" : "text-muted")}>
@@ -106,7 +108,7 @@ export function Editor({ projectId }: { projectId: string }) {
             </button>
           ))}
         </div>
-        <div className="max-h-[40dvh] overflow-y-auto">
+        <div>
           {mobileTab === "product" ? <LeftPanel compact /> : <Inspector only={mobileTab} />}
         </div>
       </nav>
