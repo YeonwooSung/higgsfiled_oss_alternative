@@ -49,8 +49,14 @@ class Preset:
         }
 
 
+PACKAGED_PRESETS = Path(__file__).with_name("presets.v1.json")
+
+
 def presets_path() -> Path:
-    return Path(os.environ.get("OC_PRODUCT_LOCK_PRESETS", DEFAULT_PRESETS))
+    """Env override → repo `presets/product-lock` → copy packaged with the custom node."""
+    if os.environ.get("OC_PRODUCT_LOCK_PRESETS"):
+        return Path(os.environ["OC_PRODUCT_LOCK_PRESETS"])
+    return DEFAULT_PRESETS if DEFAULT_PRESETS.exists() else PACKAGED_PRESETS
 
 
 @lru_cache(maxsize=4)

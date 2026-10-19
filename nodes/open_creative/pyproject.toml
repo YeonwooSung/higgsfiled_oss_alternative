@@ -12,3 +12,4 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["open_creative"]
+artifacts = ["open_creative/product_lock/presets.v1.json"]

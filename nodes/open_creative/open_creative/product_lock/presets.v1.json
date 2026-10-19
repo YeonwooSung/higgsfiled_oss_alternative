@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "presets": [
+    {
+      "id": "soft_studio_v1",
+      "version": "1.0.0",
+      "name": "Soft Studio",
+      "description": "Matte single-color backdrop, floor plane, soft gradient light.",
+      "prompt": "empty product photography studio, seamless matte {color} backdrop with a soft vertical gradient, smooth tabletop floor plane, soft diffused key light from the left, gentle falloff, minimal, clean commercial look",
+      "negative": "product, bottle, can, box, text, logo, watermark, people, hands, clutter",
+      "video_prompt": {
+        "subtle": "static locked-off camera, the soft studio light very slowly brightens and dims on the backdrop, no camera movement",
+        "balanced": "static locked-off camera, soft light slowly sweeps across the backdrop, gentle gradient shift, no camera movement"
+      },
+      "default_accent": "#D9D3C7",
+      "allowed_motion": ["subtle", "balanced"],
+      "particles": "none",
+      "default_shadow": {"enabled": true, "opacity": 0.28, "blur_px": 18},
+      "prompt_fields": ["accent_hex", "extra_prompt"],
+      "sample": true
+    },
+    {
+      "id": "neon_studio_v1",
+      "version": "1.0.0",
+      "name": "Neon Studio",
+      "description": "Dark studio with neon lines in the background.",
+      "prompt": "empty dark product photography studio, glossy black floor, thin {color} neon light lines on the far back wall, moody rim light, haze, cinematic commercial look",
+      "negative": "product, bottle, can, box, text, logo, watermark, people, hands, neon in foreground, light beams over the center",
+      "video_prompt": {
+        "subtle": "static locked-off camera, background neon lines slowly pulse, faint haze drifts in the back, no camera movement",
+        "balanced": "static locked-off camera, background neon lines pulse and shift brightness, haze slowly drifts, no camera movement"
+      },
+      "default_accent": "#965EFF",
+      "allowed_motion": ["subtle", "balanced"],
+      "particles": "neon",
+      "default_shadow": {"enabled": true, "opacity": 0.4, "blur_px": 14},
+      "prompt_fields": ["accent_hex", "extra_prompt"],
+      "sample": false
+    },
+    {
+      "id": "botanical_v1",
+      "version": "1.0.0",
+      "name": "Botanical",
+      "description": "Leaves and natural light in the background.",
+      "prompt": "empty product photography set, light stone pedestal surface, out-of-focus green leaves in the far background, natural window sunlight with {color} tones, soft bokeh, fresh organic commercial look",
+      "negative": "product, bottle, can, box, text, logo, watermark, people, hands, leaves in the foreground, leaves covering the center",
+      "video_prompt": {
+        "subtle": "static locked-off camera, leaf shadows sway very slightly in the background, bokeh drifts slowly, no camera movement",
+        "balanced": "static locked-off camera, background leaves sway gently in a breeze, dappled light moves slowly, no camera movement"
+      },
+      "default_accent": "#8DBF6A",
+      "allowed_motion": ["subtle", "balanced"],
+      "particles": "bokeh",
+      "default_shadow": {"enabled": true, "opacity": 0.3, "blur_px": 22},
+      "prompt_fields": ["accent_hex", "extra_prompt"],
+      "sample": false
+    }
+  ]
+}
