@@ -56,7 +56,10 @@ def get_app(slug: str) -> AppModule:
 def _register() -> None:
     from .product_lock import MODULE as product_lock
 
+    from .camera_sketch import MODULE as camera_sketch
+
     APPS[product_lock.slug] = product_lock
+    APPS[camera_sketch.slug] = camera_sketch
 
 
 _register()

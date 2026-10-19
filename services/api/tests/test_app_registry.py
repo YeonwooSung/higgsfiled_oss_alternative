@@ -40,9 +40,9 @@ def test_capabilities_unknown_app_422(session_client):
     assert r.status_code == 422 and r.json()["error"]["code"] == "unknown_app"
 
 
-def test_camera_sketch_project_fails_cleanly_until_module_exists(session_client):
+def test_camera_sketch_project_creates(session_client):
     r = session_client.post("/api/v1/projects", json={"app_slug": "camera-sketch", "title": "x"})
-    assert r.status_code == 422 and r.json()["error"]["code"] == "unknown_app"
+    assert r.status_code == 201 and r.json()["config"]["path"]["preset"] == "slide"
 
 
 def _write_exports(root, names):

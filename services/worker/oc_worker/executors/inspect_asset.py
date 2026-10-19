@@ -18,7 +18,7 @@ def inspect_asset(run: JobRun) -> tuple[list[str], dict]:
     data = run.ctx.storage.get_bytes(asset.object_key)
     run.transition("postprocessing", "inspect")
     try:
-        if asset.role == "product":
+        if asset.role in ("product", "scene"):
             return _product(run, asset, data)
         return _mask(run, asset, data)
     except MediaError as e:

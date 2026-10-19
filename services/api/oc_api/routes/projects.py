@@ -50,6 +50,9 @@ def check_asset_refs(db: DbSession, project: Project, config: dict) -> None:
         if asset is None or asset.project_id != project.id:
             raise ApiError(422, "asset_not_found", "Referenced asset does not belong to this project.",
                            field=f"config.{field}")
+    hook = getattr(get_app(project.app_slug), "check_config_assets", None)
+    if hook is not None:
+        hook(db, project, config)
 
 
 def current_config(db: DbSession, project: Project) -> dict:

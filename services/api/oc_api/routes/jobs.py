@@ -112,6 +112,8 @@ def create_job(project_id: str, body: JobCreate, request: Request, db: DbSession
     app = get_app(project.app_slug)
     if body.kind not in app.kinds:
         raise ApiError(422, "invalid_kind", f"kind {body.kind!r} is not available", field="kind")
+    if body.kind in getattr(app, "export_only_kinds", ()):
+        raise ApiError(422, "invalid_kind", f"kind {body.kind!r} is created through exports", field="kind")
     endpoint = f"POST /projects/{project.id}/jobs"
     rhash = _request_hash(body)
     if idempotency_key:
