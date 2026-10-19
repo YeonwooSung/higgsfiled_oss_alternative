@@ -22,7 +22,10 @@ class CameraSketchApp:
     asset_ref_fields = ("scene_asset_id", "depth_asset_id")
     upload_roles = {"scene": ("image/jpeg", "image/png", "image/webp")}
     render_kinds = frozenset({"camera.guide", "camera.cinematic"})
-    export_formats = {"camera.guide": ("mp4", "path_json"), "camera.cinematic": ("mp4", "path_json")}
+    export_formats = {"camera.guide": ("mp4", "path_json", "guides_zip", "recipe_zip"),
+                      "camera.cinematic": ("mp4", "path_json", "recipe_zip")}
+    export_kind = "camera.export"
+    export_source_key = "source_job_id"
     workflows: tuple[str, ...] = ()  # camera workflows/bindings are registered in Task 9
 
     def default_config(self, profile: str) -> BaseModel:
@@ -44,10 +47,13 @@ class CameraSketchApp:
 
     def plan_job(self, db: DbSession, storage, project: Project, cfg: BaseModel, kind: str, options: dict,
                  *, validate_assets: bool = True) -> JobPlan:
-        # Camera job planning arrives with Task 8.
-        raise ApiError(422, "invalid_kind", f"kind {kind!r} is not available", field="kind")
+        from ..camera_sketch.jobs import plan_job  # lazy: jobs imports JobPlan from this package
+
+        return plan_job(db, storage, project, cfg, kind, options, validate_assets=validate_assets)
 
     def default_estimate_options(self, kind: str, cfg: BaseModel) -> dict:
+        if kind == "camera.cinematic":
+            return {"guide_job_id": str(uuid.UUID(int=0))}
         return {}
 
     def capabilities_extra(self) -> dict:

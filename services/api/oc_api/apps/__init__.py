@@ -31,6 +31,8 @@ class AppModule(Protocol):
     upload_roles: dict[str, tuple[str, ...]]  # role -> allowed mime types
     render_kinds: frozenset[str]  # at most max_active_renders_per_project active per project
     export_formats: dict[str, tuple[str, ...]]  # source job kind -> export formats
+    export_kind: str  # internal job kind created by POST /projects/{id}/exports
+    export_source_key: str  # options key holding the source job id
     workflows: tuple[str, ...]  # bindings GPU profiles need for this app
 
     def default_config(self, profile: str) -> BaseModel: ...

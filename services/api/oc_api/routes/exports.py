@@ -25,7 +25,8 @@ class ExportCreate(BaseModel):
 def create_export(project_id: str, body: ExportCreate, db: DbSession = Depends(get_db),
                   session: SessionRow = Depends(current_session)):
     project = owned_project(project_id, db, session)
-    formats = get_app(project.app_slug).export_formats
+    app = get_app(project.app_slug)
+    formats = app.export_formats
     render = db.get(Job, body.job_id)
     if render is None or render.project_id != project.id or render.kind not in formats:
         raise ApiError(422, "render_not_found", "Render job not found.", field="job_id")
@@ -33,7 +34,8 @@ def create_export(project_id: str, body: ExportCreate, db: DbSession = Depends(g
         raise ApiError(422, "invalid_format", f"format {body.format!r} is not available", field="format")
     if render.state != "succeeded":
         raise ApiError(422, "render_not_finished", "Render has not finished.", field="job_id")
-    job = enqueue_internal_job(db, project, "export", {"render_job_id": str(render.id), "format": body.format})
+    job = enqueue_internal_job(db, project, app.export_kind,
+                                {app.export_source_key: str(render.id), "format": body.format})
     job.input_revision = render.input_revision
     db.commit()
     return job_out(job)

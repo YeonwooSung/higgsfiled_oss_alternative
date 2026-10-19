@@ -26,6 +26,8 @@ class ProductLockApp:
     }
     render_kinds = frozenset({"product.render"})
     export_formats = {"product.render": ("mp4", "cover_png", "recipe_zip")}
+    export_kind = "export"
+    export_source_key = "render_job_id"
     workflows = ("product_segment_v1", "product_background_image_v1", "product_background_video_v1")
 
     def default_config(self, profile: str) -> BaseModel:

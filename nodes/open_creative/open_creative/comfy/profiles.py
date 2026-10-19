@@ -24,6 +24,10 @@ GPU_SECONDS_CAP = {
     "product.background_video": 600,
     "product.render": 0,
     "product.inspect": 0,
+    "camera.analyze": 60,
+    "camera.guide": 0,
+    "camera.cinematic": 600,
+    "camera.export": 0,
 }
 
 

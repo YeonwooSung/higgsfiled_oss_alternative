@@ -20,6 +20,7 @@ from ..errors import ApiError
 from ..models import Asset, ProjectRevision
 from ..models import Session as SessionRow
 from .config import OUTPUT_SIZES, SketchPoint
+from .jobs import build_path_cfg
 from .scene_load import load_scene_info, scene_info_from_meta
 
 router = APIRouter()
@@ -91,14 +92,9 @@ def compile_camera_path(project_id: str, body: CompileRequest, request: Request,
         cfg.camera.focal_length_mm_equiv = p.focal_length_mm_equiv
     scene = scene_info_from_meta(scene_asset, depth_asset, cfg)
     out_w, out_h = OUTPUT_SIZES[cfg.output.aspect]
-    path_cfg = {"preset": body.preset, "easing": p.easing or cfg.path.easing,
-                "sketch_points": [pt.model_dump() for pt in body.sketch]}
-    for k in ("lateral_ratio", "push_ratio", "arc_deg"):
-        v = getattr(p, k)
-        if v is not None:
-            path_cfg[k] = v
-        elif body.preset == cfg.path.preset:
-            path_cfg[k] = getattr(cfg.path, k)  # pinned revision's value applies to its own preset
+    path_cfg = build_path_cfg(cfg, body.preset, [pt.model_dump() for pt in body.sketch],
+                              {"easing": p.easing, "lateral_ratio": p.lateral_ratio,
+                               "push_ratio": p.push_ratio, "arc_deg": p.arc_deg})
     compiled = compile_path(path_cfg, scene, out_w, out_h)
     hole, deferred = None, False
     if compiled.status != "invalid" and compiled.samples:

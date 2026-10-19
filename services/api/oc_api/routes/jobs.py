@@ -74,9 +74,10 @@ def _check_quotas(db: DbSession, settings, session: SessionRow, project: Project
         raise ApiError(429, "queue_full", "Too many jobs are waiting. Try again when one finishes.", retryable=True)
     if uses_gpu and db.scalar(active.where(Job.uses_gpu.is_(True))) >= settings.max_gpu_jobs_per_session:
         raise ApiError(429, "gpu_busy", "A generation is already running for this session.", retryable=True)
-    if kind in get_app(project.app_slug).render_kinds:
+    render_kinds = get_app(project.app_slug).render_kinds
+    if kind in render_kinds:
         renders = select(func.count()).select_from(Job).where(Job.project_id == project.id,
-                                                              Job.kind == kind,
+                                                              Job.kind.in_(render_kinds),
                                                               Job.state.in_(ACTIVE_JOB_STATES))
         if db.scalar(renders) >= settings.max_active_renders_per_project:
             raise ApiError(429, "render_busy", "A render is already running for this project.", retryable=True)
