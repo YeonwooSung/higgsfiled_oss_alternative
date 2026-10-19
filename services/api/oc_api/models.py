@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, BigInteger, Float, ForeignKey, Integer, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import JSON, BigInteger, Boolean, Float, ForeignKey, Integer, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base, UTCDateTime, utcnow
@@ -83,6 +83,7 @@ class Job(Base):
     kind: Mapped[str] = mapped_column(String(40))
     options_json: Mapped[dict] = mapped_column(JSON, default=dict)
     model_profile: Mapped[str] = mapped_column(String(40))
+    uses_gpu: Mapped[bool] = mapped_column(Boolean, default=False)
     state: Mapped[str] = mapped_column(String(24), default="queued", index=True)
     stage: Mapped[str | None] = mapped_column(String(40), nullable=True)
     progress_nullable: Mapped[float | None] = mapped_column(Float, nullable=True)

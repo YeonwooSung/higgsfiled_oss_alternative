@@ -4,7 +4,7 @@ from fastapi import APIRouter, FastAPI
 
 from .db import Base, make_sessionmaker
 from .errors import install_error_handlers
-from .routes import assets, projects, sessions, storage
+from .routes import assets, jobs, projects, sessions, storage
 from .storage import make_storage
 from .settings import Settings
 
@@ -20,7 +20,7 @@ def create_app(settings: Settings | None = None, *, create_tables: bool | None =
     app.state.storage = make_storage(settings)
     install_error_handlers(app)
     api = APIRouter(prefix="/api/v1")
-    for module in (sessions, projects, assets, storage):
+    for module in (sessions, projects, assets, storage, jobs):
         api.include_router(module.router)
     app.include_router(api)
     return app

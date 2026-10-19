@@ -17,5 +17,6 @@ dev = ["pytest>=8", "httpx>=0.27", "httpx2"]
 
 [tool.pytest.ini_options]
 testpaths = ["nodes/open_creative/tests", "services/api/tests", "services/worker/tests"]
+pythonpath = ["services/api/tests", "services/worker/tests"]
 addopts = "--import-mode=importlib -m 'not slow'"
 markers = ["slow: full-length render acceptance tests (run with -m slow)"]

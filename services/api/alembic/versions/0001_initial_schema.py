@@ -2,7 +2,7 @@
 
 Revision ID: 0001
 Revises: 
-Create Date: 2026-10-19 11:08:09.122867
+Create Date: 2026-10-19 11:12:15.886449
 """
 from alembic import op
 import sqlalchemy as sa
@@ -98,6 +98,7 @@ def upgrade() -> None:
     sa.Column('kind', sa.String(length=40), nullable=False),
     sa.Column('options_json', sa.JSON(), nullable=False),
     sa.Column('model_profile', sa.String(length=40), nullable=False),
+    sa.Column('uses_gpu', sa.Boolean(), nullable=False),
     sa.Column('state', sa.String(length=24), nullable=False),
     sa.Column('stage', sa.String(length=40), nullable=True),
     sa.Column('progress_nullable', sa.Float(), nullable=True),
