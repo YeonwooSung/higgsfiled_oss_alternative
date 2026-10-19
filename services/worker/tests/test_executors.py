@@ -58,6 +58,16 @@ def test_alpha_product_is_normalized_and_suggests_mask(ctx, db_factory, storage,
     assert mask.meta_json["origin"] == "alpha" and mask.source_asset_id == product.id
 
 
+def test_scene_upload_normalizes_without_suggested_mask(ctx, db_factory, storage, project):
+    aid = upload_raw(db_factory, storage, project, FIXTURE.read_bytes(), role="scene")
+    job = inspect(ctx, db_factory, project, aid)
+    assert job.state == "succeeded" and "suggested_mask_asset_id" not in job.result_json
+    scene = load(db_factory, Asset, aid)
+    assert scene.state == "ready" and (scene.width, scene.height) == (300, 560)
+    with db_factory() as db:
+        assert db.query(Asset).filter(Asset.project_id == project.id, Asset.role == "mask").count() == 0
+
+
 def test_exif_rotated_jpeg_is_upright(ctx, db_factory, storage, project):
     buf = io.BytesIO()
     exif = Image.Exif()

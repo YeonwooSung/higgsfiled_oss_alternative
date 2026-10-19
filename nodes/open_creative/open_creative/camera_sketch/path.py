@@ -259,6 +259,7 @@ class SceneInfo:
     target_world: np.ndarray  # normalized scene units (target z ~ 1)
     target_uv01: tuple[float, float]  # in the SOURCE image
     depth_convention: DepthConvention | None = None
+    depth_params: dict | None = None  # recorded in depth_mapping (depth_scale, depth_contrast, edge_rel_threshold)
 
 
 @dataclass
@@ -327,7 +328,7 @@ def compile_path(
         source_to_output={**asdict(fit), "src_w": int(scene.src_w), "src_h": int(scene.src_h)},
         depth_mapping=None if conv is None else
         {**{k: (float(v) if k != "kind" else v) for k, v in asdict(conv).items()},
-         "z_far_cap": float(Z_FAR_CAP), "target_z": 1.0},
+         "z_far_cap": float(Z_FAR_CAP), "target_z": 1.0, **(scene.depth_params or {})},
         preset=name, params={}, easing=str(easing), control_points=[],
         diagnostics={"framing_rms_px": None, "framing_rms_rel": None,
                      "target_in_front_min_z": None, "target_in_frame_fraction": None,

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 from pydantic import BaseModel
 from sqlalchemy.orm import Session as DbSession
 
@@ -28,13 +30,17 @@ class CameraSketchApp:
 
     def check_config_assets(self, db: DbSession, project: Project, config: dict) -> None:
         """PATCH lineage rule: the depth asset must derive from the config's scene asset."""
+        scene_id = config.get("scene_asset_id")
+        if scene_id:
+            scene = db.get(Asset, uuid.UUID(str(scene_id)))
+            if scene is None or scene.role != "scene":
+                raise ApiError(422, "invalid_asset_role", "scene_asset_id must be a scene image.",
+                               field="config.scene_asset_id")
         depth_id = config.get("depth_asset_id")
         if not depth_id:
             return
-        import uuid
-
         depth = db.get(Asset, uuid.UUID(str(depth_id)))
-        check_depth_lineage(None, depth, config.get("scene_asset_id"))
+        check_depth_lineage(depth, scene_id)
 
     def plan_job(self, db: DbSession, storage, project: Project, cfg: BaseModel, kind: str, options: dict,
                  *, validate_assets: bool = True) -> JobPlan:

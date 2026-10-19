@@ -124,3 +124,14 @@ def test_scene_upload_role_accepts_jpeg(session_client, cproject):
     r = session_client.post(f"/api/v1/projects/{cproject['id']}/assets/init",
                             json={"role": "scene", "filename": "a.jpg", "mime": "image/jpeg", "bytes": 100})
     assert r.status_code == 201
+
+
+def test_scene_asset_must_have_scene_role(app, session_client, cproject):
+    pid = cproject["id"]
+    _, depth = make_scene_and_depth(app, pid)
+    cur = session_client.get(f"/api/v1/projects/{pid}").json()
+    cfg = cur["config"]
+    cfg["scene_asset_id"] = depth
+    r = session_client.patch(f"/api/v1/projects/{pid}",
+                             json={"expected_revision": cur["current_revision"], "config": cfg})
+    assert r.status_code == 422 and r.json()["error"]["field"] == "config.scene_asset_id"

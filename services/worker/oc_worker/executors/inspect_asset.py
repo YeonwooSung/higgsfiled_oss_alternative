@@ -18,8 +18,10 @@ def inspect_asset(run: JobRun) -> tuple[list[str], dict]:
     data = run.ctx.storage.get_bytes(asset.object_key)
     run.transition("postprocessing", "inspect")
     try:
-        if asset.role in ("product", "scene"):
+        if asset.role == "product":
             return _product(run, asset, data)
+        if asset.role == "scene":
+            return _product(run, asset, data, suggest_mask=False)
         return _mask(run, asset, data)
     except MediaError as e:
         asset.state, asset.error_code = "rejected", e.code
@@ -35,7 +37,7 @@ _MESSAGES = {
 }
 
 
-def _product(run: JobRun, asset, data: bytes):
+def _product(run: JobRun, asset, data: bytes, suggest_mask: bool = True):
     img = normalize_image(data)
     normalized_key = asset.object_key.replace("-original", "")
     if normalized_key == asset.object_key:
@@ -52,7 +54,7 @@ def _product(run: JobRun, asset, data: bytes):
     asset.state = "ready"
     run.db.commit()
     outputs, result = [str(asset.id)], {"has_alpha": img.alpha is not None}
-    if img.alpha is not None:
+    if suggest_mask and img.alpha is not None:
         path = run.work_dir / "alpha_mask.png"
         path.write_bytes(mask_to_png_bytes(mask_from_alpha(img.alpha)))
         mask_id = run.store_asset("mask", path, "image/png", source_asset_id=asset.id,

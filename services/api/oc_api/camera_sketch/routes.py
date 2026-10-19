@@ -4,6 +4,8 @@ import time
 
 import cv2
 import numpy as np
+from typing import Literal
+
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session as DbSession
@@ -18,13 +20,14 @@ from ..errors import ApiError
 from ..models import Asset, ProjectRevision
 from ..models import Session as SessionRow
 from .config import OUTPUT_SIZES, SketchPoint
-from .scene_load import load_scene_info
+from .scene_load import load_scene_info, scene_info_from_meta
 
 router = APIRouter()
 
 COMPILE_BUDGET_S = 2.0
-HOLE_RESERVE_S = 0.5  # time the 160x90 estimate is assumed to need
+HOLE_RESERVE_S = 0.5  # UNMEASURED assumption (not profiled); time the 160x90 estimate is assumed to need
 HOLE_W, HOLE_H, HOLE_FRAMES = 160, 90, 6
+HOLE_DEPTH_MAX_SIDE = 320
 
 
 class Parameters(BaseModel):
@@ -32,7 +35,7 @@ class Parameters(BaseModel):
     lateral_ratio: float | None = None
     push_ratio: float | None = None
     arc_deg: float | None = None
-    easing: str | None = None
+    easing: Literal["linear", "ease_in_out"] | None = None
     focal_length_mm_equiv: float | None = Field(None, ge=35.0, le=70.0)
 
 
@@ -49,14 +52,14 @@ def presets():
     return {"presets": list(load_presets().values())}
 
 
-def _hole_estimate(extras, scene, compiled, out_w: int, out_h: int) -> float:
+def _hole_estimate(extras, compiled, out_w: int, out_h: int) -> float:
     """Max hole ratio over ``HOLE_FRAMES`` sampled frames rendered at 160x90 (or 90x160)."""
     lw, lh = (HOLE_W, HOLE_H) if out_w >= out_h else (HOLE_H, HOLE_W)
     sc = max(lw / extras.src_w, lh / extras.src_h)
     sw, sh = max(1, round(extras.src_w * sc)), max(1, round(extras.src_h * sc))
     z = cv2.resize(extras.z_norm, (sw, sh), interpolation=cv2.INTER_AREA)
     K_src = extras.K_src * np.array([[sw / extras.src_w], [sh / extras.src_h], [1.0]])
-    mesh = build_mesh(z, K_src, 1)
+    mesh = build_mesh(z, K_src, 1, extras.edge_rel_threshold)
     colors = np.zeros((len(mesh.vertices), 3), np.uint8)
     K = np.asarray(compiled.K, dtype=np.float64) * np.array([[lw / out_w], [lh / out_h], [1.0]])
     n = len(compiled.samples)
@@ -86,8 +89,7 @@ def compile_camera_path(project_id: str, body: CompileRequest, request: Request,
     p = body.parameters
     if p.focal_length_mm_equiv is not None:
         cfg.camera.focal_length_mm_equiv = p.focal_length_mm_equiv
-    storage = request.app.state.storage
-    scene, extras = load_scene_info(storage, scene_asset, depth_asset, cfg)
+    scene = scene_info_from_meta(scene_asset, depth_asset, cfg)
     out_w, out_h = OUTPUT_SIZES[cfg.output.aspect]
     path_cfg = {"preset": body.preset, "easing": p.easing or cfg.path.easing,
                 "sketch_points": [pt.model_dump() for pt in body.sketch]}
@@ -101,7 +103,9 @@ def compile_camera_path(project_id: str, body: CompileRequest, request: Request,
     hole, deferred = None, False
     if compiled.status != "invalid" and compiled.samples:
         if COMPILE_BUDGET_S - (time.monotonic() - t0) > HOLE_RESERVE_S:
-            hole = _hole_estimate(extras, scene, compiled, out_w, out_h)
+            _, extras = load_scene_info(request.app.state.storage, scene_asset, depth_asset, cfg,
+                                        max_side=HOLE_DEPTH_MAX_SIDE)
+            hole = _hole_estimate(extras, compiled, out_w, out_h)
             compiled.diagnostics["hole_ratio"] = hole
         else:
             deferred = True
