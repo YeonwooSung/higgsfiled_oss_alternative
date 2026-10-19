@@ -615,22 +615,17 @@ name = "oc-worker"
 version = "0.1.0"
 source = { editable = "services/worker" }
 dependencies = [
+    { name = "comfy-sdk" },
     { name = "oc-api" },
     { name = "open-creative" },
 ]
 
-[package.optional-dependencies]
-comfy = [
-    { name = "comfy-sdk" },
-]
-
 [package.metadata]
 requires-dist = [
-    { name = "comfy-sdk", marker = "extra == 'comfy'" },
+    { name = "comfy-sdk", specifier = "==0.5.0" },
     { name = "oc-api", editable = "services/api" },
     { name = "open-creative", editable = "nodes/open_creative" },
 ]
-provides-extras = ["comfy"]
 
 [[package]]
 name = "open-creative"
