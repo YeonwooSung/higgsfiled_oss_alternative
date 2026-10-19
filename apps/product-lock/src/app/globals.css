@@ -18,9 +18,10 @@ h1 { font-size: 20px; line-height: 28px; font-weight: 600; }
 }
 
 /* Visible, thin scrollbars so scrollable panels read as scrollable (macOS hides overlay bars). */
+/* No overscroll-behavior: contain here — on mobile the stage fills most of the screen and must
+   hand wheel/touch scrolling over to the page when it has nothing to scroll itself. */
 .scroll-panel {
   overflow-y: auto;
-  overscroll-behavior: contain;
   scrollbar-width: thin;
   scrollbar-color: #c4c8c1 transparent;
   scrollbar-gutter: stable;
