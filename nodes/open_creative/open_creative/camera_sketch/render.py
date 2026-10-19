@@ -40,14 +40,29 @@ class Frame:
     valid: np.ndarray  # HxW bool
 
 
-def vertex_colors(mesh: Mesh, image: np.ndarray) -> np.ndarray:
-    """Per-vertex colors (Nx3 uint8): the source image at ``mesh.uv`` (normalized coords of
-    source pixel centers, so the lookup is exact: ``col = u*W - 0.5``, ``row = v*H - 0.5``)."""
-    img = np.asarray(image)
+def _bilinear(img: np.ndarray, u01: np.ndarray, v01: np.ndarray) -> np.ndarray:
+    """Bilinear sample of ``img`` (HxWxC) at normalized continuous coords; the sample point
+    in pixel-center index coords is ``(u*W - 0.5, v*H - 0.5)``, clamped to the image
+    (border pixels replicate). Returns float64 NxC."""
     h, w = img.shape[:2]
-    cols = np.clip(np.rint(mesh.uv[:, 0].astype(np.float64) * w - 0.5), 0, w - 1).astype(np.intp)
-    rows = np.clip(np.rint(mesh.uv[:, 1].astype(np.float64) * h - 0.5), 0, h - 1).astype(np.intp)
-    return np.ascontiguousarray(img[rows, cols, :3]).astype(np.uint8)
+    x = np.clip(np.asarray(u01, np.float64) * w - 0.5, 0.0, w - 1)
+    y = np.clip(np.asarray(v01, np.float64) * h - 0.5, 0.0, h - 1)
+    x0 = np.minimum(np.floor(x).astype(np.intp), max(w - 2, 0))
+    y0 = np.minimum(np.floor(y).astype(np.intp), max(h - 2, 0))
+    x1, y1 = np.minimum(x0 + 1, w - 1), np.minimum(y0 + 1, h - 1)
+    fx, fy = (x - x0)[:, None], (y - y0)[:, None]
+    top = img[y0, x0] * (1 - fx) + img[y0, x1] * fx
+    bot = img[y1, x0] * (1 - fx) + img[y1, x1] * fx
+    return top * (1 - fy) + bot * fy
+
+
+def vertex_colors(mesh: Mesh, image: np.ndarray) -> np.ndarray:
+    """Per-vertex colors (Nx3 uint8): the source image sampled bilinearly at ``mesh.uv``
+    (normalized continuous coords of the edge-aligned grid, see ``scene.py``), clamped at
+    the border, rounded to nearest."""
+    img = np.asarray(image)[..., :3].astype(np.float64)
+    out = _bilinear(img, mesh.uv[:, 0], mesh.uv[:, 1])
+    return np.clip(np.rint(out), 0, 255).astype(np.uint8)
 
 
 def _bary_coeffs(x: np.ndarray, y: np.ndarray, area: np.ndarray) -> np.ndarray:
@@ -65,15 +80,24 @@ def _bary_coeffs(x: np.ndarray, y: np.ndarray, area: np.ndarray) -> np.ndarray:
 
 def rasterize(
     mesh: Mesh,
-    colors: np.ndarray,
+    colors: np.ndarray | None,
     K_out: np.ndarray,
     T_cw: np.ndarray,
     w: int,
     h: int,
     near: float = NEAR,
     far: float = FAR,
+    texture: np.ndarray | None = None,
 ) -> Frame:
-    """Render ``mesh`` (vertex ``colors`` Nx3 uint8) from ``T_cw`` with intrinsics ``K_out``."""
+    """Render ``mesh`` from ``T_cw`` with intrinsics ``K_out``.
+
+    Color source: with ``texture`` (the source image, HxWx3 uint8) each covered pixel gets
+    the perspective-correct interpolated ``mesh.uv`` and samples the texture bilinearly
+    (full source resolution at any mesh stride; identity pose == exact cover-fit warp).
+    Otherwise per-vertex ``colors`` (Nx3 uint8) are interpolated perspective-correctly.
+    """
+    if texture is None and colors is None:
+        raise ValueError("colors or texture is required")
     T = np.asarray(T_cw, dtype=np.float64)
     K = np.asarray(K_out, dtype=np.float64)
     F = np.asarray(mesh.faces, dtype=np.intp).reshape(-1, 3)
@@ -135,9 +159,14 @@ def rasterize(
             zc = np.concatenate(z_parts)
             own = np.concatenate(own_parts)
             np.minimum.at(zbuf, pix, zc)
-            win = zc == zbuf[pix]
-            # Exact z ties (shared edges): the later candidate in a fixed order wins.
-            owner[pix[win]] = own[win]
+            win = np.nonzero(zc == zbuf[pix])[0]
+            # Exact z ties (shared edges): the lowest candidate index wins (candidates are
+            # in a fixed order: bucket, chunk, triangle, window offset). ``ufunc.at`` is
+            # defined for repeated indices, unlike repeated-index assignment.
+            first = np.full(h * w, np.iinfo(np.int64).max, dtype=np.int64)
+            np.minimum.at(first, pix[win], win)
+            hit = first < np.iinfo(np.int64).max
+            owner[hit] = own[first[hit]]
     valid = owner >= 0
     rgb = np.zeros((h * w, 3), np.uint8)
     if valid.any():
@@ -149,8 +178,23 @@ def rasterize(
         bw = c[:, :, 0] * pcx[:, None] + c[:, :, 1] * pcy[:, None] + c[:, :, 2]
         bw = np.clip(bw, 0.0, None) * invz[t]
         bw /= bw.sum(1, keepdims=True)
-        fc = colors[F[idx[t]]].astype(np.float64)  # n x 3 verts x 3 ch
-        rgb[p] = np.clip(np.rint(np.einsum("nv,nvc->nc", bw, fc)), 0, 255).astype(np.uint8)
+        fv = F[idx[t]]
+        if texture is not None:
+            # Same clamped bilinear as ``_bilinear`` via cv2.remap (INTER_LINEAR +
+            # BORDER_REPLICATE; OpenCV uses 5-bit fixed-point weights -> <= ~1/255 diff).
+            tex = np.ascontiguousarray(np.asarray(texture)[..., :3])
+            th, tw = tex.shape[:2]
+            uv = np.einsum("nv,nvc->nc", bw, mesh.uv[fv].astype(np.float64))
+            mx = np.full(h * w, -1.0, np.float32)
+            my = np.full(h * w, -1.0, np.float32)
+            mx[p] = uv[:, 0] * tw - 0.5
+            my[p] = uv[:, 1] * th - 0.5
+            samp = cv2.remap(tex, mx.reshape(h, w), my.reshape(h, w), cv2.INTER_LINEAR,
+                             borderMode=cv2.BORDER_REPLICATE)
+            rgb[p] = samp.reshape(-1, 3)[p]
+        else:
+            val = np.einsum("nv,nvc->nc", bw, colors[fv].astype(np.float64))
+            rgb[p] = np.clip(np.rint(val), 0, 255).astype(np.uint8)
     z = np.where(valid, zbuf, np.inf).astype(np.float32)
     return Frame(rgb.reshape(h, w, 3), z.reshape(h, w), valid.reshape(h, w))
 
@@ -192,24 +236,19 @@ def nearest_valid_index(valid: np.ndarray) -> np.ndarray:
 
 
 def fill_small_holes(frame: Frame, max_px: int = 4) -> tuple[Frame, np.ndarray]:
-    """Inpaint hole components that fit a ``max_px``-radius disk (every pixel center within
-    ``max_px`` of the component centroid, 8-connectivity). RGB: ``cv2.inpaint`` TELEA
-    (radius 3) with all holes masked so big holes never feed colors; z: nearest valid value.
-    Larger holes stay invalid. Returns ``(new_frame, filled_mask)``; the input is unchanged."""
+    """Inpaint small holes: 8-connected invalid components whose bounding box is at most
+    ``max_px`` pixels in BOTH width and height. RGB: ``cv2.inpaint`` TELEA (radius 3) with
+    all holes masked so big holes never feed colors; z: nearest valid value. Larger holes
+    stay invalid. Returns ``(new_frame, filled_mask)``; the input is unchanged."""
     holes = ~frame.valid
     filled = np.zeros_like(holes)
-    if not holes.any() or holes.all():
-        return Frame(frame.rgb.copy(), frame.z.copy(), frame.valid.copy()), filled
-    n, labels, _, cent = cv2.connectedComponentsWithStats(holes.astype(np.uint8), connectivity=8)
-    ys, xs = np.nonzero(holes)
-    lab = labels[ys, xs]
-    d2 = (xs - cent[lab, 0]) ** 2 + (ys - cent[lab, 1]) ** 2
-    maxd2 = np.zeros(n)
-    np.maximum.at(maxd2, lab, d2)
-    small = maxd2 <= max_px * max_px + 1e-9
-    small[0] = False  # background label
-    filled[ys, xs] = small[lab]
     rgb, z, valid = frame.rgb.copy(), frame.z.copy(), frame.valid.copy()
+    if not holes.any() or holes.all():
+        return Frame(rgb, z, valid), filled
+    _, labels, stats, _ = cv2.connectedComponentsWithStats(holes.astype(np.uint8), connectivity=8)
+    small = (stats[:, cv2.CC_STAT_WIDTH] <= max_px) & (stats[:, cv2.CC_STAT_HEIGHT] <= max_px)
+    small[0] = False  # background label
+    filled = small[labels] & holes
     if filled.any():
         inp = cv2.inpaint(np.ascontiguousarray(frame.rgb), holes.astype(np.uint8), 3,
                           cv2.INPAINT_TELEA)
@@ -220,13 +259,21 @@ def fill_small_holes(frame: Frame, max_px: int = 4) -> tuple[Frame, np.ndarray]:
     return Frame(rgb, z, valid), filled
 
 
-def render_sequence(mesh: Mesh, colors: np.ndarray, compiled, w: int, h: int) -> Iterator[Frame]:
-    """Yield one ``Frame`` per ``compiled.samples`` pose (streams; never holds all frames)."""
+def render_sequence(
+    mesh: Mesh, colors: np.ndarray | None, compiled, w: int, h: int,
+    texture: np.ndarray | None = None,
+) -> Iterator[Frame]:
+    """Yield one ``Frame`` per ``compiled.samples`` pose (streams; never holds all frames).
+    ``(w, h)`` must equal the compiled path's output size (its ``K`` is for that size)."""
     if compiled.status == "invalid" or not compiled.samples:
         raise ValueError("compiled path is invalid or has no samples")
+    s2o = compiled.source_to_output or {}
+    if (s2o.get("out_w"), s2o.get("out_h")) != (w, h):
+        raise ValueError("render size does not match the compiled path's output size")
     K = np.asarray(compiled.K, dtype=np.float64)
     for s in compiled.samples:
-        yield rasterize(mesh, colors, K, np.asarray(s["T_cw"], dtype=np.float64), w, h)
+        yield rasterize(mesh, colors, K, np.asarray(s["T_cw"], dtype=np.float64), w, h,
+                        texture=texture)
 
 
 def hole_ratio(frame: Frame) -> float:

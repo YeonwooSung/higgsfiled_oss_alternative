@@ -6,11 +6,14 @@ Conventions (shared with ``camera.py``; the TS port of ``build_mesh`` mirrors th
 - Pixel ``(row, col)`` has its center at continuous coords ``(col + 0.5, row + 0.5)``.
 - ``prepare_z`` normalizes so the median z of the target patch is exactly 1 scene unit.
 
-``build_mesh`` layout (deterministic):
-- Grid vertices sit at the pixel centers of the strided grid: rows ``0, stride, 2*stride, ...``
-  and cols likewise (``np.arange(0, size, stride)``; the last partial stride is not added).
-  Vertex index is ``r * grid_w + c`` (row-major). Vertex = ``z * K^-1 @ [u, v, 1]`` with
-  ``u = col + 0.5``, ``v = row + 0.5``; ``uv = (u / W, v / H)`` where W,H is the image size.
+``build_mesh`` layout (deterministic, edge-aligned so the mesh covers the whole image):
+- Grid vertices sit at continuous image positions ``x_j = min(j*stride, W)`` for
+  ``j = 0..ceil(W/stride)`` (so both ``0`` and ``W`` are included; the last column may be a
+  partial stride), and ``y_i`` likewise with ``H``. Vertex index is ``i * grid_w + j``
+  (row-major). Vertex = ``z * K^-1 @ [x, y, 1]`` where ``z`` is sampled at the clamped
+  pixel ``z[clamp(floor(y), 0, H-1), clamp(floor(x), 0, W-1)]``; ``uv = (x / W, y / H)``.
+  Colors for ``uv`` are sampled bilinearly from pixel centers with clamped borders
+  (``render.vertex_colors``).
 - Each cell with corners ``a=(r,c) b=(r,c+1) c=(r+1,c) d=(r+1,c+1)`` is split along the
   b-c diagonal into triangles ``(a, c, b)`` and ``(b, c, d)`` (emitted cell by cell,
   row-major, ``(a,c,b)`` first).
@@ -118,11 +121,12 @@ def build_mesh(
     if stride < 1:
         raise ValueError("stride must be >= 1")
     h, w = z_norm.shape
-    rows = np.arange(0, h, stride)
-    cols = np.arange(0, w, stride)
-    gh, gw = len(rows), len(cols)
+    ys = np.minimum(np.arange(-(-h // stride) + 1) * stride, h)
+    xs = np.minimum(np.arange(-(-w // stride) + 1) * stride, w)
+    gh, gw = len(ys), len(xs)
+    rows, cols = np.minimum(ys, h - 1), np.minimum(xs, w - 1)
     zg = np.asarray(z_norm, dtype=np.float64)[np.ix_(rows, cols)]
-    u, v = np.meshgrid(cols + 0.5, rows + 0.5)
+    u, v = np.meshgrid(xs.astype(np.float64), ys.astype(np.float64))
     ok = np.isfinite(zg)
     zs = np.where(ok, zg, 0.0)
     rays = np.stack([u, v, np.ones_like(u)], -1) @ np.linalg.inv(K).T

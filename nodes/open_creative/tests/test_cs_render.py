@@ -62,29 +62,66 @@ def exact_cover_fit_image(img: np.ndarray, K_fit) -> np.ndarray:
 # ---- identity pose ---------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("name,out_w,out_h", [("room", 1280, 720), ("facade", 1280, 720)])
-def test_identity_pose_planar_reproduces_cover_fit(name, out_w, out_h):
+@pytest.mark.parametrize("name", ["room", "facade"])
+@pytest.mark.parametrize("stride", [1, 2, 4])
+def test_identity_pose_full_frame_has_no_holes(name, stride):
+    """Edge-aligned mesh covers the whole cover-fit output (no border ring)."""
     img = load_rgb(name)
     H, W = img.shape[:2]
     K_src = intrinsics(50.0, W, H)
-    mesh = build_mesh(np.ones((H, W), np.float32), K_src, stride=1)
+    mesh = build_mesh(np.ones((H, W), np.float32), K_src, stride=stride)
+    for out_w, out_h in ((1280, 720), (720, 1280)):
+        K_out = output_intrinsics(K_src, cover_fit(W, H, out_w, out_h))
+        fr = rasterize(mesh, vertex_colors(mesh, img), K_out, np.eye(4), out_w, out_h)
+        assert hole_ratio(fr) == 0.0, (name, stride, out_w, out_h)
+
+
+@pytest.mark.parametrize("stride", [1, 2])
+@pytest.mark.parametrize("name,out_w,out_h", [("room", 1280, 720), ("facade", 1280, 720),
+                                              ("room", 720, 1280)])
+def test_identity_pose_planar_reproduces_cover_fit(name, out_w, out_h, stride):
+    img = load_rgb(name)
+    H, W = img.shape[:2]
+    K_src = intrinsics(50.0, W, H)
+    mesh = build_mesh(np.ones((H, W), np.float32), K_src, stride=stride)
     fit = cover_fit(W, H, out_w, out_h)
     K_out = output_intrinsics(K_src, fit)
-    fr = rasterize(mesh, vertex_colors(mesh, img), K_out, np.eye(4), out_w, out_h)
+    fr = rasterize(mesh, None, K_out, np.eye(4), out_w, out_h, texture=img)
     assert isinstance(fr, Frame)
     assert fr.rgb.shape == (out_h, out_w, 3) and fr.rgb.dtype == np.uint8
     assert fr.z.shape == (out_h, out_w) and fr.z.dtype == np.float32
     assert fr.valid.shape == (out_h, out_w) and fr.valid.dtype == bool
-    assert np.all(np.isinf(fr.z[~fr.valid]))
     ref = exact_cover_fit_image(img, fit)
-    # Excluded: the 1-px image border (vertices sit at source pixel centers, so the outermost
-    # half source pixel is not covered by any triangle). stride=1 -> no partial stride.
-    inner = (slice(1, -1), slice(1, -1))
-    assert hole_ratio(Frame(fr.rgb[inner], fr.z[inner], fr.valid[inner])) == 0.0
-    err = np.abs(fr.rgb[inner].astype(np.int16) - ref[inner].astype(np.int16)).mean()
-    print(f"\n{name}: identity mean abs error = {err:.4f} / 255")
+    # Full frame, nothing excluded.
+    assert hole_ratio(fr) == 0.0
+    err = np.abs(fr.rgb.astype(np.int16) - ref.astype(np.int16)).mean()
+    print(f"\n{name} {out_w}x{out_h} stride {stride}: identity mean abs error (full frame)"
+          f" = {err:.4f} / 255")
     assert err <= 2.0
-    assert np.allclose(fr.z[inner], 1.0, atol=1e-5)
+    assert np.allclose(fr.z, 1.0, atol=1e-5)
+
+
+def test_identity_vertex_colors_path_close_to_cover_fit():
+    img = load_rgb("room")
+    H, W = img.shape[:2]
+    K_src = intrinsics(50.0, W, H)
+    mesh = build_mesh(np.ones((H, W), np.float32), K_src, stride=1)
+    fit = cover_fit(W, H, 1280, 720)
+    fr = rasterize(mesh, vertex_colors(mesh, img), output_intrinsics(K_src, fit), np.eye(4),
+                   1280, 720)
+    err = np.abs(fr.rgb.astype(np.int16) - exact_cover_fit_image(img, fit).astype(np.int16))
+    assert hole_ratio(fr) == 0.0 and err.mean() <= 3.0  # vertex colors add a [1,2,1]/4 blur
+
+
+def test_vertex_colors_bilinear_at_edge_aligned_uv():
+    img = np.zeros((4, 6, 3), np.uint8)
+    img[:, 3:] = 200
+    K = intrinsics(50.0, 6, 4)
+    m = build_mesh(np.ones((4, 6), np.float32), K, stride=1)
+    col = vertex_colors(m, img)
+    gw = m.grid_shape[1]
+    # Row 1 vertices at x = 0..6: clamp at the border, average across the pixel edge x=3.
+    assert col[gw : 2 * gw, 0].tolist() == [0, 0, 0, 100, 200, 200, 200]
 
 
 # ---- static path --------------------------------------------------------------------------
@@ -119,6 +156,14 @@ def test_render_sequence_rejects_invalid_path():
         next(render_sequence(mesh, vertex_colors(mesh, load_rgb("room")), cp, 320, 180))
 
 
+def test_render_sequence_rejects_size_mismatch():
+    zn, K, scene = load_scene("room")
+    cp = compile_path({"preset": "push_in", "push_ratio": 0.0}, scene, 320, 180)
+    mesh = build_mesh(zn, K, stride=8)
+    with pytest.raises(ValueError):
+        next(render_sequence(mesh, vertex_colors(mesh, load_rgb("room")), cp, 640, 360))
+
+
 # ---- occlusion / disocclusion -------------------------------------------------------------
 
 BW, BH = 320, 180
@@ -143,8 +188,8 @@ def test_box_in_front_of_plane_from_plus_x_camera():
     T = pose(np.eye(3), [tx, 0.0, 0.0])
     fr = rasterize(mesh, vertex_colors(mesh, img), K, T, BW, BH)
     f = K[0, 0]
-    # Box covers source pixel centers 120.5..199.5 -> shifted by -f*tx/1.
-    bx0, bx1 = 120.5 - f * tx, 199.5 - f * tx
+    # Box vertices span source x 120..199 (vertex x samples pixel floor(x)) -> shifted by -f*tx.
+    bx0, bx1 = 120.0 - f * tx, 199.0 - f * tx
     # Plane points in the overlap (hidden by the box in the new view) project here too.
     plane_left = np.arange(98, 120) + 0.5 - f * tx / 2.0
     overlap = plane_left[(plane_left > bx0 + 1) & (plane_left < bx1 - 1)]
@@ -159,7 +204,7 @@ def test_box_in_front_of_plane_from_plus_x_camera():
     blk = fr.rgb[np.ix_(rows, cols)]
     assert (blk == RED).all()
     # Newly exposed strip right of the box: from box edge to where the plane resumes.
-    px0 = 200.5 - f * tx / 2.0
+    px0 = 200.0 - f * tx / 2.0
     strip = np.arange(int(np.ceil(bx1)) + 1, int(np.floor(px0)) - 1)
     assert strip.size >= 15
     assert not fr.valid[np.ix_(rows, strip)].any()
@@ -210,6 +255,26 @@ def test_fill_small_holes_3px_filled_10px_stays_invalid():
     assert (fr.rgb == before[0]).all() and (fr.valid == before[2]).all()
     out2, _ = fill_small_holes(fr, max_px=4)
     assert out2.rgb.tobytes() == out.rgb.tobytes() and out2.z.tobytes() == out.z.tobytes()
+
+
+@pytest.mark.parametrize("hole,fill", [((4, 4), True), ((5, 5), False), ((1, 9), False),
+                                       ((9, 1), False), ((4, 1), True), ((1, 5), False)])
+def test_fill_small_holes_bbox_at_most_4px_both_sides(hole, fill):
+    fr = synthetic_frame(60, 60)
+    s = (slice(20, 20 + hole[0]), slice(20, 20 + hole[1]))
+    fr.valid[s] = False
+    fr.z[s] = np.inf
+    out, filled = fill_small_holes(fr, max_px=4)
+    assert filled[s].all() == fill and filled.any() == fill
+    assert out.valid.all() == fill
+
+
+def test_fill_small_holes_diagonal_component_uses_bbox():
+    fr = synthetic_frame(60, 60)
+    for i in range(5):  # 8-connected diagonal: bbox 5x5 -> not small
+        fr.valid[20 + i, 20 + i] = False
+    _, filled = fill_small_holes(fr)
+    assert not filled.any()
 
 
 def test_fill_small_holes_noop_without_holes():
@@ -263,9 +328,8 @@ def test_timing_120_frames_1280x720_stride2_under_90s():
     img = load_rgb("room")
     t0 = time.perf_counter()
     mesh = build_mesh(zn, K, stride=2)
-    colors = vertex_colors(mesh, img)
     n, worst = 0, 0.0
-    for fr in render_sequence(mesh, colors, cp, out_w, out_h):
+    for fr in render_sequence(mesh, None, cp, out_w, out_h, texture=img):
         n += 1
         worst = max(worst, hole_ratio(fr))
     dt = time.perf_counter() - t0

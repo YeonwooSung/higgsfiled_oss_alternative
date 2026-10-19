@@ -100,9 +100,9 @@ def crop_from_model(
     """Inverse of ``pad_to_model``: centered ``out_h x out_w`` crop of the first ``n`` frames.
     Raises if fewer than ``n`` frames arrive or a frame is smaller than the output."""
     count = 0
+    if n <= 0:
+        return
     for f in frames:
-        if count >= n:
-            break
         f = np.asarray(f)
         h, w = f.shape[:2]
         if w < out_w or h < out_h:
@@ -110,5 +110,7 @@ def crop_from_model(
         t, lft = _pads(out_h, h)[0], _pads(out_w, w)[0]
         count += 1
         yield np.ascontiguousarray(f[t : t + out_h, lft : lft + out_w])
+        if count == n:
+            return  # never pull more upstream frames than needed
     if count < n:
         raise ValueError(f"expected {n} frames, got {count}")

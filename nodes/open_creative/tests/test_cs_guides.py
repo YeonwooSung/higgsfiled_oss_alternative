@@ -89,13 +89,29 @@ def test_pad_to_model_then_crop_round_trips(ch):
             seen.append(p[:, :, 0].copy() if p.ndim == 3 else p.copy())
             yield p
 
-    out = list(crop_from_model(tap(padded), 1280, 720, n=120))
+    tapped = tap(padded)
+    out = list(crop_from_model(tapped, 1280, 720, n=120))
+    assert len(seen) == 120  # crop pulls exactly n frames
+    for _ in tapped:  # drain the 121st (repeated) padded frame
+        pass
     assert len(seen) == 121 and (seen[-1] == seen[-2]).all()  # last frame repeated
     # Edge padding: the 8 rows above/below equal the first/last content row.
     assert (seen[0][:8] == seen[0][8]).all() and (seen[0][-8:] == seen[0][-9]).all()
     assert len(out) == 120
     for i, f in enumerate(out):
         assert f.tobytes() == _frame(i, 720, 1280, ch).tobytes()
+
+
+def test_crop_from_model_pulls_exactly_n_frames():
+    pulled = []
+
+    def src():
+        for i in range(10):
+            pulled.append(i)
+            yield np.zeros((8, 8), np.uint8)
+
+    assert len(list(crop_from_model(src(), 4, 4, n=5))) == 5
+    assert len(pulled) == 5
 
 
 def test_pad_to_model_rejects_bad_shapes():

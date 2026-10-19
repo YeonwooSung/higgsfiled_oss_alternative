@@ -76,12 +76,29 @@ def test_mesh_deterministic_backprojection_and_uv():
     m = build_mesh(z, K, stride=4)
     assert m.vertices.dtype == np.float32 and m.faces.dtype == np.int32
     assert m.uv.shape == (len(m.vertices), 2)
-    # vertex 0 = pixel (0,0), center (0.5, 0.5)
-    X = 2.0 * np.linalg.inv(K) @ np.array([0.5, 0.5, 1.0])
+    # Edge-aligned grid: vertex 0 = image corner (0, 0); last vertex = (W, H).
+    assert m.grid_shape == (-(-H // 4) + 1, -(-W // 4) + 1)
+    X = 2.0 * np.linalg.inv(K) @ np.array([0.0, 0.0, 1.0])
     assert np.allclose(m.vertices[0], X, atol=1e-5)
-    assert np.allclose(m.uv[0], [0.5 / W, 0.5 / H], atol=1e-6)
+    assert np.allclose(m.uv[0], [0.0, 0.0], atol=1e-7)
+    Xe = 2.0 * np.linalg.inv(K) @ np.array([W, H, 1.0])
+    assert np.allclose(m.vertices[-1], Xe, atol=1e-5)
+    assert np.allclose(m.uv[-1], [1.0, 1.0], atol=1e-7)
     m2 = build_mesh(z, K, stride=4)
     assert np.array_equal(m.faces, m2.faces)
+
+
+def test_partial_stride_reaches_image_edge_and_samples_clamped_pixel():
+    w, h = 10, 7
+    k = intrinsics(50.0, w, h)
+    z = np.tile(np.arange(1, w + 1, dtype=np.float32), (h, 1))  # z = col + 1
+    m = build_mesh(z, k, stride=4)
+    assert m.grid_shape == (3, 4)  # rows 0,4,7; cols 0,4,8,10
+    u = m.uv[:4, 0] * w
+    assert np.allclose(u, [0, 4, 8, 10])
+    # depth at clamp(floor(x), 0, W-1): cols 0,4,8,9 -> z 1,5,9,10
+    assert np.allclose(m.vertices[:4, 2], [1, 5, 9, 10])
+    assert np.allclose(m.uv[-1], [1.0, 1.0])
 
 
 def test_nan_vertices_drop_faces():
