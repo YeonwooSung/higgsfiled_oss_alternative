@@ -30,6 +30,16 @@ export class History<T> {
     this.value = value;
   }
 
+  /**
+   * Apply `fn` to every stored state (past, current, future) without adding an undo step.
+   * For automatic, non-user changes (e.g. linking an uploaded asset) that undo must never revert.
+   */
+  rebase(fn: (state: T) => T): void {
+    this.past = this.past.map(fn);
+    this.future = this.future.map(fn);
+    this.value = fn(this.value);
+  }
+
   undo(): T {
     const prev = this.past.pop();
     if (prev === undefined) return this.value;

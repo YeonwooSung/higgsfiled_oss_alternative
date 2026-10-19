@@ -17,6 +17,8 @@ export const en = {
   analyzeDone: "Depth ready",
   analyzeFailed: "Analysis failed. You can try again.",
   retry: "Try again",
+  depthStale: "The depth map no longer matches the scene image, so your changes could not be saved.",
+  reanalyze: "Re-analyze scene",
   sceneImage: "Scene",
   depthPreview: "Depth preview",
   depthPreviewHint: "Brighter is nearer (relative depth, not meters).",

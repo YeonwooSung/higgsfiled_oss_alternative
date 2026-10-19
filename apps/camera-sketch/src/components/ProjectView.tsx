@@ -95,13 +95,13 @@ export function ProjectView({ projectId }: { projectId: string }) {
   // Link the uploaded scene into the config; clearing depth keeps the server lineage check satisfied.
   const sceneId = project && config ? sceneToLink(project.assets, config) : null;
   useEffect(() => {
-    if (sceneId) useEditor.getState().update((c) => { c.scene_asset_id = sceneId; c.depth_asset_id = null; });
+    if (sceneId) useEditor.getState().link((c) => { c.scene_asset_id = sceneId; c.depth_asset_id = null; });
   }, [sceneId]);
 
   // The analyze executor does not write the config; the client PATCHes the depth asset.
   const depthId = project && config ? depthToLink(project.assets, config, latestJob(jobs, "camera.analyze")) : null;
   useEffect(() => {
-    if (depthId) useEditor.getState().update((c) => { c.depth_asset_id = depthId; });
+    if (depthId) useEditor.getState().link((c) => { c.depth_asset_id = depthId; });
   }, [depthId]);
 
   if (query.isError) return <main className="p-8"><p role="alert" className="text-danger">{t("errorLabel")}: {t("loadFailed")}</p></main>;

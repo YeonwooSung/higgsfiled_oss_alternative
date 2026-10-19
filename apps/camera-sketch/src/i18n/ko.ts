@@ -19,6 +19,8 @@ export const ko: Dict = {
   analyzeDone: "깊이 준비됨",
   analyzeFailed: "분석에 실패했습니다. 다시 시도할 수 있습니다.",
   retry: "다시 시도",
+  depthStale: "깊이 맵이 현재 장면 이미지와 맞지 않아 변경 사항을 저장하지 못했습니다.",
+  reanalyze: "장면 다시 분석",
   sceneImage: "장면",
   depthPreview: "깊이 미리보기",
   depthPreviewHint: "밝을수록 가깝습니다(미터가 아닌 상대 깊이).",

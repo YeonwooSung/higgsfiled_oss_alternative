@@ -33,3 +33,18 @@ describe("History", () => {
     expect(h.canUndo).toBe(false);
   });
 });
+
+describe("History.rebase", () => {
+  it("rewrites past, current and future without adding an undo step", () => {
+    const h = new History({ a: 0, b: 0 });
+    h.push({ a: 1, b: 0 });
+    h.push({ a: 2, b: 0 });
+    h.undo();
+    h.rebase((s) => ({ ...s, b: 9 }));
+    expect(h.current).toEqual({ a: 1, b: 9 });
+    expect(h.undo()).toEqual({ a: 0, b: 9 });
+    expect(h.canUndo).toBe(false);
+    expect(h.redo()).toEqual({ a: 1, b: 9 });
+    expect(h.redo()).toEqual({ a: 2, b: 9 });
+  });
+});

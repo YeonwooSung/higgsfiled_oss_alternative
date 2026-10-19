@@ -5,18 +5,15 @@ import { Button } from "@oc/ui";
 import { CheckCircle2, CircleAlert, Loader2, ScanSearch, X } from "lucide-react";
 import { useState } from "react";
 import { api } from "../api/client";
-import { analysisState, latestJob } from "../flow/scene";
+import { analysisState, jobLabelKey, latestJob } from "../flow/scene";
 import { useI18n } from "../i18n";
-import type { Dict } from "../i18n/en";
+import { en, type Dict } from "../i18n/en";
 import { useEditor } from "../state/editorStore";
 import { startJob } from "../state/jobs";
 import { errorText } from "./errors";
 
 export function jobLabel(job: Job, t: (k: keyof Dict) => string): string {
-  if (job.state === "cancel_requested") return t("cancelRequested");
-  if (job.state === "queued") return t("jobQueued");
-  if (TERMINAL_JOB_STATES.includes(job.state) || job.state === "cancelled") return t(`state_${job.state}` as keyof Dict);
-  return t(`stage_${job.state}` as keyof Dict) ?? t("jobRunning");
+  return t(jobLabelKey(job.state, (k) => k in en) as keyof Dict);
 }
 
 /** Analyze scene: runs `camera.analyze` only (depth). No generation job is created from here. */
@@ -27,10 +24,16 @@ export function AnalyzePanel() {
   const [error, setError] = useState<string | null>(null);
   const latest = latestJob(jobs, "camera.analyze");
   const state = analysisState(config, latest);
+  const saveCode = useEditor((s) => s.saveCode);
 
   const run = async () => {
     setError(null);
     try {
+      if (useEditor.getState().saveCode === "depth_stale") {
+        // Drop the stale depth link locally, then re-run; startJob flushes the cleaned config first.
+        useEditor.getState().link((c) => { c.depth_asset_id = null; });
+        useEditor.getState().clearSaveError();
+      }
       await startJob("camera.analyze");
     } catch (e) {
       setError(errorText(e, t));
@@ -48,6 +51,12 @@ export function AnalyzePanel() {
         {state === "done" && <span className="flex items-center gap-1 text-accent"><CheckCircle2 className="h-3.5 w-3.5" aria-hidden />{t("analyzeDone")}</span>}
         {state === "failed" && <span className="flex items-center gap-1 text-danger"><CircleAlert className="h-3.5 w-3.5" aria-hidden />{t("analyzeFailed")}</span>}
       </div>
+      {saveCode === "depth_stale" && (
+        <div role="alert" className="space-y-2 text-xs text-danger">
+          <p className="flex items-start gap-1.5"><CircleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden /><span>{t("errorLabel")}: {t("depthStale")}</span></p>
+          <Button size="sm" variant="secondary" onClick={run} disabled={state === "running"}>{t("reanalyze")}</Button>
+        </div>
+      )}
       {error && <p role="alert" className="flex items-start gap-1.5 text-xs text-danger"><CircleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden /><span>{t("errorLabel")}: {error}</span></p>}
     </div>
   );
@@ -55,6 +64,7 @@ export function AnalyzePanel() {
 
 export function JobStatusList() {
   const { t } = useI18n();
+  const [cancelError, setCancelError] = useState<string | null>(null);
   const jobs = useEditor((s) => s.jobs);
   const list = Object.values(jobs).filter((j) => j.kind !== "asset.inspect").sort((a, b) => (a.created_at < b.created_at ? 1 : -1)).slice(0, 5);
   return (
@@ -77,12 +87,20 @@ export function JobStatusList() {
               </div>
               {active && j.state !== "cancel_requested" && (
                 <Button size="sm" variant="ghost" aria-label={t("cancelJob")} icon={<X className="h-3.5 w-3.5" />}
-                  onClick={async () => useEditor.getState().trackJob(await api.cancelJob(j.id))} />
+                  onClick={async () => {
+                    setCancelError(null);
+                    try {
+                      useEditor.getState().trackJob(await api.cancelJob(j.id));
+                    } catch (e) {
+                      setCancelError(errorText(e, t));
+                    }
+                  }} />
               )}
             </li>
           );
         })}
       </ul>
+      {cancelError && <p role="alert" className="mt-2 flex items-start gap-1.5 text-xs text-danger"><CircleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden /><span>{t("errorLabel")}: {cancelError}</span></p>}
     </section>
   );
 }

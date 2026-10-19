@@ -12,12 +12,17 @@ interface EditorState {
   config: CameraSketchConfig | null;
   revision: number;
   saveState: SaveState;
+  /** API error code of the last failed save (e.g. `depth_stale`), else null. */
+  saveCode: string | null;
+  clearSaveError: () => void;
   canUndo: boolean;
   canRedo: boolean;
   jobs: Record<string, Job>;
   load: (project: CameraSketchProject) => void;
   refresh: () => Promise<void>;
   update: (mutate: (draft: CameraSketchConfig) => void) => void;
+  /** Automatic link (not a user edit): saved, but never an undo step and never undone. */
+  link: (mutate: (draft: CameraSketchConfig) => void) => void;
   undo: () => void;
   redo: () => void;
   flush: () => Promise<number>;
@@ -40,6 +45,8 @@ export const useEditor = create<EditorState>((set, get) => {
     config: null,
     revision: 0,
     saveState: "saved",
+    saveCode: null,
+    clearSaveError: () => set({ saveCode: null, saveState: saver?.dirty ? "saving" : "saved" }),
     canUndo: false,
     canRedo: false,
     jobs: {},
@@ -53,13 +60,13 @@ export const useEditor = create<EditorState>((set, get) => {
           const p = await api.patchProject(project.id, rev, cfg);
           return { revision: p.current_revision, config: p.config };
         },
-        onSaved: (rev) => set({ revision: rev, saveState: saver?.dirty ? "saving" : "saved" }),
+        onSaved: (rev) => set({ revision: rev, saveCode: null, saveState: saver?.dirty ? "saving" : "saved" }),
         onConflict: async () => {
           const fresh = await api.getProject(project.id);
           get().load(fresh);
           set({ saveState: "conflict" });
         },
-        onError: () => set({ saveState: "error" }),
+        onError: (e) => set({ saveState: "error", saveCode: (e as { code?: string }).code ?? null }),
       });
       const jobs = Object.fromEntries(project.recent_jobs.map((j) => [j.id, j]));
       set({ project, config: clone(project.config), revision: project.current_revision, canUndo: false, canRedo: false,
@@ -82,6 +89,17 @@ export const useEditor = create<EditorState>((set, get) => {
       mutate(next);
       history.push(next);
       applyLocal(clone(history.current));
+    },
+    link: (mutate) => {
+      const cur = get().config;
+      if (!cur || !history) return;
+      history.rebase((c) => {
+        const next = clone(c);
+        mutate(next);
+        return next;
+      });
+      set({ config: clone(history.current), saveState: "saving" });
+      saver!.schedule(clone(history.current));
     },
     undo: () => history && history.canUndo && applyLocal(clone(history.undo())),
     redo: () => history && history.canRedo && applyLocal(clone(history.redo())),

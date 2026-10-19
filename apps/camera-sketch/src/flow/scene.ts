@@ -42,3 +42,13 @@ export function analysisState(config: Pick<CameraSketchConfig, "scene_asset_id" 
 export function latestJob(jobs: Record<string, Job>, kind: Job["kind"]): Job | undefined {
   return Object.values(jobs).filter((j) => j.kind === kind).sort((a, b) => (a.created_at < b.created_at ? 1 : -1))[0];
 }
+
+/** i18n key for a job's state; falls back to the generic "working" label when no `stage_*` key exists. */
+export function jobLabelKey(state: Job["state"], has: (key: string) => boolean): string {
+  if (state === "cancel_requested") return "cancelRequested";
+  if (state === "queued") return "jobQueued";
+  const terminal = `state_${state}`;
+  if (has(terminal)) return terminal;
+  const stage = `stage_${state}`;
+  return has(stage) ? stage : "jobRunning";
+}

@@ -1,6 +1,7 @@
 import type { Asset, CameraSketchConfig, Job } from "@oc/contracts";
 import { describe, expect, it } from "vitest";
-import { SAMPLES, analysisState, depthToLink, sceneToLink } from "../src/flow/scene";
+import { en } from "../src/i18n/en";
+import { SAMPLES, jobLabelKey, analysisState, depthToLink, sceneToLink } from "../src/flow/scene";
 
 const asset = (p: Partial<Asset>): Asset => ({
   id: "a", project_id: "p", role: "scene", state: "ready", sha256: null, mime: "image/png", bytes: 1, width: 1, height: 1,
@@ -57,5 +58,19 @@ describe("analysisState", () => {
   });
   it("is ready again when the scene changed after the analysis (no depth linked)", () => {
     expect(analysisState(cfg({ scene_asset_id: "s2" }), job({ state: "succeeded" }))).toBe("ready");
+  });
+});
+
+describe("jobLabelKey", () => {
+  const has = (k: string) => k in en;
+  it("maps known states and falls back to jobRunning for unknown stage keys", () => {
+    expect(jobLabelKey("queued", has)).toBe("jobQueued");
+    expect(jobLabelKey("running", has)).toBe("stage_running");
+    expect(jobLabelKey("succeeded", has)).toBe("state_succeeded");
+    expect(jobLabelKey("cancel_requested", has)).toBe("cancelRequested");
+    expect(jobLabelKey("running", () => false)).toBe("jobRunning");
+  });
+  it("every non-terminal state shown while a job runs resolves to a real key", () => {
+    for (const s of ["preparing", "submitting", "running", "postprocessing"] as const) expect(has(jobLabelKey(s, has))).toBe(true);
   });
 });

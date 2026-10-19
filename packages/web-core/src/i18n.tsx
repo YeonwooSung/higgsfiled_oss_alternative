@@ -26,6 +26,9 @@ export function createI18n<Dict extends Record<string, string>>(dicts: Record<Lo
         /* storage unavailable: keep default */
       }
     }, []);
+    useEffect(() => {
+      document.documentElement.lang = locale;
+    }, [locale]);
     const value: I18n<Key> = {
       locale,
       setLocale: (l) => {
