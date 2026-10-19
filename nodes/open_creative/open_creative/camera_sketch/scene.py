@@ -37,6 +37,11 @@ class DepthConvention:
 
 DAV2_SMALL = DepthConvention("inverse_relative")
 
+# Far cap in normalized scene units (target z = 1), applied at the end of ``prepare_z``.
+# Kept below the renderer far plane (100). Inverse depth <= eps means "at infinity" (sky);
+# it is represented as this cap, not NaN, so the sky stays renderable as a backdrop.
+Z_FAR_CAP = 50.0
+
 
 def depth_to_z(d: np.ndarray, conv: DepthConvention) -> np.ndarray:
     d = np.asarray(d, dtype=np.float32)
@@ -95,7 +100,8 @@ def prepare_z(
         z = np.exp(lz).astype(np.float32)
         z[~finite] = np.nan
     target_raw = _target_patch_median(z, target_uv01)
-    return (z / np.float32(target_raw)).astype(np.float32), target_raw
+    z_norm = np.minimum(z / np.float32(target_raw), np.float32(Z_FAR_CAP))  # NaN stays NaN
+    return z_norm.astype(np.float32), target_raw
 
 
 @dataclass
@@ -138,6 +144,7 @@ def build_mesh(
 
 
 def encode_depth_png16(d: np.ndarray) -> tuple[bytes, dict]:
+    """16-bit PNG, linear ``min..max -> 0..65535``. Non-finite values encode as 0 (= min)."""
     d = np.asarray(d, dtype=np.float64)
     fin = np.isfinite(d)
     lo = float(d[fin].min()) if fin.any() else 0.0

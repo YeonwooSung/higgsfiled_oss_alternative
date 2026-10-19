@@ -118,3 +118,20 @@ def test_png16_roundtrip():
     assert np.abs(back - d).max() <= (meta["max"] - meta["min"]) / 65535 + 1e-6
     c, cm = encode_depth_png16(np.full((5, 5), 0.3, np.float32))
     assert np.allclose(decode_depth_png16(c, cm), 0.3, atol=1e-6)
+
+
+def test_sky_inverse_zero_is_capped_and_cut_from_building():
+    from open_creative.camera_sketch.scene import Z_FAR_CAP
+
+    d = np.full((H, W), 0.5, np.float32)
+    d[:30, :] = 0.0  # sky: infinity
+    z = depth_to_z(d, DAV2_SMALL)
+    zn, _ = prepare_z(z, (0.5, 0.8))
+    assert np.isfinite(zn).all()
+    assert zn.max() == pytest.approx(Z_FAR_CAP) and zn.max() <= Z_FAR_CAP
+    m = build_mesh(zn, K, stride=2)
+    zv = m.vertices[:, 2]
+    fz = zv[m.faces]
+    sky = fz.min(1) > 0.5 * Z_FAR_CAP
+    assert sky.any()  # sky-to-sky faces kept
+    assert not ((fz.max(1) > 0.5 * Z_FAR_CAP) & (fz.min(1) < 5)).any()  # no sky-building faces

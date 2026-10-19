@@ -46,7 +46,7 @@ def room():
     # wall: vertical wallpaper stripes; floor: wood planks with perspective-ish spacing
     wall_rgb = shade((190, 176, 150), 0.85 + 0.15 * (np.floor(x / 24) % 2))
     plank = (np.floor((x - w / 2) / (40 + 0.35 * (y - horizon))) % 2)
-    floor_rgb = shade((140, 98, 62), 0.80 + 0.2 * plank + 0.0 * y)
+    floor_rgb = shade((140, 98, 62), 0.80 + 0.2 * plank)
     img = np.where(floor[..., None], floor_rgb, wall_rgb)
     # window on the wall
     win = (x > 120) & (x < 300) & (y > 60) & (y < 200)
@@ -107,10 +107,10 @@ def facade():
     gx, gy = (x - 24) % cell_w, (y - 200) % cell_h
     win = facade_m & (y > 200) & (gx < 60) & (gy < 80)
     d[win] -= 0.05
-    img = np.where(win[..., None], shade((40, 60, 90), 0.7 + 0.3 * (gx[..., None][..., 0] / 60)), img)
+    img = np.where(win[..., None], shade((40, 60, 90), 0.7 + 0.3 * (gx / 60)), img)
     bal = facade_m & (y > 200) & (gx < 72) & (gy > 84) & (gy < 96)
     d[bal] += 0.12
-    img = np.where(bal[..., None], shade((90, 90, 96), 1.0 + 0 * gx), img)
+    img = np.where(bal[..., None], shade((90, 90, 96), np.ones_like(gx)), img)
     img = img + noise(rng, h, w, 6.0)
     return img, d, (0.5, 0.6)
 
