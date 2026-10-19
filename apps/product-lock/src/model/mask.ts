@@ -5,8 +5,8 @@ export const BRUSH_MAX = 80;
 
 /** 8-bit product mask in normalized-product (source) pixel space. */
 export class MaskBuffer {
-  readonly data: Uint8ClampedArray;
-  constructor(readonly width: number, readonly height: number, data?: Uint8ClampedArray) {
+  readonly data: Uint8ClampedArray<ArrayBuffer>;
+  constructor(readonly width: number, readonly height: number, data?: Uint8ClampedArray<ArrayBuffer>) {
     this.data = data ?? new Uint8ClampedArray(width * height);
   }
 
@@ -30,7 +30,7 @@ export class MaskBuffer {
     return new MaskBuffer(this.width, this.height, new Uint8ClampedArray(this.data));
   }
 
-  toRGBA(): Uint8ClampedArray {
+  toRGBA(): Uint8ClampedArray<ArrayBuffer> {
     const out = new Uint8ClampedArray(this.width * this.height * 4);
     for (let i = 0; i < this.data.length; i++) {
       const v = this.data[i];

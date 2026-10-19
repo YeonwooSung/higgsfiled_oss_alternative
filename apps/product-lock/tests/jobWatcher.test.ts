@@ -7,7 +7,7 @@ const job = (state: Job["state"]): Job =>
 
 class FakeSource {
   static instances: FakeSource[] = [];
-  onerror: ((e: unknown) => void) | null = null;
+  onerror: (() => void) | null = null;
   listeners: Record<string, (e: { data: string; lastEventId: string }) => void> = {};
   closed = false;
   constructor(public url: string) {
@@ -52,7 +52,7 @@ describe("watchJob", () => {
     const done = new Promise<Job>((resolve) =>
       watchJob("j1", { eventSource: (u) => new FakeSource(u), fetchJob, onUpdate: () => {}, onDone: resolve, sleep }),
     );
-    for (let i = 0; i < 3; i++) FakeSource.instances[0].onerror?.({});
+    for (let i = 0; i < 3; i++) FakeSource.instances[0].onerror?.();
     const final = await done;
     expect(final.state).toBe("failed");
     expect(FakeSource.instances[0].closed).toBe(true);

@@ -223,3 +223,9 @@ __marimo__/
 .DS_Store
 # local runtime data
 /.data/
+
+# web
+node_modules/
+.next/
+next-env.d.ts
+*.tsbuildinfo

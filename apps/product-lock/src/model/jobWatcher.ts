@@ -1,8 +1,9 @@
 import { TERMINAL_JOB_STATES, type Job } from "@oc/contracts";
 
-interface SourceLike {
-  onerror: ((e: unknown) => void) | null;
-  addEventListener(type: string, fn: (e: { data: string; lastEventId: string }) => void): void;
+/** The subset of EventSource used here (events only trigger a refresh; payloads are not trusted). */
+export interface SourceLike {
+  onerror: (() => void) | null;
+  addEventListener(type: string, fn: () => void): void;
   close(): void;
 }
 
