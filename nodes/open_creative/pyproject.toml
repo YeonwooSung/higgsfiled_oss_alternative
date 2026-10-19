@@ -1,0 +1,14 @@
+[project]
+name = "open-creative"
+version = "0.1.0"
+description = "Deterministic imaging core and Comfy custom nodes for Open Creative Apps"
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = ["numpy>=1.26", "pillow>=10.4", "opencv-python-headless>=4.10"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["open_creative"]
