@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import time
-import uuid
 
 import cv2
 import numpy as np
@@ -9,7 +8,7 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session as DbSession
 
-from open_creative.camera_sketch.path import compile_path, load_presets, simplify_sketch  # noqa: F401
+from open_creative.camera_sketch.path import compile_path, load_presets
 from open_creative.camera_sketch.render import hole_ratio, rasterize
 from open_creative.camera_sketch.scene import build_mesh
 
