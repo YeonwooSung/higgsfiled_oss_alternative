@@ -3,6 +3,9 @@ from collections.abc import Callable
 from ..stages import JobRun
 from .background import background_image
 from .background_video import background_video
+from .camera_analyze import camera_analyze
+from .camera_cinematic import camera_cinematic
+from .camera_guide import camera_guide
 from .export import export
 from .inspect_asset import inspect_asset
 from .inspect_render import inspect_render
@@ -19,4 +22,8 @@ EXECUTORS: dict[str, Executor] = {
     "product.render": render,
     "product.inspect": inspect_render,
     "export": export,
+    "camera.analyze": camera_analyze,
+    "camera.guide": camera_guide,
+    "camera.cinematic": camera_cinematic,
+    "camera.export": export,  # dispatches by app
 }

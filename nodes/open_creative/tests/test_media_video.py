@@ -1,7 +1,13 @@
 import numpy as np
 import pytest
 
-from open_creative.media.video import decode_frames, encode_mp4, fit_sequence, probe
+from open_creative.media.video import (
+    Mp4Writer,
+    decode_frames,
+    encode_mp4,
+    fit_sequence,
+    probe,
+)
 
 
 def frames(n, w, h):
@@ -50,3 +56,29 @@ def test_fit_sequence_holds_last_frame_when_short():
 def test_fit_sequence_empty_raises():
     with pytest.raises(ValueError):
         list(fit_sequence(iter([]), 32, 32, n=10))
+
+
+def test_mp4_writers_fed_from_one_pass(tmp_path):
+    a, b = tmp_path / "a.mp4", tmp_path / "b.mp4"
+    with Mp4Writer(a, 64, 32) as wa, Mp4Writer(b, 32, 16) as wb:
+        for f in frames(7, 64, 32):
+            wa.write(f)
+            wb.write(np.ascontiguousarray(f[::2, ::2]))
+    assert (probe(a)["frame_count"], probe(b)["frame_count"]) == (7, 7)
+    assert (probe(b)["width"], probe(b)["height"]) == (32, 16)
+
+
+def test_mp4_writer_aborts_on_error(tmp_path):
+    p = tmp_path / "x.mp4"
+    with pytest.raises(ValueError), Mp4Writer(p, 64, 32) as w:
+        w.write(np.zeros((32, 64, 3), np.uint8))
+        w.write(np.zeros((10, 10, 3), np.uint8))  # wrong shape -> abort, no finalized file
+    assert not p.exists() or p.stat().st_size == 0 or probe_fails(p)
+
+
+def probe_fails(p) -> bool:
+    try:
+        probe(p)
+    except Exception:  # noqa: BLE001
+        return True
+    return False

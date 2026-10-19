@@ -18,6 +18,7 @@ from open_creative.comfy.profiles import get_profile
 from open_creative.product_lock.prompts import load_presets
 
 from ..stages import JobRun, StageFailed
+from .camera_export import camera_export
 
 MODEL_MANIFEST = REPO_ROOT / "models" / "product-lock.manifest.json"
 
@@ -103,6 +104,13 @@ def _recipe(run: JobRun, render: Job) -> str:
 
 
 def export(run: JobRun) -> tuple[list[str], dict]:
+    """Export jobs dispatch by app: Product Lock (kind ``export``) and Camera Sketch (``camera.export``)."""
+    if run.project.app_slug == "camera-sketch":
+        return camera_export(run)
+    return _product_lock_export(run)
+
+
+def _product_lock_export(run: JobRun) -> tuple[list[str], dict]:
     opts = run.job.options_json
     render = run.db.get(Job, uuid.UUID(opts["render_job_id"]))
     if render is None or render.project_id != run.project.id or render.state != "succeeded":
