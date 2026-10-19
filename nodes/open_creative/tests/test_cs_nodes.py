@@ -196,3 +196,20 @@ def test_cs_compile_invalid_returns_status_not_exception():
     _, scene = CSDepthToScene().run(img, raw, 50.0, 0.5, 0.6)
     path, status = CSCompileCameraPath().run(scene, json.dumps({"preset": "nope"}), 64, 36, 24)
     assert status == "invalid"
+
+
+def test_render_guides_prealloc_and_frame_cap():
+    from open_creative.comfy_nodes import CS_MAX_FRAMES, CSCompileCameraPath, CSDepthToScene, CSRenderGuides
+
+    assert CS_MAX_FRAMES == 121
+    assert CSCompileCameraPath.INPUT_TYPES()["required"]["frames"][1]["max"] == 121
+    img, raw = scene_arrays()
+    depth, scene = CSDepthToScene().run(img, raw, 50.0, 0.5, 0.6)
+    path, _ = CSCompileCameraPath().run(scene, json.dumps({"preset": "push_in", "sketch_points": []}), 64, 36, 8)
+    rgb, gd, m = CSRenderGuides().run(img, depth, scene, path, 4)
+    assert np.asarray(rgb).shape == (8, 36, 64, 3) and np.asarray(gd).shape == (8, 36, 64, 3)
+    assert np.asarray(rgb).dtype == np.float32 and json.loads(m)["frames"] == 8
+    p = json.loads(path)
+    p["samples"] = p["samples"] * 16  # 128 > 121
+    with pytest.raises(ValueError, match="121"):
+        CSRenderGuides().run(img, depth, scene, json.dumps(p), 4)

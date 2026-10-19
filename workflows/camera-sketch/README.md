@@ -20,7 +20,8 @@ reports `available=False, reason="control presets not calibrated"` and only `moc
 
 ## Output contracts
 
-- `camera_depth_v1` → `depth`: a **16-bit grayscale PNG** of relative inverse depth (linear `min..max -> 0..65535`,
+- `camera_depth_v1` → `depth`: `CSDepthToScene` returns a normalised float MASK plus scene JSON; the exported
+  graph must end in a save node producing the 16-bit PNG + JSON meta contract below, which the worker consumes. A **16-bit grayscale PNG** of relative inverse depth (linear `min..max -> 0..65535`,
   larger = nearer, sky = 0) plus JSON meta `{"min": float, "max": float}`. The worker converts it with
   `decode_depth_png16(png, meta)` (Task 10). `mock_v1` writes `depth_0.png` + `depth_0.json` (extra keys
   `mock: true`, `source: fixture_gt|heuristic`).
@@ -45,3 +46,9 @@ otherwise a deterministic heuristic (0.6 × vertical gradient, bottom nearer, + 
    (same schema as `workflows/product-lock/README.md`; `guide_rgb`/`guide_depth` have `"type": "video"`).
 4. `uv run pytest nodes/open_creative/tests/test_cs_nodes.py`, fill `CONTROL_PRESETS` from the smoke run, and check
    `GET /api/v1/capabilities`. Node IDs are never guessed; no graph JSON is committed until a real export exists.
+
+## Guide rendering
+
+Production guides are rendered by the CPU worker, streaming frame by frame. `CSRenderGuides` is a batch node
+(Comfy IMAGE needs a full batch) that exists for the published workflow; it preallocates its output tensors and
+rejects paths longer than 121 frames (`CSCompileCameraPath.frames` max is 121).

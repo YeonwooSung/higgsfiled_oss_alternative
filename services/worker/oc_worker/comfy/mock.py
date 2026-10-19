@@ -128,7 +128,8 @@ def mock_depth(rgb: np.ndarray) -> np.ndarray:
 
 
 def mock_cinematic_frame(guide: np.ndarray) -> np.ndarray:
-    """Mock cinematic stage: holes (near-black guide pixels) inpainted with cv2 TELEA, then a mild
+    """Mock cinematic stage (per frame). The runner ignores guide_depth, reference, prompt, seed and
+    control_strength, and holds the last guide frame when `frames` exceeds the guide length. Holes (near-black guide pixels) inpainted with cv2 TELEA, then a mild
     deterministic warm grade (slight tint + contrast)."""
     gray = guide.max(axis=2)
     holes = (gray <= 6).astype(np.uint8) * 255

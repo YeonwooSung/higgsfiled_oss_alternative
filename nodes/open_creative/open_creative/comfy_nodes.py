@@ -213,6 +213,7 @@ class PLCoreIntegrityCheck:
 
 CS_CATEGORY = "open_creative/camera_sketch"
 _SENSOR_W_MM = 36.0
+CS_MAX_FRAMES = 121  # model length (LTX 121); also the cap for a batch guide render
 
 
 def _frames_u8(x) -> np.ndarray:
@@ -276,7 +277,7 @@ class CSCompileCameraPath:
             "path_config": ("STRING", {"default": '{"preset":"push_in","sketch_points":[]}', "multiline": True}),
             "width": ("INT", {"default": 1280, "min": 64, "max": 4096}),
             "height": ("INT", {"default": 720, "min": 64, "max": 4096}),
-            "frames": ("INT", {"default": 120, "min": 2, "max": 240}),
+            "frames": ("INT", {"default": 120, "min": 2, "max": CS_MAX_FRAMES}),
         }}
 
     def run(self, scene, path_config, width, height, frames):
@@ -289,6 +290,9 @@ class CSCompileCameraPath:
 
 
 class CSRenderGuides:
+    """Batch node (Comfy IMAGE needs a full batch) that exists for the published workflow. Output tensors are
+    preallocated once and filled in place. Production guides are rendered by the CPU worker, streaming."""
+
     CATEGORY = CS_CATEGORY
     FUNCTION = "run"
     RETURN_TYPES = ("IMAGE", "IMAGE", "STRING")
@@ -315,17 +319,22 @@ class CSRenderGuides:
         compiled = SimpleNamespace(status=p["status"], samples=p["samples"], K=p["K"],
                                    source_to_output=p["source_to_output"])
         tex = _frames_u8(image)[0]
-        rng, rgb, gd, holes = None, [], [], []
-        for fr in render_sequence(mesh, None, compiled, out_w, out_h, texture=tex):
+        n = len(p["samples"])
+        if n > CS_MAX_FRAMES:
+            raise ValueError(f"path has {n} frames; at most {CS_MAX_FRAMES} can be rendered as one batch")
+        rgb = np.empty((n, out_h, out_w, 3), np.float32)
+        gd = np.empty((n, out_h, out_w, 3), np.float32)
+        rng, holes = None, []
+        for i, fr in enumerate(render_sequence(mesh, None, compiled, out_w, out_h, texture=tex)):
             rng = rng or DepthGuideRange.from_frame(fr)
             g, fill = depth_guide(fr, rng)
-            rgb.append(fr.rgb.astype(np.float32) / 255.0)
-            gd.append(np.repeat((g.astype(np.float32) / 255.0)[..., None], 3, axis=2))
+            rgb[i] = fr.rgb.astype(np.float32) / 255.0
+            gd[i] = (g.astype(np.float32) / 255.0)[..., None]
             holes.append(hole_ratio(fr))
-        manifest = {"frames": len(rgb), "width": out_w, "height": out_h, "depth_guide": rng.to_dict(),
+        manifest = {"frames": n, "width": out_w, "height": out_h, "depth_guide": rng.to_dict(),
                     "fill": fill, "hole_ratio_max": float(max(holes)), "mesh_stride": int(mesh_stride),
                     "holes": "unfilled frames: invalid pixels are black (0,0,0)"}
-        return _out(np.stack(rgb)), _out(np.stack(gd)), json.dumps(manifest)
+        return _out(rgb), _out(gd), json.dumps(manifest)
 
 
 class CSPathDiagnostics:
