@@ -26,7 +26,7 @@ def object_key(session_id, project_id, asset_id, role: str, mime: str) -> str:
 
 class Storage(Protocol):
     def upload_url(self, key: str, ttl: int, mime: str, max_bytes: int) -> tuple[str, dict, datetime]: ...
-    def read_url(self, key: str, ttl: int, mime: str | None = None) -> str: ...
+    def read_url(self, key: str, ttl: int, mime: str | None = None, filename: str | None = None) -> str: ...
     def put_bytes(self, key: str, data: bytes, mime: str | None = None) -> None: ...
     def put_file(self, key: str, path: Path, mime: str | None = None) -> None: ...
     def get_bytes(self, key: str) -> bytes: ...
@@ -86,8 +86,11 @@ class LocalStorage:
         token = self.sign({"op": "put", "k": key, "exp": exp, "mime": mime, "max": max_bytes})
         return self.URL_PREFIX + token, {"Content-Type": mime}, datetime.fromtimestamp(exp, UTC)
 
-    def read_url(self, key: str, ttl: int, mime: str | None = None) -> str:
-        return self.URL_PREFIX + self.sign({"op": "get", "k": key, "exp": int(time.time()) + ttl, "mime": mime})
+    def read_url(self, key: str, ttl: int, mime: str | None = None, filename: str | None = None) -> str:
+        claims = {"op": "get", "k": key, "exp": int(time.time()) + ttl, "mime": mime}
+        if filename:
+            claims["fn"] = filename
+        return self.URL_PREFIX + self.sign(claims)
 
     # -- objects -----------------------------------------------------------
     def put_bytes(self, key: str, data: bytes, mime: str | None = None) -> None:
@@ -140,10 +143,12 @@ class S3Storage:
                                                                     "ContentType": mime}, ExpiresIn=ttl)
         return url, {"Content-Type": mime}, datetime.fromtimestamp(time.time() + ttl, UTC)
 
-    def read_url(self, key: str, ttl: int, mime: str | None = None) -> str:
+    def read_url(self, key: str, ttl: int, mime: str | None = None, filename: str | None = None) -> str:
         params = {"Bucket": self.bucket, "Key": key}
         if mime:
             params["ResponseContentType"] = mime
+        if filename:
+            params["ResponseContentDisposition"] = f'attachment; filename="{filename}"'
         return self.s3.generate_presigned_url("get_object", Params=params, ExpiresIn=ttl)
 
     def put_bytes(self, key: str, data: bytes, mime: str | None = None) -> None:

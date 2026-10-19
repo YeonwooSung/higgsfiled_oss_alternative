@@ -109,3 +109,14 @@ def test_read_url_only_for_ready_assets(app, session_client, project):
     r = session_client.get(url)
     assert r.status_code == 200 and r.content == data
     assert r.headers["content-type"] == "image/png"
+
+
+def test_download_url_sets_attachment_filename(app, session_client, project):
+    data = png_bytes()
+    aid = upload(session_client, project, data)
+    with app.state.db() as db:
+        db.get(Asset, uuid.UUID(aid)).state = "ready"
+        db.commit()
+    body = session_client.get(f"/api/v1/assets/{aid}", params={"download": "true"}).json()
+    r = session_client.get(body["download_url"])
+    assert r.headers["content-disposition"] == 'attachment; filename="product-lock-product.png"'

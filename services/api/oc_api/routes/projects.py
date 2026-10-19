@@ -12,7 +12,8 @@ from sqlalchemy.orm import Session as DbSession
 from ..apps_registry import default_app_config, validate_config
 from ..deps import current_session, get_db, owned_project
 from ..errors import ApiError
-from ..models import Asset, Job, Project, ProjectRevision
+from ..db import utcnow
+from ..models import ACTIVE_JOB_STATES, Asset, CleanupTask, Job, JobStage, Project, ProjectRevision, Share
 from ..models import Session as SessionRow
 from ..serializers import asset_out, job_out
 
@@ -121,3 +122,26 @@ def patch_project(project_id: str, body: ProjectPatch, request: Request, db: DbS
         raise ApiError(409, "revision_conflict", "The project changed since you loaded it.") from None
     db.refresh(project)
     return project_out(db, project, request)
+
+
+@router.delete("/projects/{project_id}", status_code=202)
+def delete_project(project_id: str, db: DbSession = Depends(get_db), session: SessionRow = Depends(current_session)):
+    """Access stops immediately; originals, outputs and provider artifacts are removed by cleanup tasks."""
+    project = owned_project(project_id, db, session)
+    now = utcnow()
+    project.deleted_at = now
+    for share in db.scalars(select(Share).where(Share.project_id == project.id, Share.revoked_at.is_(None))):
+        share.revoked_at = now
+    for job in db.scalars(select(Job).where(Job.project_id == project.id, Job.state.in_(ACTIVE_JOB_STATES))):
+        job.cancellation_requested_at = job.cancellation_requested_at or now
+        if job.state == "queued" and job.lease_owner is None:
+            job.state, job.finished_at = "cancelled", now
+        else:
+            job.state = "cancel_requested"
+    db.add(CleanupTask(project_id=project.id, target="storage", object_prefix=f"{session.id}/{project.id}/"))
+    provider_jobs = db.scalar(select(JobStage.id).join(Job, Job.id == JobStage.job_id).where(
+        Job.project_id == project.id, JobStage.provider_job_id.is_not(None), Job.model_profile != "mock_v1").limit(1))
+    if provider_jobs is not None:
+        db.add(CleanupTask(project_id=project.id, target="provider"))
+    db.commit()
+    return {"id": str(project.id), "deleted": True, "cleanup": "scheduled"}

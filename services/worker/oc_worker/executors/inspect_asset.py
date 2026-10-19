@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 
 from open_creative.media.image import MediaError, load_mask_png, mask_to_png_bytes, normalize_image, to_png_bytes
@@ -43,9 +44,10 @@ def _product(run: JobRun, asset, data: bytes):
     png = to_png_bytes(img.rgb, img.alpha)
     run.ctx.storage.put_bytes(normalized_key, png, "image/png")
     asset.meta_json = {"original_key": asset.object_key, "original_mime": img.mime,
-                       "original_sha256": asset.sha256, "has_alpha": img.alpha is not None,
+                       "original_sha256": hashlib.sha256(data).hexdigest(), "has_alpha": img.alpha is not None,
                        "normalization": {"exif_orientation": "applied", "color": "sRGB", "metadata": "stripped"}}
     asset.object_key, asset.mime, asset.bytes = normalized_key, "image/png", len(png)
+    asset.sha256 = hashlib.sha256(png).hexdigest()
     asset.width, asset.height = img.width, img.height
     asset.state = "ready"
     run.db.commit()

@@ -94,6 +94,6 @@ def complete_asset(asset_id: str, body: AssetComplete, request: Request, db: DbS
 
 
 @router.get("/assets/{asset_id}")
-def get_asset(asset_id: str, request: Request, db: DbSession = Depends(get_db),
+def get_asset(asset_id: str, request: Request, download: bool = False, db: DbSession = Depends(get_db),
               session: SessionRow = Depends(current_session)):
-    return asset_out(request, owned_asset(asset_id, db, session), with_url=True)
+    return asset_out(request, owned_asset(asset_id, db, session), with_url=True, download=download)

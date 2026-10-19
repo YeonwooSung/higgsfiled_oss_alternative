@@ -3,12 +3,17 @@ from __future__ import annotations
 from fastapi import Request
 
 from .models import Asset, Job
+from .storage import MIME_EXT
 
 PUBLIC_ASSET_FIELDS = ("role", "state", "sha256", "mime", "bytes", "width", "height", "frame_count",
                        "fps_num", "fps_den", "duration_ms", "error_code", "filename")
 
 
-def asset_out(request: Request, a: Asset, with_url: bool = False) -> dict:
+def download_name(a: Asset) -> str:
+    return f"product-lock-{a.role}{MIME_EXT.get(a.mime or '', '.bin')}"
+
+
+def asset_out(request: Request, a: Asset, with_url: bool = False, download: bool = False) -> dict:
     out = {"id": str(a.id), "project_id": str(a.project_id), "created_at": a.created_at.isoformat(),
            "source_asset_id": str(a.source_asset_id) if a.source_asset_id else None,
            "job_id": str(a.job_id) if a.job_id else None, "meta": a.meta_json or {}}
@@ -17,6 +22,8 @@ def asset_out(request: Request, a: Asset, with_url: bool = False) -> dict:
         storage = request.app.state.storage
         ttl = request.app.state.settings.read_url_ttl_s
         out["read_url"] = storage.read_url(a.object_key, ttl, mime=a.mime)
+        if download:
+            out["download_url"] = storage.read_url(a.object_key, ttl, mime=a.mime, filename=download_name(a))
     return out
 
 

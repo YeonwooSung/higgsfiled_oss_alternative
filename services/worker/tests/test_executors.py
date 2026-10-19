@@ -1,3 +1,4 @@
+import hashlib
 import io
 import json
 import uuid
@@ -50,6 +51,8 @@ def test_alpha_product_is_normalized_and_suggests_mask(ctx, db_factory, storage,
     assert product.state == "ready" and product.mime == "image/png"
     assert (product.width, product.height) == (300, 560)
     assert product.meta_json["has_alpha"] is True and product.meta_json["original_key"].endswith("original.png")
+    assert product.sha256 == hashlib.sha256(storage.get_bytes(product.object_key)).hexdigest()
+    assert product.meta_json["original_sha256"] == hashlib.sha256(FIXTURE.read_bytes()).hexdigest()
     mask = load(db_factory, Asset, job.result_json["suggested_mask_asset_id"])
     assert mask.role == "mask" and (mask.width, mask.height) == (300, 560)
     assert mask.meta_json["origin"] == "alpha" and mask.source_asset_id == product.id

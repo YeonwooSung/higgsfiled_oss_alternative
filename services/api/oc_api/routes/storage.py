@@ -43,5 +43,8 @@ def get_object(token: str, request: Request):
         raise ApiError(403, "invalid_read_url", "Link is invalid or expired.") from None
     if not storage.exists(claims["k"]):
         raise ApiError(404, "not_found", "not found")
+    headers = {"Cache-Control": "private, max-age=60", "X-Content-Type-Options": "nosniff"}
+    if claims.get("fn"):  # server-generated names only
+        headers["Content-Disposition"] = f'attachment; filename="{claims["fn"]}"'
     return Response(storage.get_bytes(claims["k"]), media_type=claims.get("mime") or "application/octet-stream",
-                    headers={"Cache-Control": "private, max-age=60", "X-Content-Type-Options": "nosniff"})
+                    headers=headers)

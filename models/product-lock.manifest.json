@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "app": "product-lock",
+  "profile": "open_weights_v1",
+  "note": "Weights are not included. sha256 values are filled in from the files actually deployed in the Comfy build; null means not yet verified.",
+  "models": [
+    {
+      "role": "segmentation",
+      "id": "facebook/sam2.1-hiera-small",
+      "source": "https://github.com/facebookresearch/sam2",
+      "files": [{"name": "sam2.1_hiera_small.pt", "sha256": null}],
+      "license": "Apache-2.0",
+      "verified": false
+    },
+    {
+      "role": "background_image",
+      "id": "black-forest-labs/FLUX.1-schnell",
+      "source": "https://huggingface.co/black-forest-labs/FLUX.1-schnell",
+      "files": [{"name": "flux1-schnell.safetensors", "sha256": null}],
+      "encoders": ["clip_l", "t5xxl", "ae (VAE)"],
+      "license": "Apache-2.0",
+      "verified": false
+    },
+    {
+      "role": "background_video",
+      "id": "Lightricks/LTX-2.3 (distilled v1.1)",
+      "source": "https://huggingface.co/Lightricks/LTX-2.3",
+      "comfy_nodes": "https://github.com/Lightricks/ComfyUI-LTXVideo",
+      "files": [{"name": null, "sha256": null}],
+      "license": "LTX community license (model weights; distinct from this repository's MIT code license)",
+      "verified": false
+    }
+  ]
+}
