@@ -31,6 +31,13 @@ GPU_SECONDS_CAP = {
 }
 
 
+# ControlNet-style guide strengths of the camera cinematic stage (camera_cinematic_v1.control_strength).
+# Filled from the first real smoke on the Comfy deployment; never invented. While any is None the camera
+# open_weights profile is unavailable.
+CONTROL_PRESETS: dict[str, float | None] = {"low": None, "medium": None, "high": None}
+CAMERA_WORKFLOWS = ("camera_depth_v1", "camera_cinematic_v1")
+
+
 @dataclass(frozen=True)
 class Profile:
     id: str
@@ -82,9 +89,13 @@ def profile_status(profile_id: str, workflows_dir: Path, comfy_base_url: str | N
 
     if p.is_mock:
         return status(True)
+    selected = workflows if workflows is not None else tuple(
+        n for n in REQUIRED_BINDINGS if WORKFLOW_APP.get(n) == "product-lock")
+    if any(n in CAMERA_WORKFLOWS for n in selected) and any(v is None for v in CONTROL_PRESETS.values()):
+        return status(False, "control presets not calibrated")
     if not comfy_base_url:
         return status(False, "COMFY_BASE_URL is not configured")
-    for name in workflows if workflows is not None else tuple(REQUIRED_BINDINGS):
+    for name in selected:
         manifest_path = workflows_dir / f"{name}.bindings.json"
         if not manifest_path.exists():
             return status(False, f"{name}: binding manifest not exported")

@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "app": "camera-sketch",
+  "profile": "open_weights_v1",
+  "note": "Weights are not included. sha256 values are filled in from the files actually deployed in the Comfy build; null means not yet verified.",
+  "models": [
+    {
+      "role": "depth",
+      "id": "depth-anything/Depth-Anything-V2-Small (Depth Anything V2 Small)",
+      "source": "https://huggingface.co/depth-anything/Depth-Anything-V2-Small",
+      "files": [{"name": null, "sha256": null}],
+      "output": "relative inverse depth (not metric); Small only, never Large",
+      "license": "Apache-2.0",
+      "verified": false
+    },
+    {
+      "role": "cinematic",
+      "id": "Lightricks/LTX-2.3 (distilled)",
+      "source": "https://huggingface.co/Lightricks/LTX-2.3",
+      "comfy_nodes": "https://github.com/Lightricks/ComfyUI-LTXVideo",
+      "files": [{"name": null, "sha256": null}],
+      "encoders": [{"name": null, "sha256": null}],
+      "license": "LTX community license (model weights; distinct from this repository's MIT code license)",
+      "verified": false
+    },
+    {
+      "role": "control_lora",
+      "id": "Lightricks/LTX-2.3 union IC-LoRA (same release as the base model; no LTX-2.0 camera LoRA)",
+      "source": "https://huggingface.co/Lightricks/LTX-2.3",
+      "files": [{"name": null, "sha256": null}],
+      "note": "Depth guide control. The LoRA release must match the base model release exactly.",
+      "license": "LTX community license (model weights; distinct from this repository's MIT code license)",
+      "verified": false
+    }
+  ]
+}

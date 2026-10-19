@@ -23,8 +23,9 @@ def product():
 
 
 def test_all_five_nodes_registered_with_comfy_contract():
-    assert set(NODE_CLASS_MAPPINGS) == {"PLProductMask", "PLLockedProduct", "PLBackgroundPrompt",
-                                        "PLCompositeSequence", "PLCoreIntegrityCheck"}
+    pl = {k for k in NODE_CLASS_MAPPINGS if k.startswith("PL")}
+    assert pl == {"PLProductMask", "PLLockedProduct", "PLBackgroundPrompt",
+                  "PLCompositeSequence", "PLCoreIntegrityCheck"}
     for cls in NODE_CLASS_MAPPINGS.values():
         assert "required" in cls.INPUT_TYPES()
         assert len(cls.RETURN_TYPES) == len(cls.RETURN_NAMES)

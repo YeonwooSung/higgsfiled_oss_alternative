@@ -11,6 +11,7 @@
       "width": 960,
       "height": 540,
       "sha256": "fedb22309f358e86897e973bb49261e7e0e719873da77ad3bbb5db21b2d449a5",
+      "rgb_sha256": "b00474a912046f101a422ddf42849b1d4301d9aa5f51b0653870772269063c14",
       "depth_png16": {
         "min": 0.20000000298023224,
         "max": 0.949999988079071
@@ -26,6 +27,7 @@
       "width": 960,
       "height": 540,
       "sha256": "da1ba4845b2027d3af6c88db43addb6d90df87e5cd630e9a8e8a15d5a5c4f302",
+      "rgb_sha256": "9ea2a5cb59549326250ede2bdaf0e84928737e0e20f342ecdddcd6fcc3c6510b",
       "depth_png16": {
         "min": 0.15000000596046448,
         "max": 0.800000011920929
@@ -41,6 +43,7 @@
       "width": 576,
       "height": 1024,
       "sha256": "5cb8106db673076f28854a2ab3ea84d5807fc244d4e55bd00214c6ff4303cb24",
+      "rgb_sha256": "bdde702746be9c19fbd0a2dd404bf5766940afb95144fda00c204f022c26c6d3",
       "depth_png16": {
         "min": 0.0,
         "max": 0.8665780425071716

@@ -1,4 +1,4 @@
-"""Product Lock custom nodes for ComfyUI (new nodes; none of these exist upstream).
+"""Product Lock (PL*) and Camera Sketch (CS*) custom nodes for ComfyUI (new nodes; none exist upstream).
 
 Conventions: IMAGE is [B,H,W,C] float 0..1 (RGB only — alpha travels as a separate MASK,
 never as a 4th IMAGE channel); MASK is [B,H,W] float 0..1. Comfy's LoadImage emits its
@@ -9,9 +9,18 @@ so the CPU worker and these nodes produce identical results.
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import numpy as np
 
+from .camera_sketch.camera import intrinsics
+from .camera_sketch.guides import DepthGuideRange, depth_guide
+from .camera_sketch.path import SceneInfo, compile_path
+from .camera_sketch.qa import motion_report
+from .camera_sketch.render import hole_ratio, render_sequence
+from .camera_sketch.scene import (
+    DAV2_SMALL, DepthConvention, build_mesh, decode_depth_png16, depth_to_z, encode_depth_png16, prepare_z,
+)
 from .product_lock.composite import LayerConfig, composite_sequence
 from .product_lock.geometry import Placement, output_size, place_product
 from .product_lock.integrity import CoreChecker
@@ -197,12 +206,178 @@ class PLCoreIntegrityCheck:
         return (json.dumps(checker.report()),)
 
 
+# ---- Camera Sketch -------------------------------------------------------------------
+# Thin wrappers over open_creative.camera_sketch. RGB IMAGE tensors are [B,H,W,3] float 0..1; depth is
+# kept apart: a MASK [B,H,W] of inverse depth normalized to 0..1 by the (min, max) recorded in the `scene`
+# JSON, and the depth *guide* is a separate gray IMAGE (near = white, shot-fixed range).
+
+CS_CATEGORY = "open_creative/camera_sketch"
+_SENSOR_W_MM = 36.0
+
+
+def _frames_u8(x) -> np.ndarray:
+    return _u8(_np(x))
+
+
+def _scene_info(meta: dict) -> SceneInfo:
+    w, h = int(meta["src_w"]), int(meta["src_h"])
+    K = intrinsics(float(meta["focal_length_mm"]), w, h, float(meta.get("sensor_width_mm", _SENSOR_W_MM)))
+    u, v = meta["target_uv01"]
+    ray = np.linalg.inv(K) @ np.array([u * w, v * h, 1.0])
+    c = meta["convention"]
+    conv = DepthConvention(c["kind"], float(c.get("scale", 1.0)), float(c.get("offset", 0.0)),
+                           float(c.get("eps", 1e-6)))
+    return SceneInfo(K_src=K, src_w=w, src_h=h, target_world=ray, target_uv01=(float(u), float(v)),
+                     depth_convention=conv, depth_params={"depth_scale": 1.0})
+
+
+class CSDepthToScene:
+    """Raw relative inverse depth (Depth Anything V2 Small, near = bright) -> 16-bit-quantized depth + scene JSON."""
+
+    CATEGORY = CS_CATEGORY
+    FUNCTION = "run"
+    RETURN_TYPES = ("MASK", "STRING")
+    RETURN_NAMES = ("depth", "scene")
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+            "image": ("IMAGE",), "depth": ("IMAGE",),
+            "focal_length_mm": ("FLOAT", {"default": 50.0, "min": 35.0, "max": 70.0, "step": 1.0}),
+            "target_u": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.001}),
+            "target_v": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.001}),
+        }}
+
+    def run(self, image, depth, focal_length_mm, target_u, target_v):
+        h, w = _np(image).shape[1:3]
+        d = _np(depth)[0]
+        d = d.mean(axis=-1) if d.ndim == 3 else d
+        data, dm = encode_depth_png16(d)
+        q = decode_depth_png16(data, dm)  # exactly what the worker will decode
+        span = dm["max"] - dm["min"]
+        norm = ((q - dm["min"]) / span if span > 0 else np.zeros_like(q)).astype(np.float32)
+        meta = {"src_w": int(w), "src_h": int(h), "focal_length_mm": float(focal_length_mm),
+                "sensor_width_mm": _SENSOR_W_MM, "target_uv01": [float(target_u), float(target_v)],
+                "convention": {"kind": DAV2_SMALL.kind, "scale": 1.0, "offset": 0.0, "eps": DAV2_SMALL.eps},
+                "depth_png16": {"min": dm["min"], "max": dm["max"]}}
+        return _out(norm[None]), json.dumps(meta)
+
+
+class CSCompileCameraPath:
+    CATEGORY = CS_CATEGORY
+    FUNCTION = "run"
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("path", "status")
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+            "scene": ("STRING", {"forceInput": True}),
+            "path_config": ("STRING", {"default": '{"preset":"push_in","sketch_points":[]}', "multiline": True}),
+            "width": ("INT", {"default": 1280, "min": 64, "max": 4096}),
+            "height": ("INT", {"default": 720, "min": 64, "max": 4096}),
+            "frames": ("INT", {"default": 120, "min": 2, "max": 240}),
+        }}
+
+    def run(self, scene, path_config, width, height, frames):
+        try:
+            compiled = compile_path(json.loads(path_config), _scene_info(json.loads(scene)), width, height, frames)
+        except (ValueError, TypeError, KeyError) as e:
+            return json.dumps({"status": "invalid", "reasons": ["invalid_input"], "detail": str(e)[:200],
+                               "samples": []}), "invalid"
+        return json.dumps(compiled.to_dict()), compiled.status
+
+
+class CSRenderGuides:
+    CATEGORY = CS_CATEGORY
+    FUNCTION = "run"
+    RETURN_TYPES = ("IMAGE", "IMAGE", "STRING")
+    RETURN_NAMES = ("guide_rgb", "guide_depth", "manifest")
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+            "image": ("IMAGE",), "depth": ("MASK",), "scene": ("STRING", {"forceInput": True}),
+            "path": ("STRING", {"forceInput": True}),
+            "mesh_stride": ("INT", {"default": 4, "min": 1, "max": 16}),
+        }}
+
+    def run(self, image, depth, scene, path, mesh_stride):
+        meta, p = json.loads(scene), json.loads(path)
+        if p.get("status") == "invalid" or not p.get("samples"):
+            raise ValueError("camera path is invalid; nothing to render")
+        info = _scene_info(meta)
+        lo, hi = meta["depth_png16"]["min"], meta["depth_png16"]["max"]
+        d = lo + _np(depth)[0].astype(np.float64) * (hi - lo)
+        z_norm, _ = prepare_z(depth_to_z(d, info.depth_convention), info.target_uv01)
+        mesh = build_mesh(z_norm, info.K_src, mesh_stride)
+        out_w, out_h = int(p["source_to_output"]["out_w"]), int(p["source_to_output"]["out_h"])
+        compiled = SimpleNamespace(status=p["status"], samples=p["samples"], K=p["K"],
+                                   source_to_output=p["source_to_output"])
+        tex = _frames_u8(image)[0]
+        rng, rgb, gd, holes = None, [], [], []
+        for fr in render_sequence(mesh, None, compiled, out_w, out_h, texture=tex):
+            rng = rng or DepthGuideRange.from_frame(fr)
+            g, fill = depth_guide(fr, rng)
+            rgb.append(fr.rgb.astype(np.float32) / 255.0)
+            gd.append(np.repeat((g.astype(np.float32) / 255.0)[..., None], 3, axis=2))
+            holes.append(hole_ratio(fr))
+        manifest = {"frames": len(rgb), "width": out_w, "height": out_h, "depth_guide": rng.to_dict(),
+                    "fill": fill, "hole_ratio_max": float(max(holes)), "mesh_stride": int(mesh_stride),
+                    "holes": "unfilled frames: invalid pixels are black (0,0,0)"}
+        return _out(np.stack(rgb)), _out(np.stack(gd)), json.dumps(manifest)
+
+
+class CSPathDiagnostics:
+    CATEGORY = CS_CATEGORY
+    FUNCTION = "run"
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("diagnostics", "status")
+    OUTPUT_NODE = True
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"path": ("STRING", {"forceInput": True})}}
+
+    def run(self, path):
+        p = json.loads(path)
+        diag = {**(p.get("diagnostics") or {}), "reasons": p.get("reasons", [])}
+        return json.dumps(diag), p.get("status", "invalid")
+
+
+class CSGeneratedMotionReport:
+    CATEGORY = CS_CATEGORY
+    FUNCTION = "run"
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("report",)
+    OUTPUT_NODE = True
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+            "generated": ("IMAGE",), "geometry": ("IMAGE",),
+            "target_x_px": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 8192.0}),
+            "target_y_px": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 8192.0}),
+        }}
+
+    def run(self, generated, geometry, target_x_px, target_y_px):
+        gen, geo = _frames_u8(generated), _frames_u8(geometry)
+        return (json.dumps(motion_report(iter(gen), iter(geo), (target_x_px, target_y_px))),)
+
+
 NODE_CLASS_MAPPINGS = {cls.__name__: cls for cls in
-                       (PLProductMask, PLLockedProduct, PLBackgroundPrompt, PLCompositeSequence, PLCoreIntegrityCheck)}
+                       (PLProductMask, PLLockedProduct, PLBackgroundPrompt, PLCompositeSequence, PLCoreIntegrityCheck,
+                        CSDepthToScene, CSCompileCameraPath, CSRenderGuides, CSPathDiagnostics,
+                        CSGeneratedMotionReport)}
 NODE_DISPLAY_NAME_MAPPINGS = {
     "PLProductMask": "Product Lock · Product Mask",
     "PLLockedProduct": "Product Lock · Locked Product",
     "PLBackgroundPrompt": "Product Lock · Background Prompt",
     "PLCompositeSequence": "Product Lock · Composite Sequence",
     "PLCoreIntegrityCheck": "Product Lock · Core Integrity Check",
+    "CSDepthToScene": "Camera Sketch · Depth To Scene",
+    "CSCompileCameraPath": "Camera Sketch · Compile Camera Path",
+    "CSRenderGuides": "Camera Sketch · Render Guides",
+    "CSPathDiagnostics": "Camera Sketch · Path Diagnostics",
+    "CSGeneratedMotionReport": "Camera Sketch · Generated Motion Report",
 }

@@ -17,15 +17,28 @@ REQUIRED_BINDINGS: dict[str, dict[str, str]] = {
     "product_background_video_v1": {
         "image": "image", "prompt": "string", "seed": "int", "width": "int", "height": "int", "frames": "int",
     },
+    # Camera Sketch. `camera_guide_v1` / `camera_compare_v1` run on the CPU worker in P0 and have no
+    # bindings here. guide_rgb / guide_depth are MP4 files (type "video"), not single images.
+    "camera_depth_v1": {"image": "image"},
+    "camera_cinematic_v1": {
+        "guide_rgb": "video", "guide_depth": "video", "reference": "image", "prompt": "string", "seed": "int",
+        "width": "int", "height": "int", "frames": "int", "control_strength": "float",
+    },
 }
 # Which app (workflows/<app>/ directory) owns each workflow.
-WORKFLOW_APP: dict[str, str] = {name: "product-lock" for name in REQUIRED_BINDINGS}
+WORKFLOW_APP: dict[str, str] = {
+    **{name: "product-lock" for name in REQUIRED_BINDINGS if not name.startswith("camera_")},
+    "camera_depth_v1": "camera-sketch",
+    "camera_cinematic_v1": "camera-sketch",
+}
 REQUIRED_OUTPUTS: dict[str, tuple[str, ...]] = {
     "product_segment_v1": ("mask",),
     "product_background_image_v1": ("image",),
     "product_background_video_v1": ("video",),
+    "camera_depth_v1": ("depth",),
+    "camera_cinematic_v1": ("video",),
 }
-TYPES = {"string", "int", "float", "image", "json"}
+TYPES = {"string", "int", "float", "image", "video", "json"}
 
 
 class BindingError(ValueError):
@@ -65,7 +78,7 @@ def _check_value(name: str, spec: dict, value: Any) -> None:
         ok = isinstance(value, int) and not isinstance(value, bool)
     elif kind == "float":
         ok = isinstance(value, (int, float)) and not isinstance(value, bool)
-    elif kind in ("string", "image"):
+    elif kind in ("string", "image", "video"):
         ok = isinstance(value, str)
     else:  # json
         ok = isinstance(value, (dict, list))

@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from open_creative.camera_sketch.scene import DAV2_SMALL, encode_depth_png16
+from open_creative.camera_sketch.scene import DAV2_SMALL, encode_depth_png16, rgb_pixel_hash
 
 OUT = Path(__file__).parent
 SAMPLES = OUT.parents[1] / "apps" / "camera-sketch" / "public" / "samples"
@@ -135,6 +135,7 @@ def main():
             "width": rgb.width,
             "height": rgb.height,
             "sha256": hashlib.sha256(png.read_bytes()).hexdigest(),
+            "rgb_sha256": rgb_pixel_hash(np.asarray(Image.open(png).convert("RGB"))),
             "depth_png16": {"min": dm["min"], "max": dm["max"]},
             "target_uv01": [tu, tv],
         }

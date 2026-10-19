@@ -26,7 +26,7 @@ class CameraSketchApp:
                       "camera.cinematic": ("mp4", "path_json", "recipe_zip")}
     export_kind = "camera.export"
     export_source_key = "source_job_id"
-    workflows: tuple[str, ...] = ()  # camera workflows/bindings are registered in Task 9
+    workflows: tuple[str, ...] = ("camera_depth_v1", "camera_cinematic_v1")  # Comfy-side; guide/compare run on the worker
 
     def default_config(self, profile: str) -> BaseModel:
         return default_config(profile)

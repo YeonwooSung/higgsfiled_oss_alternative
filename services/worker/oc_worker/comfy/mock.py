@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import uuid
 from collections.abc import Iterator
@@ -18,9 +19,10 @@ import cv2
 import numpy as np
 from PIL import Image
 
+from open_creative.camera_sketch.scene import encode_depth_png16, rgb_pixel_hash
 from open_creative.comfy.bindings import REQUIRED_BINDINGS
 from open_creative.comfy.profiles import MOCK_PROFILE
-from open_creative.media.video import cover_fit, encode_mp4
+from open_creative.media.video import cover_fit, decode_frames, encode_mp4
 
 from .runner import ProviderRejected, ProviderStatus, SubmissionKeyReused
 
@@ -94,6 +96,60 @@ def mock_segment(rgb: np.ndarray, prompts: dict) -> np.ndarray:
     return np.where((mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD), 255, 0).astype(np.uint8)
 
 
+def _camera_fixtures_dir() -> Path:
+    return Path(os.environ.get("OC_CAMERA_FIXTURES") or Path(__file__).resolve().parents[4] / "fixtures" / "camera-sketch")
+
+
+def _fixture_depth(image_path: Path, rgb: np.ndarray) -> tuple[bytes, dict] | None:
+    """Ground-truth (png16, meta) when the input is a Camera Sketch fixture: matched by file sha256, or
+    (the upload may have been re-encoded by normalization) by decoded pixel hash."""
+    d = _camera_fixtures_dir()
+    try:
+        scenes = json.loads((d / "scenes.json").read_text())["scenes"]
+    except (OSError, ValueError, KeyError):
+        return None
+    file_hash = hashlib.sha256(Path(image_path).read_bytes()).hexdigest()
+    pix_hash = rgb_pixel_hash(rgb)
+    for sc in scenes.values():
+        if sc.get("sha256") == file_hash or sc.get("rgb_sha256") == pix_hash:
+            return (d / sc["depth"]).read_bytes(), {"min": sc["depth_png16"]["min"], "max": sc["depth_png16"]["max"]}
+    return None
+
+
+def mock_depth(rgb: np.ndarray) -> np.ndarray:
+    """Mock inverse depth (float32, larger = nearer) for an unknown image: 0.6 * vertical gradient
+    (bottom nearer) + 0.4 * blurred luminance. Deterministic; not a depth estimate."""
+    h, w = rgb.shape[:2]
+    grad = np.linspace(0.0, 1.0, h, dtype=np.float32)[:, None] * np.ones((1, w), np.float32)
+    lum = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
+    sigma = max(1.0, min(h, w) / 40.0)
+    lum = cv2.GaussianBlur(lum, (0, 0), sigma)
+    return (0.6 * grad + 0.4 * lum).astype(np.float32)
+
+
+def mock_cinematic_frame(guide: np.ndarray) -> np.ndarray:
+    """Mock cinematic stage: holes (near-black guide pixels) inpainted with cv2 TELEA, then a mild
+    deterministic warm grade (slight tint + contrast)."""
+    gray = guide.max(axis=2)
+    holes = (gray <= 6).astype(np.uint8) * 255
+    out = guide
+    if holes.any():
+        holes = cv2.dilate(holes, np.ones((3, 3), np.uint8))
+        out = cv2.cvtColor(cv2.inpaint(cv2.cvtColor(guide, cv2.COLOR_RGB2BGR), holes, 3, cv2.INPAINT_TELEA),
+                           cv2.COLOR_BGR2RGB)
+    f = (out.astype(np.float32) - 128.0) * 1.06 + 128.0
+    f *= np.array([1.03, 1.0, 0.96], np.float32)
+    return np.clip(np.rint(f), 0, 255).astype(np.uint8)
+
+
+def _guide_frames(src: str) -> list[np.ndarray]:
+    p = Path(src)
+    if p.is_dir():
+        files = sorted(x for x in p.iterdir() if x.suffix.lower() in (".png", ".jpg", ".jpeg"))
+        return [np.asarray(Image.open(x).convert("RGB")) for x in files]
+    return list(decode_frames(p))
+
+
 class MockRunner:
     profile = MOCK_PROFILE
 
@@ -148,6 +204,31 @@ class MockRunner:
             rgb = np.asarray(Image.open(b["image"]).convert("RGB"))
             Image.fromarray(mock_segment(rgb, b["prompts"]), "L").save(d / "mask_0.png")
             return ["mask_0.png"]
+        if workflow == "camera_depth_v1":
+            rgb = np.asarray(Image.open(b["image"]).convert("RGB"))
+            fx = _fixture_depth(Path(b["image"]), rgb)
+            if fx is not None:
+                data, dm = fx
+                source = "fixture_gt"
+            else:
+                data, dm = encode_depth_png16(mock_depth(rgb))
+                source = "heuristic"
+            (d / "depth_0.png").write_bytes(data)
+            (d / "depth_0.json").write_text(json.dumps({
+                "min": dm["min"], "max": dm["max"], "convention": "inverse_relative", "png16": "linear min..max -> 0..65535",
+                "mock": True, "source": source, "model": "Mock (not Depth Anything)"}))
+            return ["depth_0.png", "depth_0.json"]
+        if workflow == "camera_cinematic_v1":
+            w, h, n = b["width"], b["height"], b["frames"]
+            src = _guide_frames(b["guide_rgb"])
+            if not src:
+                raise ProviderRejected("guide_rgb has no frames")
+            frames = (mock_cinematic_frame(cover_fit(src[min(i, len(src) - 1)], w, h)) for i in range(n))
+            encode_mp4(frames, d / "video_0.mp4", w, h, fps=24)
+            (d / "video_0.json").write_text(json.dumps({
+                "mock": True, "frames": n, "width": w, "height": h, "label": "Mock",
+                "note": "geometry frames with holes inpainted + mild grade; not generative"}))
+            return ["video_0.mp4", "video_0.json"]
         raise ProviderRejected(workflow)
 
     def inspect(self, provider_job_id: str) -> ProviderStatus:

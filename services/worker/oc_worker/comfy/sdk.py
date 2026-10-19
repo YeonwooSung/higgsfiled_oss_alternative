@@ -81,7 +81,7 @@ class ComfySdkRunner:
             wf = self.client.workflows.from_json(graph)
             for name, value in bindings.items():
                 spec = manifest["bindings"][name]
-                if spec["type"] == "image":
+                if spec["type"] in ("image", "video"):
                     value = self.client.assets.from_file(value)
                 elif spec["type"] == "json":
                     value = json.dumps(value, separators=(",", ":"))

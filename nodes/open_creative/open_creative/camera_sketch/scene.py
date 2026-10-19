@@ -23,6 +23,7 @@ Conventions (shared with ``camera.py``; the TS port of ``build_mesh`` mirrors th
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from typing import Literal
 
@@ -145,6 +146,15 @@ def build_mesh(
         rel = zt.max(1) / zt.min(1) - 1.0
     keep = finite & (rel <= edge_rel_threshold)
     return Mesh(vertices, uv, tris[keep].astype(np.int32), (gh, gw))
+
+
+def rgb_pixel_hash(rgb: np.ndarray) -> str:
+    """sha256 over the HxWx3 uint8 pixel bytes plus the shape: identifies an image regardless of PNG encoding."""
+    a = np.ascontiguousarray(rgb, dtype=np.uint8)
+    h = hashlib.sha256()
+    h.update(repr(a.shape).encode())
+    h.update(a.tobytes())
+    return h.hexdigest()
 
 
 def encode_depth_png16(d: np.ndarray) -> tuple[bytes, dict]:
