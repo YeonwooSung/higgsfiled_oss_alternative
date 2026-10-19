@@ -1,0 +1,54 @@
+{
+  "depth_convention": {
+    "kind": "inverse_relative",
+    "note": "GT inverse depth: larger = nearer; sky = 0",
+    "png16": "linear min..max -> 0..65535"
+  },
+  "scenes": {
+    "room": {
+      "image": "room.png",
+      "depth": "room.depth.png",
+      "width": 960,
+      "height": 540,
+      "sha256": "fedb22309f358e86897e973bb49261e7e0e719873da77ad3bbb5db21b2d449a5",
+      "depth_png16": {
+        "min": 0.20000000298023224,
+        "max": 0.949999988079071
+      },
+      "target_uv01": [
+        0.62,
+        0.55
+      ]
+    },
+    "product": {
+      "image": "product.png",
+      "depth": "product.depth.png",
+      "width": 960,
+      "height": 540,
+      "sha256": "da1ba4845b2027d3af6c88db43addb6d90df87e5cd630e9a8e8a15d5a5c4f302",
+      "depth_png16": {
+        "min": 0.15000000596046448,
+        "max": 0.800000011920929
+      },
+      "target_uv01": [
+        0.5,
+        0.58
+      ]
+    },
+    "facade": {
+      "image": "facade.png",
+      "depth": "facade.depth.png",
+      "width": 576,
+      "height": 1024,
+      "sha256": "5cb8106db673076f28854a2ab3ea84d5807fc244d4e55bd00214c6ff4303cb24",
+      "depth_png16": {
+        "min": 0.0,
+        "max": 0.8665780425071716
+      },
+      "target_uv01": [
+        0.5,
+        0.6
+      ]
+    }
+  }
+}
