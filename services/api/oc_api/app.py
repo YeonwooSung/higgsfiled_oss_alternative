@@ -4,7 +4,8 @@ from fastapi import APIRouter, FastAPI
 
 from .db import Base, make_sessionmaker
 from .errors import install_error_handlers
-from .routes import projects, sessions
+from .routes import assets, projects, sessions, storage
+from .storage import make_storage
 from .settings import Settings
 
 
@@ -16,9 +17,10 @@ def create_app(settings: Settings | None = None, *, create_tables: bool | None =
     app.state.db = make_sessionmaker(settings.database_url)
     if create_tables if create_tables is not None else settings.database_url.startswith("sqlite"):
         Base.metadata.create_all(app.state.db.kw["bind"])
+    app.state.storage = make_storage(settings)
     install_error_handlers(app)
     api = APIRouter(prefix="/api/v1")
-    for module in (sessions, projects):
+    for module in (sessions, projects, assets, storage):
         api.include_router(module.router)
     app.include_router(api)
     return app
