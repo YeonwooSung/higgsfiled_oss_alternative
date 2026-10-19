@@ -1,0 +1,21 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: dark; --oc-on-accent: #101216; }
+html, body { background: #101216; color: #F0F3F8; font-size: 14px; line-height: 1.5; }
+h1 { font-size: 20px; line-height: 28px; font-weight: 600; }
+.tabular { font-variant-numeric: tabular-nums; }
+:focus-visible { outline: 2px solid #66DCF2; outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0ms !important; animation-duration: 0ms !important; }
+}
+.scroll-panel {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #303845 transparent;
+  scrollbar-gutter: stable;
+}
+.scroll-panel::-webkit-scrollbar { width: 8px; height: 8px; }
+.scroll-panel::-webkit-scrollbar-thumb { background: #303845; border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+.scroll-panel::-webkit-scrollbar-track { background: transparent; }

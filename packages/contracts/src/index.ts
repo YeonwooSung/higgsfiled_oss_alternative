@@ -186,6 +186,30 @@ export interface Capabilities {
   };
 }
 
+/** `GET /capabilities?app_slug=camera-sketch` (see `CameraSketchApp.capabilities_extra`). */
+export interface CameraCapabilities {
+  app_slug: "camera-sketch";
+  default_profile: string;
+  profiles: ProfileStatus[];
+  kinds: JobKind[];
+  presets: CameraPreset[];
+  limits: {
+    duration_ms: number;
+    fps: number;
+    aspects: Aspect[];
+    output_sizes: Record<Aspect, [number, number]>;
+    image_max_bytes: number;
+    image_max_pixels: number;
+    focal_length_mm_equiv: [number, number];
+    lateral_ratio: [number, number];
+    push_ratio: [number, number];
+    arc_deg: [number, number];
+    sketch_raw_points_max: number;
+    sketch_control_points_max: number;
+    extra_prompt_max: number;
+  };
+}
+
 export interface Estimate {
   kind: JobKind;
   stages: string[];
@@ -253,13 +277,13 @@ export interface CameraSketchConfig {
   model_profile: string;
 }
 
-/** One entry of `GET /camera-sketch/presets` (presets.v1.json). */
+/** One entry of `GET /camera-sketch/presets` (presets.v1.json `presets[]`). */
 export interface CameraPreset {
   id: CameraPresetId;
   label_en: string;
   label_ko: string;
-  bounds: { lateral_ratio: [number, number]; push_ratio: [number, number]; arc_deg: [number, number] };
-  default: { lateral_ratio: number; push_ratio: number; arc_deg: number };
+  bounds: Record<"lateral_ratio" | "push_ratio" | "arc_deg", [number, number]>;
+  default: Record<"lateral_ratio" | "push_ratio" | "arc_deg", number>;
 }
 
 /** 4x4 row-major world-to-camera matrix (OpenCV convention: x right, y down, z forward). */
