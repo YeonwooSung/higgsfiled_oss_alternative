@@ -1,8 +1,9 @@
 """Python -> TS parity fixture for the Camera Sketch camera math (``parity.v1.json``).
 
 Run: uv run python fixtures/camera-sketch/make_parity.py   (also run by make_fixtures.py)
-The fixture is computed only from ``open_creative.camera_sketch.{camera,path}`` and the scene
-metadata in ``scenes.json`` (sizes + target uv; no pixels are decoded), so it is deterministic.
+The fixture is computed from ``open_creative.camera_sketch.{camera,path,scene}``, the scene
+metadata in ``scenes.json`` (sizes + target uv) and, for ``prepare_z``/``mesh`` only, the committed
+``room.depth.png``; everything is deterministic.
 ``apps/camera-sketch/tests/parity.test.ts`` replays every section through the TS port and
 ``nodes/open_creative/tests/test_cs_parity.py`` checks the committed file equals a fresh build.
 
@@ -13,6 +14,12 @@ Sections (add new ones as top-level keys of ``build()``'s dict, e.g. mesh face c
 - ``simplify_sketch``: raw sketches -> control points + warning.
 - ``solve_framing``: desired framing -> smoothed/bounded framing.
 - ``framing_rotation``: direct (c, target, px, K) -> R cases incl. angle-wrap branches.
+- ``prepare_z``: a small synthetic z map (full input + output, ``smooth`` on/off) and the room
+  fixture depth (decoded from ``room.depth.png``; ``target_raw`` + a 20x20 sample grid of ``z_norm``).
+- ``mesh``: ``build_mesh`` on a 16x9 box-on-plane z map (stride 1, a partial stride 3, and stride 4
+  with NaN pixels): full vertices, uv, regular faces and edge faces in emitted order, and the
+  ``render.rasterize`` edge-face stretch at one moved pose; plus regular /
+  edge face counts for the room depth at the browser preview stride.
 """
 
 from __future__ import annotations
@@ -23,9 +30,11 @@ from pathlib import Path
 
 import numpy as np
 from open_creative.camera_sketch.camera import (
+    _rot_y,
     cover_fit,
     framing_rotation,
     intrinsics,
+    pose,
     project,
 )
 from open_creative.camera_sketch.path import (
@@ -33,6 +42,14 @@ from open_creative.camera_sketch.path import (
     compile_path,
     simplify_sketch,
     solve_framing,
+)
+from open_creative.camera_sketch.render import STRETCH_VALID, _project, _signed_area
+from open_creative.camera_sketch.scene import (
+    DAV2_SMALL,
+    build_mesh,
+    decode_depth_png16,
+    depth_to_z,
+    prepare_z,
 )
 
 OUT = Path(__file__).parent
@@ -205,6 +222,101 @@ def _framing_rotation_cases() -> list[dict]:
     return out
 
 
+def _nan_list(a: np.ndarray) -> list:
+    """float32 array -> nested lists of exact floats, non-finite -> None (JSON has no NaN)."""
+    return [[None if not math.isfinite(float(x)) else float(x) for x in row] for row in np.asarray(a)]
+
+
+def _room_z() -> tuple[np.ndarray, tuple[float, float]]:
+    meta = json.loads((OUT / "scenes.json").read_text())["scenes"]["room"]
+    d = decode_depth_png16((OUT / meta["depth"]).read_bytes(), meta["depth_png16"])
+    return depth_to_z(d, DAV2_SMALL), tuple(meta["target_uv01"])
+
+
+ROOM_SAMPLE_ROWS = list(range(0, 540, 27))  # 20 x 20 sample grid of the 960x540 room depth
+ROOM_SAMPLE_COLS = list(range(0, 960, 48))
+PREVIEW_STRIDE_ROOM = 5  # apps/camera-sketch chooseStride(960, 540): 2*192*108 = 41472 <= 60k
+
+
+def _synthetic_z() -> np.ndarray:
+    h, w = 12, 20
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    d = 0.3 + 0.02 * xx + 0.01 * yy  # inverse depth ramp
+    d[4:9, 7:14] = 0.9  # near box
+    d[1, 2] = 25.0  # bright outlier -> clipped by the 99th percentile
+    d[10, 17] = 0.0  # inverse depth 0 -> z = 1/eps (far)
+    z = depth_to_z(d, DAV2_SMALL)
+    z[2, 15] = np.nan
+    z[6, 1] = -1.0  # non-positive -> invalid
+    return z
+
+
+def _prepare_z_cases() -> dict:
+    z = _synthetic_z()
+    tgt = (0.52, 0.55)
+    synth = {"z": _nan_list(z), "target_uv01": list(tgt), "clip_pct": [1, 99]}
+    for smooth in (False, True):
+        zn, raw = prepare_z(z, tgt, smooth=smooth)
+        synth["smooth" if smooth else "plain"] = {"z_norm": _nan_list(zn), "target_raw": raw}
+    rz, rtgt = _room_z()
+    room = {"scene": "room", "target_uv01": list(rtgt), "rows": ROOM_SAMPLE_ROWS, "cols": ROOM_SAMPLE_COLS}
+    for smooth in (False, True):
+        zn, raw = prepare_z(rz, rtgt, smooth=smooth)
+        room["smooth" if smooth else "plain"] = {
+            "target_raw": raw, "z_norm": _nan_list(zn[np.ix_(ROOM_SAMPLE_ROWS, ROOM_SAMPLE_COLS)])}
+    return {"synthetic": synth, "room": room}
+
+
+def _box_z(nan: bool = False) -> np.ndarray:
+    h, w = 9, 16
+    d = np.tile(0.25 + 0.002 * np.arange(w, dtype=np.float32), (h, 1))
+    d[3:6, 6:11] = 1.0  # box on the plane
+    z = depth_to_z(d, DAV2_SMALL)
+    z = (z / np.median(z)).astype(np.float32)
+    if nan:
+        z[0, 0] = np.nan
+        z[5, 8] = np.nan
+    return z
+
+
+STRETCH_POSE = pose(_rot_y(math.radians(-1.0)), np.array([0.02, -0.004, 0.01]))
+
+
+def _edge_stretch(m, K: np.ndarray, T: np.ndarray) -> list:
+    """``render.rasterize``'s per-edge-face ``stretch = A / A_ref`` (A_ref at the identity pose)."""
+    V = m.vertices.astype(np.float64)
+    E = m.edge_faces.astype(np.intp)
+    _, x, y = _project(V, T, K)
+    _, rx, ry = _project(V, np.eye(4), K)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        s = _signed_area(x[E], y[E]) / _signed_area(rx[E], ry[E])
+    return [float(v) if math.isfinite(v) else None for v in s]
+
+
+def _mesh_cases() -> dict:
+    K = intrinsics(50.0, 16, 9)
+    grid = []
+    for cid, stride, nan in (("box_16x9_s1", 1, False), ("box_16x9_s3", 3, False), ("box_16x9_s4_nan", 4, True)):
+        z = _box_z(nan)
+        m = build_mesh(z, K, stride, 0.08)
+        grid.append({"id": cid, "z": _nan_list(z), "K": K.tolist(), "stride": stride, "edge_rel_threshold": 0.08,
+                     "grid_shape": list(m.grid_shape), "n_vertices": len(m.vertices),
+                     "vertices": m.vertices.astype(float).tolist(), "uv": m.uv.astype(float).tolist(),
+                     "n_faces": len(m.faces), "n_edge_faces": len(m.edge_faces),
+                     "faces": m.faces.tolist(), "edge_faces": m.edge_faces.tolist(),
+                     "stretch_pose": STRETCH_POSE.tolist(), "stretch": _edge_stretch(m, K, STRETCH_POSE),
+                     "stretch_valid_max": STRETCH_VALID})
+    rz, rtgt = _room_z()
+    Kr = intrinsics(50.0, 960, 540)
+    room = {"scene": "room", "focal_mm": 50.0, "stride": PREVIEW_STRIDE_ROOM, "edge_rel_threshold": 0.08}
+    for smooth in (False, True):
+        zn, _ = prepare_z(rz, rtgt, smooth=smooth)
+        m = build_mesh(zn, Kr, PREVIEW_STRIDE_ROOM, 0.08)
+        room["smooth" if smooth else "plain"] = {"grid_shape": list(m.grid_shape), "n_faces": len(m.faces),
+                                                 "n_edge_faces": len(m.edge_faces)}
+    return {"grid": grid, "room": room}
+
+
 def build() -> dict:
     return {
         "schema": "camera-sketch-parity", "version": 1,
@@ -214,6 +326,8 @@ def build() -> dict:
         "solve_framing": _solve_cases(),
         "framing_rotation": _framing_rotation_cases(),
         "compile": _compile_cases(),
+        "prepare_z": _prepare_z_cases(),
+        "mesh": _mesh_cases(),
     }
 
 

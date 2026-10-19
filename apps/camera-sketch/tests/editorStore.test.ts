@@ -33,3 +33,14 @@ describe("automatic links are not undo steps", () => {
     expect(useEditor.getState().config!.depth_asset_id).toBe("d");
   });
 });
+
+describe("currentServerPath", () => {
+  const response = { path: { status: "ok" } } as unknown as import("@oc/contracts").CompileResponse;
+  it("uses the server path only for the current, saved revision", async () => {
+    const { currentServerPath } = await import("../src/state/editorStore");
+    expect(currentServerPath({ serverCompile: null, revision: 3, saveState: "saved" })).toBeNull();
+    expect(currentServerPath({ serverCompile: { revision: 3, response }, revision: 3, saveState: "saved" })).toBe(response.path);
+    expect(currentServerPath({ serverCompile: { revision: 2, response }, revision: 3, saveState: "saved" })).toBeNull();
+    expect(currentServerPath({ serverCompile: { revision: 3, response }, revision: 3, saveState: "saving" })).toBeNull();
+  });
+});

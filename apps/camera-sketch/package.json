@@ -26,6 +26,7 @@
     "@oc/ui": "workspace:*",
     "@oc/web-core": "workspace:*",
     "@tanstack/react-query": "^5.104.4",
+    "fast-png": "7.0.1",
     "lucide-react": "^1.59.0",
     "next": "^15.5.28",
     "react": "^19.3.1",

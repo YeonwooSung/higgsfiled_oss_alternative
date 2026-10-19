@@ -3,12 +3,17 @@
 import type { CameraAnalyzeResult } from "@oc/contracts";
 import { cx } from "@oc/ui";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, ApiError } from "../api/client";
 import { depthToLink, latestJob, sceneToLink } from "../flow/scene";
 import { useAssetUrl } from "../hooks/assets";
+import { usePreviewScene } from "../hooks/previewScene";
 import { useI18n } from "../i18n";
-import { assetById, useEditor } from "../state/editorStore";
+import { compilePathProvisional, sceneInfoFromTarget } from "../model/path";
+import { outputSize } from "../model/preview";
+import { assetById, currentServerPath, useEditor } from "../state/editorStore";
+import { CameraGizmo } from "./CameraGizmo";
+import { PreviewStage } from "./PreviewStage";
 import { AnalyzePanel, JobStatusList } from "./ScenePanel";
 import { TopBar } from "./TopBar";
 
@@ -57,6 +62,59 @@ function SceneStage() {
   );
 }
 
+/**
+ * The camera path shown in the stage and gizmo: the server compile for the current revision when it
+ * has arrived, else the browser's provisional compile of the same config (badge "Provisional").
+ */
+function useCameraPath() {
+  const project = useEditor((s) => s.project);
+  const config = useEditor((s) => s.config);
+  const serverPath = useEditor(currentServerPath);
+  const scene = assetById(project, config?.scene_asset_id);
+  const [outW, outH] = outputSize(config?.output.aspect ?? "16:9");
+  const pathCfg = config?.path;
+  const u = config?.target.u, v = config?.target.v, depthScale = config?.target.depth_scale;
+  const focalMm = config?.camera.focal_length_mm_equiv, sensorWMm = config?.camera.sensor_width_mm_assumed;
+  const srcW = scene?.width, srcH = scene?.height;
+  const info = useMemo(() => (srcW && srcH && u !== undefined && v !== undefined && depthScale !== undefined && focalMm !== undefined
+    ? sceneInfoFromTarget({ focalMm, srcW, srcH, u, v, depthScale, sensorWMm })
+    : null), [srcW, srcH, u, v, depthScale, focalMm, sensorWMm]);
+  const provisional = useMemo(() => (info && pathCfg ? compilePathProvisional(pathCfg, info, outW, outH) : null), [pathCfg, info, outW, outH]);
+  return { info, path: serverPath ?? provisional, provisional: !serverPath, outW, outH };
+}
+
+function CameraStage({ cam }: { cam: ReturnType<typeof useCameraPath> }) {
+  const project = useEditor((s) => s.project)!;
+  const config = useEditor((s) => s.config)!;
+  const timeMs = useEditor((s) => s.playheadMs);
+  const sceneAsset = assetById(project, config.scene_asset_id);
+  const depth = assetById(project, config.depth_asset_id);
+  const imageUrl = useAssetUrl(sceneAsset);
+  const { scene, loading, error } = usePreviewScene(depth, config);
+  if (!cam.path) return <SceneStage />;
+  return (
+    <div data-region="stage" className="flex min-h-0 flex-1 flex-col gap-3 bg-stage p-3">
+      <PreviewStage imageUrl={imageUrl} scene={scene} path={cam.path} timeMs={timeMs} outW={cam.outW} outH={cam.outH}
+        showHoles={config.scene.show_holes} provisional={cam.provisional} loading={loading} error={error} className="md:flex-1" />
+      {cam.info && <CameraGizmo path={cam.path} targetWorld={cam.info.target_world} timeMs={timeMs} className="md:hidden" />}
+    </div>
+  );
+}
+
+function CameraViews({ cam }: { cam: ReturnType<typeof useCameraPath> }) {
+  const { t } = useI18n();
+  const timeMs = useEditor((s) => s.playheadMs);
+  if (!cam.path || !cam.info) {
+    return (
+      <div className="flex flex-wrap gap-3">
+        <Placeholder region="view-top" title={t("viewTop")} hint={t("noDepth")} className="h-[160px] w-[220px] shrink-0" />
+        <Placeholder region="view-side" title={t("viewSide")} hint={t("noDepth")} className="h-[160px] w-[220px] shrink-0" />
+      </div>
+    );
+  }
+  return <CameraGizmo path={cam.path} targetWorld={cam.info.target_world} timeMs={timeMs} />;
+}
+
 export function ProjectView({ projectId }: { projectId: string }) {
   const { t } = useI18n();
   const load = useEditor((s) => s.load);
@@ -64,6 +122,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
   const config = useEditor((s) => s.config);
   const jobs = useEditor((s) => s.jobs);
   const [mobileTab, setMobileTab] = useState<MobileTab>("upload");
+  const cam = useCameraPath();
   const query = useQuery({
     queryKey: ["project", projectId],
     queryFn: async () => {
@@ -124,14 +183,10 @@ export function ProjectView({ projectId }: { projectId: string }) {
           {scenePanel}
         </aside>
         <main className="flex min-h-0 min-w-0 flex-col md:col-start-2 md:row-start-1">
-          <SceneStage />
-          {/* TODO(Task 14): camera path stage (Konva/Three) replaces the plain scene/depth figures above. */}
+          {config.depth_asset_id ? <CameraStage cam={cam} /> : <SceneStage />}
         </main>
         <aside data-region="right" aria-label={t("panelInspector")} className="scroll-panel hidden flex-col gap-3 border-l border-border bg-panel p-3 md:col-start-3 md:row-span-2 md:row-start-1 md:flex">
-          <div className="flex flex-wrap gap-3">
-            <Placeholder region="view-top" title={t("viewTop")} hint={t("placeholderViews")} className="h-[160px] w-[220px] shrink-0" />
-            <Placeholder region="view-side" title={t("viewSide")} hint={t("placeholderViews")} className="h-[160px] w-[220px] shrink-0" />
-          </div>
+          <CameraViews cam={cam} />
           <Placeholder region="inspector" title={t("panelInspector")} hint={t("placeholderInspector")} className="min-h-[200px] flex-1" />
         </aside>
         <Placeholder region="timeline" title={t("panelTimeline")} hint={t("placeholderTimeline")} className="hidden h-[140px] rounded-none border-x-0 border-b-0 bg-panel md:col-start-2 md:row-start-2 md:flex" />

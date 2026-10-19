@@ -62,3 +62,13 @@ def test_parity_fixture_covers_required_cases():
     assert any(c["warning"] == "unsupported_sketch" for c in data["simplify_sketch"])
     assert data["solve_framing"] and data["cover_fit"]
     assert any(c["wraps"] for c in data["framing_rotation"])
+    mesh = {c["id"]: c for c in data["mesh"]["grid"]}
+    assert set(mesh) == {"box_16x9_s1", "box_16x9_s3", "box_16x9_s4_nan"}
+    for c in mesh.values():  # the box cuts faces into the edge layer, never into nothing
+        assert c["n_faces"] > 0 and c["n_edge_faces"] > 0 and len(c["stretch"]) == c["n_edge_faces"]
+    assert mesh["box_16x9_s3"]["grid_shape"] == [4, 7]  # 16 = 5*3 + 1: partial last column
+    s1 = mesh["box_16x9_s1"]
+    assert s1["n_faces"] + s1["n_edge_faces"] == 2 * 9 * 16  # grid 10x17: nothing dropped
+    nan = mesh["box_16x9_s4_nan"]
+    assert nan["n_faces"] + nan["n_edge_faces"] < 2 * 3 * 4  # NaN pixels drop faces
+    assert data["prepare_z"]["room"]["smooth"]["target_raw"] > 0

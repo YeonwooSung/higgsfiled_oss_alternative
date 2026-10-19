@@ -49,3 +49,18 @@ export function toThreeCamera(Tcw: Mat4, Kout: Mat3, w: number, h: number): Thre
     aspect: w / h,
   };
 }
+
+/**
+ * Packed OpenCV positions (N x 3) -> Three positions: the same flip as `toThreePoint`, for mesh
+ * buffers (kept in this module so the convention lives in one place).
+ */
+export function toThreePositions(cv: Float32Array): Float32Array {
+  const out = new Float32Array(cv.length);
+  for (let i = 0; i < cv.length; i += 3) {
+    const p = toThreePoint([cv[i], cv[i + 1], cv[i + 2]]);
+    out[i] = p.x;
+    out[i + 1] = p.y;
+    out[i + 2] = p.z;
+  }
+  return out;
+}

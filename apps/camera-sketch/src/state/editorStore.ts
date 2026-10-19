@@ -1,6 +1,6 @@
 "use client";
 
-import type { CameraSketchConfig, CameraSketchProject, Job } from "@oc/contracts";
+import type { CameraSketchConfig, CameraSketchProject, CompileResponse, Job } from "@oc/contracts";
 import { Autosaver, History } from "@oc/web-core";
 import { create } from "zustand";
 import { api } from "../api/client";
@@ -27,6 +27,12 @@ interface EditorState {
   redo: () => void;
   flush: () => Promise<number>;
   trackJob: (job: Job) => void;
+  /** Latest server compile response and the revision it was computed for (the compile loop sets it). */
+  serverCompile: { revision: number; response: CompileResponse } | null;
+  setServerCompile: (c: { revision: number; response: CompileResponse } | null) => void;
+  /** Timeline playhead, 0..duration ms (the timeline UI drives it). */
+  playheadMs: number;
+  setPlayheadMs: (t: number) => void;
 }
 
 let history: History<CameraSketchConfig> | null = null;
@@ -50,6 +56,10 @@ export const useEditor = create<EditorState>((set, get) => {
     canUndo: false,
     canRedo: false,
     jobs: {},
+    serverCompile: null,
+    setServerCompile: (c) => set({ serverCompile: c }),
+    playheadMs: 0,
+    setPlayheadMs: (t) => set({ playheadMs: Number.isFinite(t) ? Math.max(0, t) : 0 }),
 
     load: (project) => {
       saver?.cancel();
@@ -70,7 +80,8 @@ export const useEditor = create<EditorState>((set, get) => {
       });
       const jobs = Object.fromEntries(project.recent_jobs.map((j) => [j.id, j]));
       set({ project, config: clone(project.config), revision: project.current_revision, canUndo: false, canRedo: false,
-        saveState: "saved", jobs: { ...get().jobs, ...jobs } });
+        saveState: "saved", jobs: { ...get().jobs, ...jobs }, serverCompile: null,
+        playheadMs: get().project?.id === project.id ? get().playheadMs : 0 });
     },
 
     refresh: async () => {
@@ -111,6 +122,12 @@ export const useEditor = create<EditorState>((set, get) => {
     trackJob: (job) => set({ jobs: { ...get().jobs, [job.id]: job } }),
   };
 });
+
+/** The server path to show, or null while the browser's provisional compile should be shown. */
+export function currentServerPath(s: Pick<EditorState, "serverCompile" | "revision" | "saveState">) {
+  const c = s.serverCompile;
+  return c && c.revision === s.revision && s.saveState === "saved" ? c.response.path : null;
+}
 
 export function assetById(project: CameraSketchProject | null, id: string | null | undefined) {
   return id ? project?.assets.find((a) => a.id === id) : undefined;
