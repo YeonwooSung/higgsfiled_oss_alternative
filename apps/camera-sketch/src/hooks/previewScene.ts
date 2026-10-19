@@ -4,65 +4,79 @@ import type { Asset, CameraSketchConfig } from "@oc/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { api } from "../api/client";
+import { depthBaseQuery, sceneBitmapQuery, type PreviewDeps } from "../flow/previewQueries";
 import { intrinsics, type Mat3 } from "../model/camera";
-import {
-  applyDepthContrast,
-  buildPreviewMesh,
-  chooseStride,
-  clipSmoothZ,
-  conventionFromMeta,
-  decodeDepthPng16,
-  depthToZ,
-  edgeRelThreshold,
-  normalizeZ,
-  type PreviewMesh,
-} from "../model/mesh";
+import { chooseStride, edgeRelThreshold, prepareDepthBase, previewMeshForEdit, sampleGrid, type DepthBase, type PreviewMesh } from "../model/mesh";
 
 export interface PreviewScene {
   width: number;
   height: number;
-  /** Source intrinsics the mesh was unprojected with. */
+  /** Intrinsics at the (capped) depth size the mesh was unprojected with. */
   K: Mat3;
   stride: number;
   mesh: PreviewMesh;
   targetRaw: number;
 }
 
-/**
- * Depth asset -> clipped + smoothed z (once per depth asset; the bilateral pass is the slow part),
- * then per editor change: normalize to the target, depth contrast, preview mesh at the stride that
- * keeps <= 60k regular triangles. Mirrors `scene_load.load_scene_info` at full depth resolution.
- */
-export function usePreviewScene(depth: Asset | undefined, config: CameraSketchConfig): { scene: PreviewScene | null; loading: boolean; error: boolean } {
-  const base = useQuery({
-    queryKey: ["depth-z", depth?.id],
-    enabled: !!depth && depth.state === "ready",
-    staleTime: Infinity,
-    gcTime: 60_000,
-    retry: 1,
-    queryFn: async () => {
-      const a = await api.getAsset(depth!.id);
-      if (!a.read_url) throw new Error("depth has no read url");
-      const res = await fetch(a.read_url); // signed URL: no cookie needed (also works cross-origin)
-      if (!res.ok) throw new Error(`depth fetch ${res.status}`);
-      const meta = a.meta as { min?: unknown; max?: unknown; convention?: unknown };
-      const d = decodeDepthPng16(await res.arrayBuffer(), { min: Number(meta.min), max: Number(meta.max) });
-      const z = clipSmoothZ(depthToZ(d.data, conventionFromMeta(meta.convention)), d.width, d.height);
-      return { z, width: d.width, height: d.height };
-    },
+/** Depth prep in a Web Worker; main-thread fallback when workers are unavailable or fail to start. */
+function prepareDepth(png: ArrayBuffer, meta: { min: number; max: number; convention: unknown }): Promise<DepthBase> {
+  let worker: Worker;
+  try {
+    worker = new Worker(new URL("../workers/depthPrep.worker.ts", import.meta.url), { type: "module" });
+  } catch {
+    return Promise.resolve().then(() => prepareDepthBase(png, meta));
+  }
+  const copy = png.slice(0); // the transferred buffer is gone if the worker errors and we fall back
+  return new Promise<DepthBase>((resolve, reject) => {
+    worker.onmessage = (e: MessageEvent<{ ok: true; base: DepthBase } | { ok: false; error: string }>) => {
+      worker.terminate();
+      if (e.data.ok) resolve(e.data.base);
+      else reject(new Error(e.data.error));
+    };
+    worker.onerror = (e) => {
+      e.preventDefault();
+      worker.terminate();
+      try {
+        resolve(prepareDepthBase(copy, meta));
+      } catch (err) {
+        reject(err);
+      }
+    };
+    worker.postMessage({ png, meta }, [png]);
   });
+}
+
+const deps: PreviewDeps = {
+  getAsset: (id) => api.getAsset(id),
+  fetch: (url) => fetch(url), // signed URL: no cookie needed
+  prepareDepth,
+  decodeImage: (blob) => createImageBitmap(blob, { premultiplyAlpha: "none" }),
+};
+
+/** Scene image as an ImageBitmap, keyed on the asset id (URL refreshes do not reload it). */
+export function useSceneBitmap(scene: Asset | undefined) {
+  const q = useQuery(sceneBitmapQuery(scene, deps));
+  return { bitmap: q.data ?? null, error: q.isError };
+}
+
+/**
+ * Depth asset -> `DepthBase` once (worker: decode, 2048 px cap, clip, bilateral), the mesh grid
+ * samples once per base, then per editor change only the target patch median + grid-sample
+ * normalization/contrast + mesh (`previewMeshForEdit`).
+ */
+export function usePreviewScene(depth: Asset | undefined, config: CameraSketchConfig): { scene: PreviewScene | null; error: boolean } {
+  const base = useQuery(depthBaseQuery(depth, deps));
+  const grid = useMemo(() => (base.data ? sampleGrid(base.data.z, base.data.width, base.data.height, chooseStride(base.data.width, base.data.height)) : null), [base.data]);
   const { u, v } = config.target;
   const focal = config.camera.focal_length_mm_equiv;
   const sensor = config.camera.sensor_width_mm_assumed;
   const { depth_contrast: contrast, edge_protection: edge } = config.scene;
   const scene = useMemo(() => {
     const b = base.data;
-    if (!b) return null;
-    const { z, targetRaw } = normalizeZ(b.z, b.width, b.height, [u, v]);
-    const K = intrinsics(focal, b.width, b.height, sensor);
-    const stride = chooseStride(b.width, b.height);
-    const mesh = buildPreviewMesh(applyDepthContrast(z, contrast), b.width, b.height, K, stride, edgeRelThreshold(edge));
-    return { width: b.width, height: b.height, K, stride, mesh, targetRaw };
-  }, [base.data, u, v, focal, sensor, contrast, edge]);
-  return { scene, loading: base.isPending && !!depth, error: base.isError };
+    if (!b || !grid) return null;
+    const Ksrc = intrinsics(focal, b.srcWidth, b.srcHeight, sensor);
+    const { mesh, targetRaw, K } = previewMeshForEdit(b, grid, [u, v], contrast, Ksrc, edgeRelThreshold(edge));
+    return { width: b.width, height: b.height, K, stride: grid.stride, mesh, targetRaw };
+  }, [base.data, grid, u, v, focal, sensor, contrast, edge]);
+  return { scene, error: base.isError };
 }

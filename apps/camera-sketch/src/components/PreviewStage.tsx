@@ -8,7 +8,7 @@
  */
 import type { CompiledPath } from "@oc/contracts";
 import { cx } from "@oc/ui";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { LinearFilter, LinearMipmapLinearFilter, PerspectiveCamera, Scene, Texture, WebGLRenderer } from "three";
 import type { PreviewScene } from "../hooks/previewScene";
 import { useI18n } from "../i18n";
@@ -22,7 +22,8 @@ const MAX_DPR = 2;
 const STAGE_BG = 0x0a0c10;
 
 export interface PreviewStageProps {
-  imageUrl: string | undefined;
+  /** Scene image, decoded once per asset id (see `useSceneBitmap`). */
+  bitmap: ImageBitmap | null;
   scene: PreviewScene | null;
   path: CompiledPath;
   timeMs: number;
@@ -31,38 +32,23 @@ export interface PreviewStageProps {
   showHoles: boolean;
   /** True until the server compile for the current revision has arrived. */
   provisional: boolean;
-  loading?: boolean;
+  /** Depth or scene image failed to load / prepare. */
   error?: boolean;
   className?: string;
 }
 
-/** Scene image -> texture (decoded off the main thread; uv rows are top-down, so no flipY). */
-function useTexture(url: string | undefined): Texture | null {
-  const [tex, setTex] = useState<Texture | null>(null);
-  useEffect(() => {
-    if (!url) return;
-    let alive = true;
-    let made: Texture | null = null;
-    let bmp: ImageBitmap | null = null;
-    (async () => {
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`image ${res.status}`);
-      bmp = await createImageBitmap(await res.blob());
-      if (!alive) return bmp.close();
-      made = new Texture(bmp);
-      made.flipY = false;
-      made.minFilter = LinearMipmapLinearFilter;
-      made.magFilter = LinearFilter;
-      made.needsUpdate = true;
-      setTex(made);
-    })().catch(() => alive && setTex(null));
-    return () => {
-      alive = false;
-      made?.dispose();
-      bmp?.close();
-      setTex(null);
-    };
-  }, [url]);
+/** Scene bitmap -> texture (uv rows are top-down, so no flipY); disposed when the bitmap changes. */
+function useTexture(bitmap: ImageBitmap | null): Texture | null {
+  const tex = useMemo(() => {
+    if (!bitmap) return null;
+    const t = new Texture(bitmap);
+    t.flipY = false;
+    t.minFilter = LinearMipmapLinearFilter;
+    t.magFilter = LinearFilter;
+    t.needsUpdate = true;
+    return t;
+  }, [bitmap]);
+  useEffect(() => () => tex?.dispose(), [tex]);
   return tex;
 }
 
@@ -77,11 +63,20 @@ export function PreviewStage(p: PreviewStageProps) {
   props.current = p;
   const [glError, setGlError] = useState(false);
   const [fit, setFit] = useState<{ w: number; h: number } | null>(null);
-  const texture = useTexture(p.imageUrl);
+  const [drawError, setDrawError] = useState(false);
+  const texture = useTexture(p.bitmap);
 
   const draw = () => {
     const g = gl.current;
     if (!g) return;
+    try {
+      drawFrame(g);
+      setDrawError(false);
+    } catch {
+      setDrawError(true); // e.g. a K that Three cannot represent; never leave a stale frame unexplained
+    }
+  };
+  const drawFrame = (g: NonNullable<typeof gl.current>) => {
     const { path, timeMs, outW, outH, showHoles } = props.current;
     const T = poseAtTime(path.samples, timeMs);
     const cam = toThreeCamera(T, path.K, outW, outH);
@@ -167,7 +162,8 @@ export function PreviewStage(p: PreviewStageProps) {
   useEffect(requestDraw, [p.path, p.timeMs, p.outW, p.outH, p.showHoles]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const ready = !!p.scene && !!texture;
-  const status = glError || p.error ? t("previewFailed") : !ready ? t("previewPreparing") : p.path.status === "invalid" ? t("pathInvalidPreview") : null;
+  const failed = glError || drawError || !!p.error;
+  const status = failed ? t("previewFailed") : !ready ? t("previewPreparing") : p.path.status === "invalid" ? t("pathInvalidPreview") : null;
   return (
     <figure ref={figRef} data-region="camera-view" className={cx("flex min-h-0 min-w-0 flex-col items-center justify-center", p.className)}>
       <figcaption className="sr-only">{t("cameraView")}</figcaption>
@@ -188,7 +184,7 @@ export function PreviewStage(p: PreviewStageProps) {
           </div>
         )}
         {status && (
-          <p role={glError || p.error ? "alert" : "status"} className="absolute inset-x-0 bottom-8 mx-auto w-fit max-w-[90%] rounded-button bg-panel/90 px-3 py-1 text-center text-xs text-muted">
+          <p role={failed ? "alert" : "status"} className="absolute inset-x-0 bottom-8 mx-auto w-fit max-w-[90%] rounded-button bg-panel/90 px-3 py-1 text-center text-xs text-muted">
             {status}
           </p>
         )}

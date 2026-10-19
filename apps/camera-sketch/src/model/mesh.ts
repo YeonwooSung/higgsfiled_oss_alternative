@@ -72,18 +72,53 @@ function roundHalfEven(x: number): number {
   return Math.abs(x % 1) === 0.5 && r % 2 !== 0 ? r - 1 : r;
 }
 
-/** numpy "linear" percentile of an ascending array (`_lerp` with the t >= 0.5 branch). */
-function percentileSorted(a: Float64Array, p: number): number {
-  const idx = (p / 100) * (a.length - 1);
-  const lo = Math.floor(idx), hi = Math.min(lo + 1, a.length - 1);
-  const t = idx - lo, d = a[hi] - a[lo];
-  return t >= 0.5 ? a[hi] - d * (1 - t) : a[lo] + d * t;
+/**
+ * k-th smallest (0-based) of `a[0..n)`, partially reordering `a` in place (Hoare quickselect with a
+ * median-of-3 pivot). Afterwards every element in `a[k+1..n)` is >= the result. O(n), no sort.
+ */
+function selectK(a: Float64Array, n: number, k: number): number {
+  let lo = 0, hi = n - 1;
+  while (hi > lo) {
+    const x = a[lo], y = a[(lo + hi) >> 1], z = a[hi];
+    const pivot = x < y ? (y < z ? y : x < z ? z : x) : x < z ? x : y < z ? z : y;
+    let i = lo, j = hi;
+    while (i <= j) {
+      while (a[i] < pivot) i++;
+      while (a[j] > pivot) j--;
+      if (i <= j) {
+        const t = a[i]; a[i] = a[j]; a[j] = t;
+        i++; j--;
+      }
+    }
+    if (k <= j) hi = j;
+    else if (k >= i) lo = i;
+    else return a[k];
+  }
+  return a[k];
 }
 
-function medianOf(vals: number[] | Float64Array): number {
-  const a = Float64Array.from(vals).sort();
-  const n = a.length;
-  return n % 2 ? a[(n - 1) / 2] : f32((a[n / 2 - 1] + a[n / 2]) / 2);
+/** The k-th and (k+1)-th smallest of `a[0..n)` (the second equals the first when k = n-1). */
+function selectPair(a: Float64Array, n: number, k: number): [number, number] {
+  const v0 = selectK(a, n, k);
+  let v1 = Infinity;
+  for (let i = k + 1; i < n; i++) if (a[i] < v1) v1 = a[i];
+  return [v0, k + 1 < n ? v1 : v0];
+}
+
+/** numpy "linear" percentile (`_lerp` with the t >= 0.5 branch) of `a[0..n)`; reorders `a`. */
+function percentileOf(a: Float64Array, n: number, p: number): number {
+  const idx = (p / 100) * (n - 1);
+  const lo = Math.floor(idx);
+  const [v0, v1] = selectPair(a, n, lo);
+  const t = idx - lo, d = v1 - v0;
+  return t >= 0.5 ? v1 - d * (1 - t) : v0 + d * t;
+}
+
+/** numpy median of float32 data (even n: float32 mean of the middle pair); reorders `a`. */
+function medianOf(a: Float64Array, n = a.length): number {
+  if (n % 2) return selectK(a, n, (n - 1) / 2);
+  const [v0, v1] = selectPair(a, n, n / 2 - 1);
+  return f32((v0 + v1) / 2);
 }
 
 /**
@@ -147,19 +182,20 @@ export function bilateralFilter32f(src: Float32Array, w: number, h: number, d: n
 function targetPatchMedian(z: Float32Array, w: number, h: number, uv: readonly number[]): number {
   const r = Math.max(1, roundHalfEven(0.02 * Math.min(h, w)));
   const clamp = (v: number, hiV: number) => Math.min(Math.max(v, 0), hiV);
+  const buf = new Float64Array((2 * r + 1) ** 2);
   const patch = (cy: number, cx: number) => {
-    const vals: number[] = [];
+    let n = 0;
     for (let y = Math.max(0, cy - r); y <= Math.min(h - 1, cy + r); y++) {
       for (let x = Math.max(0, cx - r); x <= Math.min(w - 1, cx + r); x++) {
         const v = z[y * w + x];
-        if (Number.isFinite(v)) vals.push(v);
+        if (Number.isFinite(v)) buf[n++] = v;
       }
     }
-    return vals;
+    return n;
   };
   const cx = clamp(Math.floor(uv[0] * w), w - 1), cy = clamp(Math.floor(uv[1] * h), h - 1);
-  let vals = patch(cy, cx);
-  if (!vals.length) {
+  let n = patch(cy, cx);
+  if (!n) {
     // Nearest finite pixel (squared Euclidean; ties -> first in row-major order).
     let best = Infinity, by = -1, bx = -1;
     for (let y = 0; y < h; y++) {
@@ -170,9 +206,9 @@ function targetPatchMedian(z: Float32Array, w: number, h: number, uv: readonly n
       }
     }
     if (by < 0) throw new Error("depth has no finite values");
-    vals = patch(by, bx);
+    n = patch(by, bx);
   }
-  return medianOf(vals);
+  return medianOf(buf, n);
 }
 
 export interface PrepareZOptions {
@@ -192,24 +228,24 @@ export function clipSmoothZ(zIn: Float32Array, w: number, h: number, opts: Prepa
   const n = w * h;
   if (zIn.length !== n) throw new Error("depth size mismatch");
   const finite = new Uint8Array(n);
-  const vals: number[] = [];
+  const vals = new Float64Array(n);
+  let k = 0;
   for (let i = 0; i < n; i++) {
     const v = zIn[i];
-    if (Number.isFinite(v) && v > 0) { finite[i] = 1; vals.push(v); }
+    if (Number.isFinite(v) && v > 0) { finite[i] = 1; vals[k++] = v; }
   }
-  if (!vals.length) throw new Error("depth has no finite values");
-  const sorted = Float64Array.from(vals).sort();
-  const lo = f32(percentileSorted(sorted, pLo)), hi = f32(percentileSorted(sorted, pHi));
+  if (!k) throw new Error("depth has no finite values");
+  const lo = f32(percentileOf(vals, k, pLo)), hi = f32(percentileOf(vals, k, pHi));
   const z = new Float32Array(n);
   for (let i = 0; i < n; i++) z[i] = finite[i] ? Math.min(Math.max(zIn[i], lo), hi) : NaN;
   if (!smooth) return z;
   const lz = new Float32Array(n);
-  const logs: number[] = [];
+  let m = 0;
   for (let i = 0; i < n; i++) {
     lz[i] = Math.log(z[i]);
-    if (finite[i]) logs.push(lz[i]);
+    if (finite[i]) vals[m++] = lz[i]; // reuse the value buffer
   }
-  const fill = f32(medianOf(logs));
+  const fill = f32(medianOf(vals, m));
   for (let i = 0; i < n; i++) if (!finite[i]) lz[i] = fill;
   const sm = bilateralFilter32f(lz, w, h, 5, 0.1, 3.0);
   for (let i = 0; i < n; i++) z[i] = finite[i] ? Math.exp(sm[i]) : NaN;
@@ -269,36 +305,74 @@ function inv3(K: Mat3): number[][] {
 const gridCoords = (n: number, stride: number) =>
   Array.from({ length: Math.ceil(n / stride) + 1 }, (_, j) => Math.min(j * stride, n));
 
-/** Port of `scene.build_mesh` (same vertex order, face order and discontinuity rule). */
-export function buildPreviewMesh(z: Float32Array, w: number, h: number, K: Mat3, stride: number, edgeRelThreshold = 0.08): PreviewMesh {
+/** `build_mesh`'s vertex grid: coordinates and the z samples at the clamped pixels (row-major). */
+export interface DepthGrid {
+  xs: number[];
+  ys: number[];
+  /** z at `(min(ys[i], H-1), min(xs[j], W-1))`, length `ys.length * xs.length`. */
+  zg: Float32Array;
+  w: number;
+  h: number;
+  stride: number;
+}
+
+/** Sample `z` (HxW) at the edge-aligned grid of `stride` (once per depth map and stride). */
+export function sampleGrid(z: Float32Array, w: number, h: number, stride: number): DepthGrid {
   if (!(stride >= 1) || !Number.isInteger(stride)) throw new Error("stride must be an integer >= 1");
   if (z.length !== w * h) throw new Error("depth size mismatch");
   const ys = gridCoords(h, stride), xs = gridCoords(w, stride);
+  const zg = new Float32Array(ys.length * xs.length);
+  for (let i = 0; i < ys.length; i++) {
+    const row = Math.min(ys[i], h - 1) * w;
+    for (let j = 0; j < xs.length; j++) zg[i * xs.length + j] = z[row + Math.min(xs[j], w - 1)];
+  }
+  return { xs, ys, zg, w, h, stride };
+}
+
+/**
+ * Per-edit part of `scene_load` + `prepare_z` restricted to the grid samples (exact for what the
+ * mesh reads, since normalization, cap and contrast are pointwise):
+ * `z = min(f32(z / f32(targetRaw)), Z_FAR_CAP) ** contrast`.
+ */
+export function normalizeGrid(grid: DepthGrid, targetRaw: number, contrast = 1): DepthGrid {
+  const t = f32(targetRaw);
+  const zg = new Float32Array(grid.zg.length);
+  for (let i = 0; i < zg.length; i++) {
+    const v = f32(Math.min(f32(grid.zg[i] / t), Z_FAR_CAP));
+    zg[i] = contrast === 1 ? v : Math.pow(v, contrast);
+  }
+  return { ...grid, zg };
+}
+
+/** `scene.build_mesh` from grid samples (same vertex order, face order and discontinuity rule). */
+export function meshFromGrid(grid: DepthGrid, K: Mat3, edgeRelThreshold = 0.08): PreviewMesh {
+  const { xs, ys, zg, w, h } = grid;
   const gh = ys.length, gw = xs.length;
   const Ki = inv3(K);
   const positions = new Float32Array(gh * gw * 3);
   const uvs = new Float32Array(gh * gw * 2);
-  const zg = new Float64Array(gh * gw);
   for (let i = 0; i < gh; i++) {
-    const v = ys[i], row = Math.min(v, h - 1);
+    const v = ys[i];
     for (let j = 0; j < gw; j++) {
-      const u = xs[j], col = Math.min(u, w - 1);
-      const k = i * gw + j;
-      const zv = z[row * w + col];
-      zg[k] = zv;
+      const u = xs[j], k = i * gw + j;
+      const zv = zg[k];
       const s = Number.isFinite(zv) ? zv : 0;
       for (let r = 0; r < 3; r++) positions[k * 3 + r] = (Ki[r][0] * u + Ki[r][1] * v + Ki[r][2]) * s;
       uvs[k * 2] = u / w;
       uvs[k * 2 + 1] = v / h;
     }
   }
-  const reg: number[] = [], edge: number[] = [];
+  // At most 2 faces per cell; trimmed copies below.
+  const cells = (gh - 1) * (gw - 1);
+  const reg = new Uint32Array(cells * 6), edge = new Uint32Array(cells * 6);
+  let nr = 0, ne = 0;
   const push = (p: number, q: number, r: number) => {
     const za = zg[p], zb = zg[q], zc = zg[r];
     if (!Number.isFinite(za) || !Number.isFinite(zb) || !Number.isFinite(zc)) return;
     const rel = Math.max(za, zb, zc) / Math.min(za, zb, zc) - 1;
     // NaN rel (e.g. 0/0) -> not <= threshold -> edge layer, like numpy's `keep = rel <= thr`.
-    (rel <= edgeRelThreshold ? reg : edge).push(p, q, r);
+    if (rel <= edgeRelThreshold) { reg[nr++] = p; reg[nr++] = q; reg[nr++] = r; }
+    else { edge[ne++] = p; edge[ne++] = q; edge[ne++] = r; }
   };
   for (let i = 0; i < gh - 1; i++) {
     for (let j = 0; j < gw - 1; j++) {
@@ -307,7 +381,100 @@ export function buildPreviewMesh(z: Float32Array, w: number, h: number, K: Mat3,
       push(b, c, d);
     }
   }
-  return { positions, uvs, index: Uint32Array.from(reg), edgeIndex: Uint32Array.from(edge), gridW: gw, gridH: gh };
+  return { positions, uvs, index: reg.slice(0, nr), edgeIndex: edge.slice(0, ne), gridW: gw, gridH: gh };
+}
+
+/** Port of `scene.build_mesh` on a full z map (`sampleGrid` + `meshFromGrid`). */
+export function buildPreviewMesh(z: Float32Array, w: number, h: number, K: Mat3, stride: number, edgeRelThreshold = 0.08): PreviewMesh {
+  return meshFromGrid(sampleGrid(z, w, h, stride), K, edgeRelThreshold);
+}
+
+/** Prepared once per depth asset (decode, cap, clip, smooth) — see `prepareDepthBase`. */
+export interface DepthBase {
+  /** Clipped + smoothed z at the capped size (NaN = invalid), not yet target-normalized. */
+  z: Float32Array;
+  width: number;
+  height: number;
+  /** Size of the source depth before the cap (= scene image size). */
+  srcWidth: number;
+  srcHeight: number;
+}
+
+/**
+ * Per editor change (target, contrast, edge protection, focal): target patch median from the base
+ * map (a small patch), then normalization/cap/contrast at the grid samples only, then the mesh.
+ * Never touches the full map beyond the target patch. `Ksrc` is for the SOURCE size; it is scaled
+ * to the capped size like `scene_load.load_scene_info(max_side)`.
+ */
+export function previewMeshForEdit(base: DepthBase, grid: DepthGrid, targetUv01: readonly number[], contrast: number, Ksrc: Mat3,
+  edgeRelThreshold: number): { mesh: PreviewMesh; targetRaw: number; K: Mat3 } {
+  const targetRaw = targetPatchMedian(base.z, base.width, base.height, targetUv01);
+  const sx = base.width / base.srcWidth, sy = base.height / base.srcHeight;
+  const K: Mat3 = [Ksrc[0].map((v) => v * sx), Ksrc[1].map((v) => v * sy), [...Ksrc[2]]];
+  return { mesh: meshFromGrid(normalizeGrid(grid, targetRaw, contrast), K, edgeRelThreshold), targetRaw, K };
+}
+
+/** Long-side cap for the browser depth map (server `load_scene_info(max_side=...)` analogue). */
+export const MAX_DEPTH_SIDE = 2048;
+
+/** Capped size like `scene_load`: `f = max_side / max(w, h)`, `round` half-to-even, >= 1; unchanged when within the cap. */
+export function cappedSize(w: number, h: number, maxSide = MAX_DEPTH_SIDE): [number, number] {
+  if (Math.max(w, h) <= maxSide) return [w, h];
+  const f = maxSide / Math.max(w, h);
+  return [Math.max(1, roundHalfEven(w * f)), Math.max(1, roundHalfEven(h * f))];
+}
+
+/** Per output index: source indices and area weights (OpenCV INTER_AREA, downscale). */
+function areaWeights(n: number, m: number): { idx: Int32Array; wt: Float64Array; off: Int32Array } {
+  const scale = n / m;
+  const idx: number[] = [], wt: number[] = [], off = new Int32Array(m + 1);
+  for (let o = 0; o < m; o++) {
+    const a = o * scale, b = Math.min((o + 1) * scale, n);
+    for (let s = Math.floor(a); s < Math.ceil(b); s++) {
+      const cover = Math.min(b, s + 1) - Math.max(a, s);
+      if (cover > 1e-12) { idx.push(s); wt.push(cover / (b - a)); }
+    }
+    off[o + 1] = idx.length;
+  }
+  return { idx: Int32Array.from(idx), wt: Float64Array.from(wt), off };
+}
+
+/** Area (box) downsample of a float map, separable; NaN propagates like OpenCV. */
+export function resizeArea(src: Float32Array, w: number, h: number, nw: number, nh: number): Float32Array {
+  if (nw === w && nh === h) return src;
+  if (nw > w || nh > h) throw new Error("resizeArea only downsamples");
+  const X = areaWeights(w, nw), Y = areaWeights(h, nh);
+  const tmp = new Float64Array(h * nw);
+  for (let y = 0; y < h; y++) {
+    const row = y * w;
+    for (let o = 0; o < nw; o++) {
+      let acc = 0;
+      for (let k = X.off[o]; k < X.off[o + 1]; k++) acc += src[row + X.idx[k]] * X.wt[k];
+      tmp[y * nw + o] = acc;
+    }
+  }
+  const out = new Float32Array(nw * nh);
+  for (let o = 0; o < nh; o++) {
+    for (let x = 0; x < nw; x++) {
+      let acc = 0;
+      for (let k = Y.off[o]; k < Y.off[o + 1]; k++) acc += tmp[Y.idx[k] * nw + x] * Y.wt[k];
+      out[o * nw + x] = acc;
+    }
+  }
+  return out;
+}
+
+/**
+ * One-time prep of a depth asset (worker-friendly, pure): decode PNG16 -> z -> area-downsample to
+ * long side <= `maxSide` -> clip + smooth. The cap is applied BEFORE clip/smoothing, as the
+ * server's `max_side` path does.
+ */
+export function prepareDepthBase(png: ArrayBuffer | Uint8Array, meta: { min: number; max: number; convention: unknown }, maxSide = MAX_DEPTH_SIDE): DepthBase {
+  const d = decodeDepthPng16(png, meta);
+  let z = depthToZ(d.data, conventionFromMeta(meta.convention));
+  const [nw, nh] = cappedSize(d.width, d.height, maxSide);
+  z = resizeArea(z, d.width, d.height, nw, nh);
+  return { z: clipSmoothZ(z, nw, nh), width: nw, height: nh, srcWidth: d.width, srcHeight: d.height };
 }
 
 /** Smallest stride whose regular triangle count `2 ceil(W/s) ceil(H/s)` is <= `maxTriangles`. */

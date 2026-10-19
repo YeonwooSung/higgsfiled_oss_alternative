@@ -7,7 +7,8 @@ import { useEffect, useMemo, useState } from "react";
 import { api, ApiError } from "../api/client";
 import { depthToLink, latestJob, sceneToLink } from "../flow/scene";
 import { useAssetUrl } from "../hooks/assets";
-import { usePreviewScene } from "../hooks/previewScene";
+import { useIsDesktop } from "../hooks/media";
+import { usePreviewScene, useSceneBitmap } from "../hooks/previewScene";
 import { useI18n } from "../i18n";
 import { compilePathProvisional, sceneInfoFromTarget } from "../model/path";
 import { outputSize } from "../model/preview";
@@ -89,14 +90,16 @@ function CameraStage({ cam }: { cam: ReturnType<typeof useCameraPath> }) {
   const timeMs = useEditor((s) => s.playheadMs);
   const sceneAsset = assetById(project, config.scene_asset_id);
   const depth = assetById(project, config.depth_asset_id);
-  const imageUrl = useAssetUrl(sceneAsset);
-  const { scene, loading, error } = usePreviewScene(depth, config);
+  const image = useSceneBitmap(sceneAsset);
+  const { scene, error } = usePreviewScene(depth, config);
+  const desktop = useIsDesktop();
   if (!cam.path) return <SceneStage />;
   return (
     <div data-region="stage" className="flex min-h-0 flex-1 flex-col gap-3 bg-stage p-3">
-      <PreviewStage imageUrl={imageUrl} scene={scene} path={cam.path} timeMs={timeMs} outW={cam.outW} outH={cam.outH}
-        showHoles={config.scene.show_holes} provisional={cam.provisional} loading={loading} error={error} className="md:flex-1" />
-      {cam.info && <CameraGizmo path={cam.path} targetWorld={cam.info.target_world} timeMs={timeMs} className="md:hidden" />}
+      <PreviewStage bitmap={image.bitmap} scene={scene} path={cam.path} timeMs={timeMs} outW={cam.outW} outH={cam.outH}
+        showHoles={config.scene.show_holes} provisional={cam.provisional} error={error || image.error} className="md:flex-1" />
+      {/* Mobile: the gizmo stacks under the stage (desktop renders it in the right column instead). */}
+      {!desktop && cam.info && <CameraGizmo path={cam.path} targetWorld={cam.info.target_world} timeMs={timeMs} />}
     </div>
   );
 }
@@ -104,6 +107,8 @@ function CameraStage({ cam }: { cam: ReturnType<typeof useCameraPath> }) {
 function CameraViews({ cam }: { cam: ReturnType<typeof useCameraPath> }) {
   const { t } = useI18n();
   const timeMs = useEditor((s) => s.playheadMs);
+  const desktop = useIsDesktop();
+  if (!desktop) return null; // the right column is hidden below md; the stage hosts the gizmo there
   if (!cam.path || !cam.info) {
     return (
       <div className="flex flex-wrap gap-3">
