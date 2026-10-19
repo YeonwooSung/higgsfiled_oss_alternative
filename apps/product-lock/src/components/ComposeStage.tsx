@@ -84,8 +84,8 @@ export default function ComposeStage(p: ComposeStageProps) {
               <Group key={i} listening={false}>
                 <Rect x={b.x * placement.w} y={b.y * placement.h} width={b.w * placement.w} height={b.h * placement.h}
                   fillPatternImage={pattern as unknown as HTMLImageElement} stroke="#18794E" strokeWidth={1 / p.scale} />
-                <Text x={b.x * placement.w + 2} y={b.y * placement.h + 2} text={p.protectedLabel} fontSize={11 / p.scale}
-                  fill="#ffffff" padding={2 / p.scale} />
+                {b.w * placement.w * p.scale > 70 && <Text x={b.x * placement.w + 2} y={b.y * placement.h + 2} text={p.protectedLabel} fontSize={11 / p.scale}
+                  fill="#ffffff" padding={2 / p.scale} />}
               </Group>
             ))}
           </Group>

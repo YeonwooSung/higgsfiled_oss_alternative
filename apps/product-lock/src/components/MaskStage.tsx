@@ -20,7 +20,12 @@ export function MaskStage({ product, width, height, protectedLabel, onClipped }:
   const { tool, brush, config, update } = useEditor();
   const mask = useMask();
   const drag = useRef<{ x: number; y: number } | null>(null);
-  const [draft, setDraft] = useState<Box | null>(null);
+  const [draft, setDraftState] = useState<Box | null>(null);
+  const draftRef = useRef<Box | null>(null);
+  const setDraft = (b: Box | null) => {
+    draftRef.current = b; // read by pointerup even before React re-renders
+    setDraftState(b);
+  };
   const iw = product.naturalWidth;
   const ih = product.naturalHeight;
   const scale = Math.min(width / iw, height / ih);
@@ -87,7 +92,11 @@ export function MaskStage({ product, width, height, protectedLabel, onClipped }:
 
   const down = (e: React.PointerEvent) => {
     const p = toSource(e);
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    try {
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {
+      /* pointer no longer active; drawing still works without capture */
+    }
     if (tool === "select") {
       mask.addPoint({ x: p.x / iw, y: p.y / ih, label: e.shiftKey ? 0 : 1 });
       return;
@@ -110,6 +119,7 @@ export function MaskStage({ product, width, height, protectedLabel, onClipped }:
     }
   };
   const up = () => {
+    const draft = draftRef.current;
     if (tool === "protect" && draft && draft.w > 0.01 && draft.h > 0.01) {
       const { box, clipped } = clipBox(draft);
       if (box) update((c) => { c.protect_boxes.push(box); });

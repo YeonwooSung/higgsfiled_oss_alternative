@@ -58,9 +58,10 @@ export function StageArea() {
   }, [maskImg, maskAsset, productImg, mask]);
 
   const cutout = useMemo(
-    () => (productImg ? cutoutCanvas(productImg, mask.buffer) : null),
+    // Before a mask exists (and nothing was painted) the product shows with its own alpha.
+    () => (productImg ? cutoutCanvas(productImg, maskAsset || mask.dirty ? mask.buffer : null) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [productImg, mask.buffer, mask.version],
+    [productImg, mask.buffer, mask.version, maskAsset?.id],
   );
 
   const [outW, outH] = config!.output.aspect === "9:16" ? [720, 1280] : [1280, 720];

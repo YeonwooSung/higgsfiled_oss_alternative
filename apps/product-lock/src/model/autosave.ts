@@ -36,20 +36,21 @@ export class Autosaver<C> {
     const config = this.pending;
     this.pending = null;
     this.saving = true;
+    let outcome: () => void;
     try {
       const res = await this.opts.save(this.revision, config);
       this.revision = res.revision;
-      this.opts.onSaved(res.revision, res.config);
+      outcome = () => this.opts.onSaved(res.revision, res.config);
     } catch (e) {
       if ((e as { status?: number }).status === 409) {
         this.pending = null;
-        this.opts.onConflict(e);
+        outcome = () => this.opts.onConflict(e);
       } else {
-        this.opts.onError(e);
+        outcome = () => this.opts.onError(e);
       }
-    } finally {
-      this.saving = false;
     }
+    this.saving = false;
+    outcome();
     if (this.pending !== null && !this.timer) await this.flush();
   }
 

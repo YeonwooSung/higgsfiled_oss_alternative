@@ -59,4 +59,20 @@ describe("Autosaver", () => {
     expect(onConflict).toHaveBeenCalledTimes(1);
     vi.useRealTimers();
   });
+
+  it("is no longer dirty when onSaved fires for the last pending edit", async () => {
+    vi.useFakeTimers();
+    let dirtyAtSave: boolean | null = null;
+    const s: Autosaver<{ v: number }> = new Autosaver({
+      save: async (rev, cfg) => ({ revision: rev + 1, config: cfg }),
+      revision: 1,
+      onSaved: () => (dirtyAtSave = s.dirty),
+      onConflict: () => {},
+      onError: () => {},
+    });
+    s.schedule({ v: 1 });
+    await vi.advanceTimersByTimeAsync(600);
+    expect(dirtyAtSave).toBe(false);
+    vi.useRealTimers();
+  });
 });

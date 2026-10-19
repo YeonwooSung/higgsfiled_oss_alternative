@@ -33,7 +33,7 @@ export function TopBar() {
         <span className="hidden sm:inline">{t("appName")}</span>
       </Link>
       <span className="truncate text-muted">/ {project.title}</span>
-      <span className="flex items-center gap-1 text-xs text-muted" aria-live="polite">{status}</span>
+      <span className="flex shrink-0 items-center gap-1 whitespace-nowrap text-xs text-muted" aria-live="polite">{status}</span>
       {profile?.is_mock && <Badge tone="mock" title={t("mockExplain")}>{t("mock")}</Badge>}
       <div className="ml-auto flex items-center gap-1">
         <JobIndicator />
