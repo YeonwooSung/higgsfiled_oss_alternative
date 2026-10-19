@@ -16,7 +16,8 @@ import numpy as np
 # Policy defaults, to be tuned on fixtures (not physical constants).
 MIN_TRACKED = 8
 DRIFT_CHECK_REL = 0.05  # of the output short side
-SIMILARITY_CHECK = 0.5  # mean NCC below this -> check
+SIMILARITY_CHECK = 0.5  # rolling-window mean NCC below this -> check
+SIM_WINDOW = 12  # frames (0.5 s at 24 fps); shorter sequences use the whole sequence
 WINDOW_REL = 0.20  # window side, of the output short side
 
 _LK = dict(winSize=(15, 15), maxLevel=2, criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 20, 0.03))
@@ -62,7 +63,7 @@ class _Tracker:
         h, w = gray.shape
         ok = st.ravel() == 1
         ok &= (nxt[:, 0, 0] >= 0) & (nxt[:, 0, 0] < w) & (nxt[:, 0, 1] >= 0) & (nxt[:, 0, 1] < h)
-        self.pts, self.pts0, nxt = nxt[ok], self.pts0[ok], nxt[ok]
+        self.pts, self.pts0 = nxt[ok], self.pts0[ok]
         self.prev = gray
         if len(self.pts) < MIN_TRACKED:
             self.lost = True
@@ -87,16 +88,33 @@ def _patch(gray, center, side):
     return cv2.getRectSubPix(gray, (side, side), (float(center[0]), float(center[1])))
 
 
-def _report(status, tracked, drift, sim, reasons, sim_min=None):
+def _report(status, tracked, drift, sim, reasons, sims=None):
+    sims = sims or []
     return {
         "status": status,
         "tracked_points": int(tracked),
         "target_drift_px": drift,
         "similarity_mean": sim,
         "reasons": reasons,
-        # informational only (not gated): worst single-frame window similarity
-        "similarity_min": sim_min,
+        # similarity_window_min gates `check`; similarity_mean / similarity_min are informational
+        "similarity_window_min": _window_min(sims) if sims and status != "unknown" else None,
+        "similarity_min": float(min(sims)) if sims and status != "unknown" else None,
     }
+
+
+def _window_min(sims: list[float]) -> float:
+    a = np.asarray(sims, np.float64)
+    if len(a) <= SIM_WINDOW:
+        return float(a.mean())
+    c = np.concatenate([[0.0], np.cumsum(a)])
+    return float(((c[SIM_WINDOW:] - c[:-SIM_WINDOW]) / SIM_WINDOW).min())
+
+
+def _unsupported(f) -> bool:
+    return not (isinstance(f, np.ndarray) and f.dtype == np.uint8 and f.ndim == 3 and f.shape[2] == 3)
+
+
+_END = object()
 
 
 def motion_report(
@@ -110,37 +128,49 @@ def motion_report(
     ``target_px_out`` is the (x, y) target pixel in output space on frame 0 (one point, not
     per frame; tracking supplies the motion).  ``compiled`` is accepted for API symmetry
     and is currently unused (sizes come from the frames).  Streams are consumed lazily, two
-    consecutive frames per stream at a time.
+    consecutive frames per stream at a time.  Frames must be uint8 HxWx3.
     """
     gen_it, geo_it = iter(generated), iter(geometry)
-    try:
-        g0, r0 = _gray(next(gen_it)), _gray(next(geo_it))
-    except StopIteration:
+    fg, fr = next(gen_it, _END), next(geo_it, _END)
+    if fg is _END and fr is _END:
         return _report("unknown", 0, None, None, ["no_frames"])
-    if g0.shape != r0.shape:
+    if fg is _END or fr is _END:
+        return _report("unknown", 0, None, None, ["length_mismatch"])
+    if _unsupported(fg) or _unsupported(fr):
+        return _report("unknown", 0, None, None, ["unsupported_frame"])
+    if fg.shape != fr.shape:
         return _report("unknown", 0, None, None, ["shape_mismatch"])
+    shape0 = fr.shape
+    g0, r0 = _gray(fg), _gray(fr)
 
     gen, geo = _Tracker(g0, target_px_out), _Tracker(r0, target_px_out)
     tracked = min(gen.n0, geo.n0)
     if gen.lost or geo.lost:
-        return _report("unknown", tracked, None, None, ["low_texture"])
+        reasons = (["low_texture_generated"] if gen.lost else []) + (["low_texture_geometry"] if geo.lost else [])
+        return _report("unknown", tracked, None, None, reasons)
 
     short = min(g0.shape[:2])
     side = geo.side
     sims = [_ncc(_patch(g0, gen.center, side), _patch(r0, geo.center, side))]
     drift = 0.0
-    gen_lost_at = None
-    geo_lost = False
-    for fg, fr in zip(gen_it, geo_it):
+    gen_lost = False
+    while True:
+        fg, fr = next(gen_it, _END), next(geo_it, _END)
+        if fg is _END and fr is _END:
+            break
+        if fg is _END or fr is _END:
+            return _report("unknown", tracked, None, None, ["length_mismatch"])
+        if _unsupported(fg) or _unsupported(fr):
+            return _report("unknown", tracked, None, None, ["unsupported_frame"])
+        if fg.shape != shape0 or fr.shape != shape0:
+            return _report("unknown", tracked, None, None, ["shape_mismatch"])
         g, r = _gray(fg), _gray(fr)
         dg, dr = gen.step(g), geo.step(r)
         if dr is None:
-            geo_lost = True
-            break
+            return _report("unknown", tracked, None, None, ["tracking_lost_geometry"])
         gcenter = geo.center + dr
         if dg is None:
-            if gen_lost_at is None:
-                gen_lost_at = len(sims)
+            gen_lost = True
             # compare the generated frame at the place the geometry says the target is
             sims.append(_ncc(_patch(g, gcenter, side), _patch(r, gcenter, side)))
             continue
@@ -148,19 +178,16 @@ def motion_report(
         sims.append(_ncc(_patch(g, gen.center + dg, side), _patch(r, gcenter, side)))
         tracked = min(tracked, len(gen.pts), len(geo.pts))
 
-    if geo_lost:
-        return _report("unknown", tracked, None, None, ["tracking_lost"])
     sim = float(np.mean(sims))
-    if gen_lost_at is not None:
-        # Points vanished only in the generated video: low window similarity there is itself
-        # evidence of a subject change; otherwise we cannot say anything.
-        if sim < SIMILARITY_CHECK:
-            return _report("check", tracked, None, sim, ["subject_change", "tracking_lost"], float(min(sims)))
-        return _report("unknown", tracked, None, None, ["tracking_lost"])
-
     reasons = []
     if drift > DRIFT_CHECK_REL * short:
         reasons.append("target_drift")
-    if sim < SIMILARITY_CHECK:
-        reasons.append("low_similarity")
-    return _report("check" if reasons else "ok", tracked, drift, sim, reasons, float(min(sims)))
+    if _window_min(sims) < SIMILARITY_CHECK:
+        reasons.append("subject_change")
+    if gen_lost:
+        # Points vanished only in the generated video.  Evidence of change (drift measured
+        # before the loss, or low window similarity) is reported; otherwise we cannot say.
+        if not reasons:
+            return _report("unknown", tracked, None, None, ["tracking_lost_generated"])
+        reasons.append("tracking_lost_generated")
+    return _report("check" if reasons else "ok", tracked, drift, sim, reasons, sims)
