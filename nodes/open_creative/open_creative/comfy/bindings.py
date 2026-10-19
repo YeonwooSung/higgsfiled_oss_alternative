@@ -18,6 +18,8 @@ REQUIRED_BINDINGS: dict[str, dict[str, str]] = {
         "image": "image", "prompt": "string", "seed": "int", "width": "int", "height": "int", "frames": "int",
     },
 }
+# Which app (workflows/<app>/ directory) owns each workflow.
+WORKFLOW_APP: dict[str, str] = {name: "product-lock" for name in REQUIRED_BINDINGS}
 REQUIRED_OUTPUTS: dict[str, tuple[str, ...]] = {
     "product_segment_v1": ("mask",),
     "product_background_image_v1": ("image",),

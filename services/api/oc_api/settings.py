@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     cookie_secure: bool = True
     session_ttl_days: int = 7
     default_profile: str = "open_weights_v1"
-    workflows_dir: Path = REPO_ROOT / "workflows" / "product-lock"
+    workflows_dir: Path = REPO_ROOT / "workflows"  # root; each app lives in workflows/<app_slug>/
     comfy_base_url: str | None = Field(default=None, validation_alias="COMFY_BASE_URL")
     upload_url_ttl_s: int = 600
     read_url_ttl_s: int = 300

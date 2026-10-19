@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, field
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -14,6 +13,7 @@ from open_creative.media.image import load_mask_png
 from open_creative.product_lock.masks import CORE_MIN_FRACTION, compute_core, core_fraction, rasterize_boxes
 from open_creative.product_lock.prompts import load_presets
 
+from ..apps import JobPlan
 from ..errors import ApiError
 from ..models import Asset, Job, Project
 from .config import Box, ProductLockConfig
@@ -71,17 +71,6 @@ OPTION_MODELS: dict[str, type[_Opts]] = {
     "product.render": RenderOptions,
     "product.inspect": InspectOptions,
 }
-
-
-@dataclass
-class JobPlan:
-    kind: str
-    options: dict
-    stages: list[str]
-    uses_gpu: bool
-    reserved_units: float
-    unit: str = "gpu_seconds"
-    notes: list[str] = field(default_factory=list)
 
 
 def parse_options(kind: str, options: dict) -> _Opts:

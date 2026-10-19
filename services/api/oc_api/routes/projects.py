@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DbSession
 
+from ..apps import get_app
 from ..apps_registry import default_app_config, validate_config
 from ..deps import current_session, get_db, owned_project
 from ..errors import ApiError
@@ -20,12 +21,9 @@ from ..serializers import asset_out, job_out
 
 router = APIRouter()
 
-ASSET_REF_FIELDS = ("product_asset_id", "mask_asset_id", "core_mask_asset_id")
-SCENE_ASSET_FIELDS = ("background_asset_id", "background_video_asset_id")
-
 
 class ProjectCreate(BaseModel):
-    app_slug: Literal["product-lock"]
+    app_slug: Literal["product-lock", "camera-sketch"]
     title: str = Field(min_length=1, max_length=120)
 
 
@@ -34,15 +32,20 @@ class ProjectPatch(BaseModel):
     config: dict
 
 
-def referenced_asset_ids(config: dict) -> list[tuple[str, str]]:
-    refs = [(f, config.get(f)) for f in ASSET_REF_FIELDS]
-    scene = config.get("scene") or {}
-    refs += [(f"scene.{f}", scene.get(f)) for f in SCENE_ASSET_FIELDS]
+def _dig(config: dict, path: str):
+    cur = config
+    for part in path.split("."):
+        cur = cur.get(part) if isinstance(cur, dict) else None
+    return cur
+
+
+def referenced_asset_ids(app_slug: str, config: dict) -> list[tuple[str, str]]:
+    refs = [(f, _dig(config, f)) for f in get_app(app_slug).asset_ref_fields]
     return [(f, str(v)) for f, v in refs if v]
 
 
 def check_asset_refs(db: DbSession, project: Project, config: dict) -> None:
-    for field, value in referenced_asset_ids(config):
+    for field, value in referenced_asset_ids(project.app_slug, config):
         asset = db.get(Asset, uuid.UUID(value))
         if asset is None or asset.project_id != project.id:
             raise ApiError(422, "asset_not_found", "Referenced asset does not belong to this project.",

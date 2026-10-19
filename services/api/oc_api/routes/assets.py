@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
 
+from ..apps import get_app
 from ..deps import current_session, get_db, owned_project, parse_uuid
 from ..errors import ApiError
 from ..jobs_service import enqueue_internal_job
@@ -21,11 +22,6 @@ from ..storage import object_key
 router = APIRouter()
 
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
-UPLOAD_ROLES: dict[str, tuple[str, ...]] = {
-    "product": ("image/jpeg", "image/png", "image/webp"),
-    "mask": ("image/png",),
-    "core_mask": ("image/png",),
-}
 
 
 class AssetInit(BaseModel):
@@ -52,9 +48,10 @@ def owned_asset(asset_id: str, db: DbSession, session: SessionRow) -> Asset:
 def init_asset(project_id: str, body: AssetInit, request: Request, db: DbSession = Depends(get_db),
                session: SessionRow = Depends(current_session)):
     project = owned_project(project_id, db, session)
-    if body.role not in UPLOAD_ROLES:
+    roles = get_app(project.app_slug).upload_roles
+    if body.role not in roles:
         raise ApiError(422, "invalid_role", f"role {body.role!r} cannot be uploaded", field="role")
-    if body.mime not in UPLOAD_ROLES[body.role]:
+    if body.mime not in roles[body.role]:
         raise ApiError(415, "unsupported_media_type", "Use JPG, PNG or WebP (masks: PNG).", field="mime")
     if body.bytes > MAX_IMAGE_BYTES:
         raise ApiError(413, "too_large", "Images must be 20 MB or smaller.", field="bytes")

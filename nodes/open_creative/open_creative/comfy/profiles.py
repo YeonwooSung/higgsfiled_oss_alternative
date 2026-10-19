@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from .bindings import REQUIRED_BINDINGS, BindingError, validate_manifest
+from .bindings import REQUIRED_BINDINGS, WORKFLOW_APP, BindingError, validate_manifest
 
 MOCK_PROFILE = "mock_v1"
 OPEN_WEIGHTS_PROFILE = "open_weights_v1"
@@ -62,7 +62,15 @@ def load_workflow(workflows_dir: Path, name: str) -> tuple[dict, dict]:
     return graph, manifest
 
 
-def profile_status(profile_id: str, workflows_dir: Path, comfy_base_url: str | None) -> ProfileStatus:
+def app_workflows_dir(workflows_root: Path, workflow: str) -> Path:
+    """Directory holding a workflow's exports: workflows/<app>/. A flat layout (no app dir) is accepted."""
+    app_dir = Path(workflows_root) / WORKFLOW_APP.get(workflow, "")
+    return app_dir if app_dir.is_dir() else Path(workflows_root)
+
+
+def profile_status(profile_id: str, workflows_dir: Path, comfy_base_url: str | None,
+                   workflows: tuple[str, ...] | None = None) -> ProfileStatus:
+    """`workflows_dir` is the app's export directory; only the app's `workflows` are checked."""
     p = get_profile(profile_id)
 
     def status(ok: bool, reason: str | None = None) -> ProfileStatus:
@@ -72,7 +80,7 @@ def profile_status(profile_id: str, workflows_dir: Path, comfy_base_url: str | N
         return status(True)
     if not comfy_base_url:
         return status(False, "COMFY_BASE_URL is not configured")
-    for name in REQUIRED_BINDINGS:
+    for name in workflows if workflows is not None else tuple(REQUIRED_BINDINGS):
         manifest_path = workflows_dir / f"{name}.bindings.json"
         if not manifest_path.exists():
             return status(False, f"{name}: binding manifest not exported")

@@ -90,7 +90,7 @@ def _recipe(run: JobRun, render: Job) -> str:
         z.writestr("jobs.json", json.dumps(jobs, indent=2))
         z.writestr("inputs.json", json.dumps(inputs, indent=2))
         z.write(MODEL_MANIFEST, "models/product-lock.manifest.json")
-        wf_dir = Path(run.ctx.settings.workflows_dir)
+        wf_dir = Path(run.ctx.settings.workflows_dir) / "product-lock"
         if wf_dir.is_dir():
             for f in sorted(wf_dir.glob("*.json")):
                 z.write(f, f"workflows/{f.name}")

@@ -18,7 +18,7 @@ from pathlib import Path
 import httpx
 
 from open_creative.comfy.bindings import BindingError, validate_values
-from open_creative.comfy.profiles import OPEN_WEIGHTS_PROFILE, load_workflow
+from open_creative.comfy.profiles import OPEN_WEIGHTS_PROFILE, app_workflows_dir, load_workflow
 
 from .runner import (
     ProviderRejected,
@@ -73,7 +73,7 @@ class ComfySdkRunner:
 
     def submit(self, workflow: str, bindings: dict, submission_key: str) -> str:
         try:
-            graph, manifest = load_workflow(self.workflows_dir, workflow)
+            graph, manifest = load_workflow(app_workflows_dir(self.workflows_dir, workflow), workflow)
             validate_values(manifest, bindings)
         except (BindingError, FileNotFoundError) as e:
             raise ProviderRejected(str(e)) from e
@@ -115,7 +115,7 @@ class ComfySdkRunner:
                 yield {"type": "status", "state": _STATE.get(ev.status, "running")}
 
     def collect(self, provider_job_id: str, target_dir: Path, workflow: str) -> list[Path]:
-        _, manifest = load_workflow(self.workflows_dir, workflow)
+        _, manifest = load_workflow(app_workflows_dir(self.workflows_dir, workflow), workflow)
         job = self._job(provider_job_id).refresh()
         target_dir = Path(target_dir)
         target_dir.mkdir(parents=True, exist_ok=True)

@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-import uuid
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, Header, Request
@@ -15,8 +14,8 @@ from sqlalchemy.orm import Session as DbSession
 
 from open_creative.comfy.profiles import PROFILES, profile_status
 from open_creative.product_lock.prompts import load_presets
-
-from ..apps_registry import APP_KINDS, validate_config
+from ..apps import get_app
+from ..apps_registry import validate_config
 from ..db import utcnow
 from ..deps import current_session, get_db, owned_project, parse_uuid
 from ..errors import ApiError
@@ -24,7 +23,6 @@ from ..jobs_service import add_event, request_cancel
 from ..models import (ACTIVE_JOB_STATES, TERMINAL_JOB_STATES, IdempotencyRecord, Job, JobCost, JobEvent,
                       JobStage, Project, ProjectRevision)
 from ..models import Session as SessionRow
-from ..product_lock.jobs import plan_job
 from ..serializers import job_out
 
 router = APIRouter()
@@ -42,11 +40,11 @@ class EstimateRequest(BaseModel):
     options: dict = Field(default_factory=dict)
 
 
-def _status(request: Request, profile_id: str):
+def _status(request: Request, profile_id: str, app_slug: str):
     s = request.app.state.settings
     if profile_id not in PROFILES:
         raise ApiError(422, "unknown_profile", f"unknown profile {profile_id!r}", field="config.model_profile")
-    return profile_status(profile_id, s.workflows_dir, s.comfy_base_url)
+    return profile_status(profile_id, s.workflows_dir / app_slug, s.comfy_base_url, get_app(app_slug).workflows)
 
 
 def _profile_out(st) -> dict:
@@ -76,9 +74,9 @@ def _check_quotas(db: DbSession, settings, session: SessionRow, project: Project
         raise ApiError(429, "queue_full", "Too many jobs are waiting. Try again when one finishes.", retryable=True)
     if uses_gpu and db.scalar(active.where(Job.uses_gpu.is_(True))) >= settings.max_gpu_jobs_per_session:
         raise ApiError(429, "gpu_busy", "A generation is already running for this session.", retryable=True)
-    if kind == "product.render":
+    if kind in get_app(project.app_slug).render_kinds:
         renders = select(func.count()).select_from(Job).where(Job.project_id == project.id,
-                                                              Job.kind == "product.render",
+                                                              Job.kind == kind,
                                                               Job.state.in_(ACTIVE_JOB_STATES))
         if db.scalar(renders) >= settings.max_active_renders_per_project:
             raise ApiError(429, "render_busy", "A render is already running for this project.", retryable=True)
@@ -111,7 +109,8 @@ def create_job(project_id: str, body: JobCreate, request: Request, db: DbSession
                idempotency_key: str | None = Header(default=None, max_length=200)):
     settings = request.app.state.settings
     project = owned_project(project_id, db, session)
-    if body.kind not in APP_KINDS[project.app_slug]:
+    app = get_app(project.app_slug)
+    if body.kind not in app.kinds:
         raise ApiError(422, "invalid_kind", f"kind {body.kind!r} is not available", field="kind")
     endpoint = f"POST /projects/{project.id}/jobs"
     rhash = _request_hash(body)
@@ -121,9 +120,9 @@ def create_job(project_id: str, body: JobCreate, request: Request, db: DbSession
             return job_out(existing)
 
     cfg = _pinned_config(db, project, body.revision)
-    plan = plan_job(db, request.app.state.storage, project, cfg, body.kind, body.options)
+    plan = app.plan_job(db, request.app.state.storage, project, cfg, body.kind, body.options)
     if plan.uses_gpu:
-        st = _status(request, cfg.model_profile)
+        st = _status(request, cfg.model_profile, project.app_slug)
         if not st.available:
             raise ApiError(503, "profile_unavailable", f"{st.label} profile is not available: {st.reason}",
                            retryable=True)
@@ -154,27 +153,16 @@ def create_job(project_id: str, body: JobCreate, request: Request, db: DbSession
 def estimate(project_id: str, body: EstimateRequest, request: Request, db: DbSession = Depends(get_db),
              session: SessionRow = Depends(current_session)):
     project = owned_project(project_id, db, session)
-    if body.kind not in APP_KINDS[project.app_slug]:
+    app = get_app(project.app_slug)
+    if body.kind not in app.kinds:
         raise ApiError(422, "invalid_kind", f"kind {body.kind!r} is not available", field="kind")
     cfg = _pinned_config(db, project, body.revision)
-    options = body.options or _default_estimate_options(body.kind, cfg)
-    plan = plan_job(db, request.app.state.storage, project, cfg, body.kind, options, validate_assets=False)
-    st = _status(request, cfg.model_profile)
+    options = body.options or app.default_estimate_options(body.kind, cfg)
+    plan = app.plan_job(db, request.app.state.storage, project, cfg, body.kind, options, validate_assets=False)
+    st = _status(request, cfg.model_profile, project.app_slug)
     return {"kind": body.kind, "stages": plan.stages, "uses_gpu": plan.uses_gpu,
             "reserved_units": plan.reserved_units, "unit": plan.unit, "price": None, "price_status": "unknown",
             "profile": _profile_out(st), "notes": plan.notes, "creates_new_job": True}
-
-
-def _default_estimate_options(kind: str, cfg) -> dict:
-    if kind == "product.background":
-        return {"preset_id": cfg.scene.preset_id, "seed": cfg.seed}
-    if kind == "product.background_video":
-        return {"background_asset_id": str(cfg.scene.background_asset_id or uuid.UUID(int=0)), "seed": cfg.seed}
-    if kind == "product.segment":
-        return {"points": [{"x": 0.5, "y": 0.5, "label": 1}]}
-    if kind == "product.inspect":
-        return {"render_job_id": str(uuid.UUID(int=0))}
-    return {}
 
 
 @router.get("/jobs/{job_id}")
@@ -248,22 +236,16 @@ def job_integrity(job_id: str, db: DbSession = Depends(get_db), session: Session
 
 @router.get("/capabilities")
 def capabilities(request: Request, app_slug: str = "product-lock"):
-    if app_slug not in APP_KINDS:
-        raise ApiError(422, "unknown_app", f"unknown app {app_slug!r}", field="app_slug")
+    app = get_app(app_slug)
     s = request.app.state.settings
-    profiles = [_profile_out(profile_status(pid, s.workflows_dir, s.comfy_base_url)) for pid in PROFILES]
+    profiles = [_profile_out(profile_status(pid, s.workflows_dir / app_slug, s.comfy_base_url, app.workflows))
+                for pid in PROFILES]
     return {
         "app_slug": app_slug,
         "default_profile": s.default_profile,
         "profiles": profiles,
-        "kinds": list(APP_KINDS[app_slug]),
-        "presets": [p.public() for p in load_presets().values()],
-        "limits": {"duration_ms": 5000, "fps": 24, "aspects": ["9:16", "16:9"],
-                   "output_sizes": {"9:16": [720, 1280], "16:9": [1280, 720]},
-                   "image_max_bytes": 20 * 1024 * 1024, "image_max_pixels": 24_000_000,
-                   "width_ratio": [0.15, 0.70], "feather_px": [0, 4], "shadow_opacity": [0, 0.6],
-                   "shadow_blur_px": [0, 40], "background_brightness": [-0.2, 0.2], "brush_px": [2, 80],
-                   "extra_prompt_max": 300},
+        "kinds": list(app.kinds),
+        **app.capabilities_extra(),
     }
 
 
