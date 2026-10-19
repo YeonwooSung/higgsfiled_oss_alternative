@@ -73,8 +73,8 @@ def guide_rgb_frames(geometry_mp4, validity_zip):
 
 
 def _check_guide(run: JobRun, cfg, n: int):
-    guide = source_job(run, run.job.options_json["guide_job_id"], ("camera.guide",), "guide_not_found",
-                       "Guide job not found.")
+    guide = source_job(run, (run.job.options_json or {}).get("guide_job_id"), ("camera.guide",),
+                       "guide_not_found", "Guide job not found.")
     res = guide.result_json or {}
     if res.get("geometry_hash") != geometry_hash(cfg):
         raise StageFailed("guide_stale", "The camera path changed after the guide was rendered.")
@@ -118,6 +118,11 @@ def camera_cinematic(run: JobRun) -> tuple[list[str], dict]:
             raise StageFailed("provider_failed", "The generation service returned no video.")
         side = next((p for p in files if p.suffix == ".json"), None)
         provider = json.loads(side.read_text()) if side else {}
+        gen = probe(mp4)
+        if (gen["width"], gen["height"]) != (model_w, model_h) or gen["frame_count"] < model_n:
+            raise StageFailed("generated_shape_mismatch",
+                              f"The generated video is {gen['width']}x{gen['height']} with {gen['frame_count']} "
+                              f"frames; expected {model_w}x{model_h} with at least {model_n}.")
         run.transition("postprocessing", "postprocess")
         out = run.work_dir / "cinematic.mp4"
         try:

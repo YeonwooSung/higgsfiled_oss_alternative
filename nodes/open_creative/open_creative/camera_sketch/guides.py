@@ -1,7 +1,8 @@
 """Control guides for the cinematic stage: fixed-range depth guide, model-shape pad/crop.
 
-- Depth guide: one ``DepthGuideRange`` per shot (frame 0 valid z, 1st/99th percentile), never
-  per-frame min-max. Inverse-depth mapping, near = white:
+- Depth guide: one ``DepthGuideRange`` per shot, never per-frame min-max. ``from_frames(first,
+  last)``: ``near = min`` of the two frames' 1st-percentile valid z, ``far = max`` of their
+  99th percentiles (the union), so a push-in does not saturate at the end of the shot. Inverse-depth mapping, near = white:
   ``g = clip((1/z - 1/far) / (1/near - 1/far), 0, 1) * 255`` (rounded). Invalid pixels take
   the value of the nearest valid pixel (``DEPTH_FILL_STRATEGY``, recorded in the trace).
 - Model shape: frames are edge-padded (centered; extra row/col goes to the bottom/right) to
@@ -27,26 +28,42 @@ DEPTH_RANGE_PCT = (1.0, 99.0)
 class DepthGuideRange:
     near: float
     far: float
+    basis: str = "frame0"  # which frames the range was taken from (recorded in the trace)
 
     def __post_init__(self) -> None:
         if not (np.isfinite(self.near) and np.isfinite(self.far) and 0 < self.near < self.far):
             raise ValueError("depth guide range needs 0 < near < far")
 
-    @classmethod
-    def from_frame(cls, frame: Frame, pct: tuple[float, float] = DEPTH_RANGE_PCT) -> DepthGuideRange:
-        """Range from ``frame``'s valid z (frame 0 of the shot). A flat frame gets
-        ``far = near * 1.01`` so the mapping stays defined (everything maps to white)."""
+    @staticmethod
+    def _pcts(frame: Frame, pct: tuple[float, float]) -> tuple[float, float] | None:
         z = frame.z[frame.valid & np.isfinite(frame.z)].astype(np.float64)
         if not z.size:
+            return None
+        lo, hi = np.percentile(z, pct)
+        return float(lo), float(hi)
+
+    @classmethod
+    def from_frames(cls, *frames: Frame, pct: tuple[float, float] = DEPTH_RANGE_PCT) -> DepthGuideRange:
+        """Union of the frames' ``pct`` valid-z ranges (``near = min`` of lows, ``far = max`` of
+        highs); frames without valid depth are skipped, none at all raises. A flat result gets
+        ``far = near * 1.01`` so the mapping stays defined (everything maps to white)."""
+        got = [r for r in (cls._pcts(f, pct) for f in frames) if r is not None]
+        if not got:
             raise ValueError("frame has no valid depth")
-        near, far = (float(v) for v in np.percentile(z, pct))
+        near, far = min(r[0] for r in got), max(r[1] for r in got)
         if far <= near * (1.0 + 1e-6):
             far = near * 1.01
-        return cls(near, far)
+        basis = "frame0" if len(frames) == 1 else "union_first_last"
+        return cls(near, far, basis)
+
+    @classmethod
+    def from_frame(cls, frame: Frame, pct: tuple[float, float] = DEPTH_RANGE_PCT) -> DepthGuideRange:
+        """Range from one frame's valid z (``from_frames(frame)``)."""
+        return cls.from_frames(frame, pct=pct)
 
     def to_dict(self) -> dict:
         return {"near": self.near, "far": self.far, "mapping": "inverse_depth_near_white",
-                "percentiles": list(DEPTH_RANGE_PCT), "fill": DEPTH_FILL_STRATEGY}
+                "percentiles": list(DEPTH_RANGE_PCT), "basis": self.basis, "fill": DEPTH_FILL_STRATEGY}
 
 
 def depth_guide(frame: Frame, rng: DepthGuideRange) -> tuple[np.ndarray, str]:

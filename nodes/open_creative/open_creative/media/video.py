@@ -22,10 +22,13 @@ FFPROBE = "ffprobe"
 
 class Mp4Writer:
     """Incremental H.264 yuv420p encoder (RGB uint8 frames in). Several writers can be fed from one
-    streaming pass. Use as a context manager: an exception aborts (kills FFmpeg), a clean exit finalizes."""
+    streaming pass. Use as a context manager: an exception aborts (kills FFmpeg), a clean exit finalizes.
+    ``close()`` / ``abort()`` are idempotent. If FFmpeg exits early, ``write``/``close`` raise
+    ``RuntimeError`` carrying FFmpeg's stderr (not a bare ``BrokenPipeError``)."""
 
     def __init__(self, path: str | Path, w: int, h: int, fps: int = 24, crf: int = 18):
         self.w, self.h, self.count = int(w), int(h), 0
+        self._done = False
         cmd = [
             FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
             "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{self.w}x{self.h}", "-r", str(int(fps)),
@@ -36,20 +39,44 @@ class Mp4Writer:
         ]
         self._proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
 
+    def _failed(self) -> RuntimeError:
+        self._done = True
+        try:
+            self._proc.stdin.close()
+        except OSError:
+            pass
+        err = self._proc.stderr.read()
+        code = self._proc.wait()
+        return RuntimeError(f"ffmpeg encode failed (exit {code}): {err.decode(errors='replace')[-500:]}")
+
     def write(self, f: np.ndarray) -> None:
+        if self._done:
+            raise RuntimeError("writer is closed")
         if f.shape != (self.h, self.w, 3) or f.dtype != np.uint8:
             raise ValueError(f"frame {self.count} has shape {f.shape}, expected {(self.h, self.w, 3)} uint8")
-        self._proc.stdin.write(np.ascontiguousarray(f).tobytes())
+        try:
+            self._proc.stdin.write(np.ascontiguousarray(f).tobytes())
+        except (BrokenPipeError, OSError) as e:
+            raise self._failed() from e
         self.count += 1
 
     def close(self) -> int:
-        self._proc.stdin.close()
+        if self._done:
+            return self.count
+        self._done = True
+        try:
+            self._proc.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass
         err = self._proc.stderr.read()
         if self._proc.wait() != 0:
             raise RuntimeError(f"ffmpeg encode failed: {err.decode(errors='replace')[-500:]}")
         return self.count
 
     def abort(self) -> None:
+        if self._done and self._proc.poll() is not None:
+            return
+        self._done = True
         self._proc.kill()
         self._proc.wait()
 

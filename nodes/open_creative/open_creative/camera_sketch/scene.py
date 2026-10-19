@@ -17,14 +17,19 @@ Conventions (shared with ``camera.py``; the TS port of ``build_mesh`` mirrors th
 - Each cell with corners ``a=(r,c) b=(r,c+1) c=(r+1,c) d=(r+1,c+1)`` is split along the
   b-c diagonal into triangles ``(a, c, b)`` and ``(b, c, d)`` (emitted cell by cell,
   row-major, ``(a,c,b)`` first).
-- A triangle is dropped when any vertex z is non-finite or ``max(z)/min(z) - 1 > threshold``.
+- A triangle with any non-finite vertex z is dropped. A finite triangle with
+  ``max(z)/min(z) - 1 > threshold`` (a depth jump) is NOT connected as a regular face: it goes
+  to ``Mesh.edge_faces`` (same order rules), the fallback "edge layer". ``Mesh.faces`` holds only
+  the regular (connected) faces, so code that ignores ``edge_faces`` sees the cut mesh.
+  The renderer uses edge faces only where no regular face covers a pixel, and marks such a
+  pixel valid only while the face is not stretched (see ``render.rasterize``).
   Vertices are never removed; non-finite z vertices are emitted at the origin.
 """
 
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 import cv2
@@ -112,8 +117,9 @@ def prepare_z(
 class Mesh:
     vertices: np.ndarray  # Nx3 float32
     uv: np.ndarray  # Nx2 float32
-    faces: np.ndarray  # Mx3 int32
+    faces: np.ndarray  # Mx3 int32, regular (connected) faces
     grid_shape: tuple[int, int]  # (grid_h, grid_w)
+    edge_faces: np.ndarray = field(default_factory=lambda: np.zeros((0, 3), np.int32))  # Ex3 int32, depth-jump faces
 
 
 def build_mesh(
@@ -145,7 +151,8 @@ def build_mesh(
     with np.errstate(invalid="ignore", divide="ignore"):
         rel = zt.max(1) / zt.min(1) - 1.0
     keep = finite & (rel <= edge_rel_threshold)
-    return Mesh(vertices, uv, tris[keep].astype(np.int32), (gh, gw))
+    edge = finite & ~keep
+    return Mesh(vertices, uv, tris[keep].astype(np.int32), (gh, gw), tris[edge].astype(np.int32))
 
 
 def rgb_pixel_hash(rgb: np.ndarray) -> str:

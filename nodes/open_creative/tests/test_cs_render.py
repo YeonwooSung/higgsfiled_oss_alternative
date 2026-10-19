@@ -77,6 +77,22 @@ def test_identity_pose_full_frame_has_no_holes(name, stride):
 
 
 @pytest.mark.parametrize("stride", [1, 2])
+@pytest.mark.parametrize("name", ["room", "product", "facade"])
+def test_identity_pose_real_depth_has_no_cracks(name, stride):
+    """Depth-jump faces (edge layer) have stretch 1 at the source pose: the static view is complete."""
+    zn, K, _ = load_scene(name)
+    img = load_rgb(name)
+    H, W = img.shape[:2]
+    mesh = build_mesh(zn, K, stride=stride)
+    assert len(mesh.edge_faces) > 0  # the fixture really has depth discontinuities
+    for out_w, out_h in ((1280, 720), (720, 1280)):
+        K_out = output_intrinsics(K, cover_fit(W, H, out_w, out_h))
+        fr = rasterize(mesh, None, K_out, np.eye(4), out_w, out_h, texture=img)
+        assert hole_ratio(fr) == 0.0, (name, stride, out_w, out_h)
+        assert np.isfinite(fr.z).all()
+
+
+@pytest.mark.parametrize("stride", [1, 2])
 @pytest.mark.parametrize("name,out_w,out_h", [("room", 1280, 720), ("facade", 1280, 720),
                                               ("room", 720, 1280)])
 def test_identity_pose_planar_reproduces_cover_fit(name, out_w, out_h, stride):
@@ -211,6 +227,44 @@ def test_box_in_front_of_plane_from_plus_x_camera():
     assert np.isinf(fr.z[np.ix_(rows, strip)]).all()
     # Holes = this strip + the right border strip uncovered by the slide (~f*tx/2 px).
     assert hole_ratio(fr) >= strip.size * rows.size / (BW * BH)
+    # The stretched edge-layer faces across the strip still wrote their colour (validity False).
+    assert fr.rgb[np.ix_(rows, strip)].any()
+
+
+def test_edge_layer_never_overwrites_regular_faces():
+    K, _z, img, mesh = box_scene()
+    regular_only = type(mesh)(mesh.vertices, mesh.uv, mesh.faces, mesh.grid_shape)
+    col = vertex_colors(mesh, img)
+    for T in (np.eye(4), pose(np.eye(3), [0.1, 0.0, 0.0]), pose(np.eye(3), [-0.06, 0.04, 0.2])):
+        full = rasterize(mesh, col, K, T, BW, BH)
+        reg = rasterize(regular_only, col, K, T, BW, BH)
+        cov = reg.valid
+        assert np.array_equal(full.rgb[cov], reg.rgb[cov]) and np.array_equal(full.z[cov], reg.z[cov])
+        assert full.valid[cov].all() and full.valid.sum() >= reg.valid.sum()
+        assert np.isinf(full.z[~full.valid]).all()
+
+
+def test_edge_layer_stretch_rule_threshold():
+    """A pure depth step seen after a slide: edge faces at the step are valid at small motion
+    (stretch <= 1.5), invalid once the strip they cover is wider than 1.5x their source width."""
+    from open_creative.camera_sketch.render import STRETCH_VALID
+
+    assert STRETCH_VALID == 1.5
+    K = intrinsics(50.0, 64, 36)
+    z = np.full((36, 64), 2.0, np.float32)
+    z[:, 32:] = 1.0  # right half nearer
+    mesh = build_mesh(z, K, stride=1)
+    col = np.full((len(mesh.vertices), 3), 100, np.uint8)
+    assert rasterize(mesh, col, K, np.eye(4), 64, 36).valid.all()
+    f = K[0, 0]
+    # edge cells are 1 px wide; moving the camera -x spreads near (z=1) vs far (z=2) by f*tx/2 px
+    small = rasterize(mesh, col, K, pose(np.eye(3), [-0.2 / f, 0.0, 0.0]), 64, 36)  # 1 px -> 1.1 px
+    edge = rasterize(mesh, col, K, pose(np.eye(3), [-1.0 / f, 0.0, 0.0]), 64, 36)  # 1 px -> 1.5 px
+    big = rasterize(mesh, col, K, pose(np.eye(3), [-8.0 / f, 0.0, 0.0]), 64, 36)  # 1 px -> 5 px
+    assert small.valid[:, 2:-2].all() and edge.valid[:, 2:-2].all()
+    assert not big.valid[5:-5, 35:40].any()  # exposed strip: stretched edge faces are invalid
+    assert big.valid[5:-5, 4:34].all() and big.valid[5:-5, 40:].all()
+    assert big.rgb[5:-5, 35:40].any()  # colour still written
 
 
 def test_triangles_crossing_near_are_dropped_and_far_backdrop_renders():

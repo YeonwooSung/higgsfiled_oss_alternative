@@ -120,3 +120,15 @@ def test_download_url_sets_attachment_filename(app, session_client, project):
     body = session_client.get(f"/api/v1/assets/{aid}", params={"download": "true"}).json()
     r = session_client.get(body["download_url"])
     assert r.headers["content-disposition"] == 'attachment; filename="product-lock-product.png"'
+
+
+def test_download_filename_uses_the_projects_app_slug(app, session_client):
+    cam = session_client.post("/api/v1/projects", json={"app_slug": "camera-sketch", "title": "Cam"}).json()
+    data = png_bytes()
+    aid = upload(session_client, cam, data, role="scene")
+    with app.state.db() as db:
+        db.get(Asset, uuid.UUID(aid)).state = "ready"
+        db.commit()
+    body = session_client.get(f"/api/v1/assets/{aid}", params={"download": "true"}).json()
+    r = session_client.get(body["download_url"])
+    assert r.headers["content-disposition"] == 'attachment; filename="camera-sketch-scene.png"'

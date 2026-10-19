@@ -58,7 +58,12 @@ def revision_config(run: JobRun, revision: int):
 
 
 def source_job(run: JobRun, job_id, kinds: tuple[str, ...], code: str, message: str) -> Job:
-    job = run.db.get(Job, uuid.UUID(str(job_id)))
+    """A succeeded job of this project and one of ``kinds``; a missing/malformed id is the same failure."""
+    try:
+        jid = uuid.UUID(str(job_id)) if job_id else None
+    except ValueError:
+        jid = None
+    job = run.db.get(Job, jid) if jid else None
     if job is None or job.project_id != run.project.id or job.kind not in kinds or job.state != "succeeded":
         raise StageFailed(code, message)
     return job

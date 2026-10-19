@@ -82,3 +82,20 @@ def probe_fails(p) -> bool:
     except Exception:  # noqa: BLE001
         return True
     return False
+
+
+def test_mp4_writer_close_is_idempotent(tmp_path):
+    w = Mp4Writer(tmp_path / "a.mp4", 64, 32)
+    w.write(np.zeros((32, 64, 3), np.uint8))
+    assert w.close() == 1 and w.close() == 1
+    w.abort()  # no-op after close
+
+
+def test_mp4_writer_ffmpeg_dies_early_raises_with_stderr(tmp_path):
+    w = Mp4Writer(tmp_path / "missing-dir" / "a.mp4", 64, 32)  # ffmpeg cannot open the output
+    with pytest.raises(RuntimeError) as e:
+        for _ in range(500):
+            w.write(np.zeros((32, 64, 3), np.uint8))
+        w.close()
+    assert "ffmpeg encode failed" in str(e.value) and "missing-dir" in str(e.value)
+    assert w.close() == w.count  # idempotent after failure

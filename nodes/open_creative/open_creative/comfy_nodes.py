@@ -17,7 +17,7 @@ from .camera_sketch.camera import intrinsics
 from .camera_sketch.guides import DepthGuideRange, depth_guide
 from .camera_sketch.path import SceneInfo, compile_path
 from .camera_sketch.qa import motion_report
-from .camera_sketch.render import hole_ratio, render_sequence
+from .camera_sketch.render import hole_ratio, rasterize, render_sequence
 from .camera_sketch.scene import (
     DAV2_SMALL, DepthConvention, build_mesh, decode_depth_png16, depth_to_z, encode_depth_png16, prepare_z,
 )
@@ -324,16 +324,19 @@ class CSRenderGuides:
             raise ValueError(f"path has {n} frames; at most {CS_MAX_FRAMES} can be rendered as one batch")
         rgb = np.empty((n, out_h, out_w, 3), np.float32)
         gd = np.empty((n, out_h, out_w, 3), np.float32)
-        rng, holes = None, []
+        K_out = np.asarray(p["K"], float)
+        ends = [rasterize(mesh, None, K_out, np.asarray(p["samples"][i]["T_cw"], float), out_w, out_h,
+                          texture=tex) for i in (0, n - 1)]
+        rng, holes = DepthGuideRange.from_frames(*ends), []  # shot range: union of first and last frame
         for i, fr in enumerate(render_sequence(mesh, None, compiled, out_w, out_h, texture=tex)):
-            rng = rng or DepthGuideRange.from_frame(fr)
             g, fill = depth_guide(fr, rng)
             rgb[i] = fr.rgb.astype(np.float32) / 255.0
             gd[i] = (g.astype(np.float32) / 255.0)[..., None]
             holes.append(hole_ratio(fr))
         manifest = {"frames": n, "width": out_w, "height": out_h, "depth_guide": rng.to_dict(),
                     "fill": fill, "hole_ratio_max": float(max(holes)), "mesh_stride": int(mesh_stride),
-                    "holes": "unfilled frames: invalid pixels are black (0,0,0)"}
+                    "holes": "unfilled frames: uncovered pixels are black (0,0,0); stretched edge-layer "
+                             "pixels keep their colour but are invalid (render.STRETCH_VALID)"}
         return _out(rgb), _out(gd), json.dumps(manifest)
 
 

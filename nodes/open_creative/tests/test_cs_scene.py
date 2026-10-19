@@ -43,7 +43,7 @@ def test_constant_and_zero_depth_finite_planar_all_faces_kept():
         assert np.isfinite(zn).all() and np.allclose(zn, 1.0, atol=1e-4)
         m = build_mesh(zn, K, stride=4)
         gh, gw = m.grid_shape
-        assert len(m.faces) == 2 * (gh - 1) * (gw - 1)
+        assert len(m.faces) == 2 * (gh - 1) * (gw - 1) and len(m.edge_faces) == 0
         assert np.allclose(m.vertices[:, 2], 1.0, atol=1e-4)
 
 
@@ -69,6 +69,27 @@ def test_box_on_plane_cuts_faces_along_boundary():
     xs = (m.uv[m.faces][:, :, 0] * W)
     inbox = (ys > 30) & (ys < 60) & (xs > 60) & (xs < 110)
     assert not (inbox.any(1) & ~inbox.all(1) & (ratio > 1.5)).any()
+
+
+def test_depth_jump_faces_go_to_edge_layer_partition():
+    z = depth_to_z(box_depth(box_d=1.0, bg_d=0.25), DAV2_SMALL)
+    m = build_mesh(z / np.median(z), K, stride=2)
+    gh, gw = m.grid_shape
+    assert m.edge_faces.dtype == np.int32 and m.edge_faces.shape[1] == 3
+    assert len(m.faces) + len(m.edge_faces) == 2 * (gh - 1) * (gw - 1)  # all finite -> nothing dropped
+    zv = m.vertices[:, 2]
+    ratio = zv[m.edge_faces].max(1) / zv[m.edge_faces].min(1)
+    assert len(m.edge_faces) > 0 and (ratio - 1 > 0.08).all()
+    assert not ({tuple(f) for f in m.faces.tolist()} & {tuple(f) for f in m.edge_faces.tolist()})
+
+
+def test_non_finite_faces_are_dropped_not_edge():
+    z = np.full((H, W), 2.0, np.float32)
+    z[:, 80:] = np.nan
+    m = build_mesh(z, K, stride=4)
+    for faces in (m.faces, m.edge_faces):
+        assert (m.uv[faces][:, :, 0] * W < 80 + 4).all() if len(faces) else True
+    assert len(m.edge_faces) == 0
 
 
 def test_mesh_deterministic_backprojection_and_uv():

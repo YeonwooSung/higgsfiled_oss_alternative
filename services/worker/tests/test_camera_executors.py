@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import time
+import uuid
 import zipfile
 from datetime import timedelta
 from pathlib import Path
@@ -22,7 +23,7 @@ from oc_api.models import Session as SessionRow
 from oc_worker.comfy.mock import MockRunner
 from oc_worker.main import run_once
 from open_creative.camera_sketch.scene import decode_depth_png16
-from open_creative.media.video import decode_frames, probe
+from open_creative.media.video import decode_frames, encode_mp4, probe
 from test_executors import upload_raw
 from worker_helpers import add_job, load, make_ctx, set_revision_config
 
@@ -152,7 +153,10 @@ def test_analyze_stores_depth_preview_and_never_patches_config(ctx, db_factory, 
 
 
 def test_guide_static_path_identical_frames_no_holes(ctx, db_factory, storage, cam_project):
-    _, _, cfg = prepared(ctx, db_factory, storage, cam_project, smooth_scene_png())
+    """Real fixture with depth discontinuities: the edge layer keeps the static view crack-free."""
+    sc = SCENES["room"]
+    _, _, cfg = prepared(ctx, db_factory, storage, cam_project, (FIX / sc["image"]).read_bytes(),
+                         target=tuple(sc["target_uv01"]))
     guide = run_kind(ctx, db_factory, cam_project, "camera.guide", {}, 2, uses_gpu=False)
     r = guide.result_json
     assert r["frame_count"] == 120 and r["mode"] == "geometry"
@@ -174,6 +178,7 @@ def test_guide_static_path_identical_frames_no_holes(ctx, db_factory, storage, c
     assert dep.role == "guide_depth_video"
     assert_output_contract(storage._path(dep.object_key))
     assert dep.meta_json["depth_guide"]["mapping"] == "inverse_depth_near_white"
+    assert dep.meta_json["depth_guide"]["basis"] == "union_first_last"
 
     val = load(db_factory, Asset, r["guide_validity_asset_id"])
     assert val.role == "guide_validity" and val.mime == "application/zip"
@@ -292,6 +297,48 @@ def _fake_guide(db_factory, project, cfg, revision, result):
         db.add(job)
         db.commit()
         return job.id
+
+
+def test_cinematic_missing_guide_id_is_a_stage_failure(ctx, db_factory, storage, cam_project):
+    for opts in ({}, {"guide_job_id": "not-a-uuid"}, {"guide_job_id": str(uuid.uuid4())}):
+        job = run_kind(ctx, db_factory, cam_project, "camera.cinematic", opts, 1, expect="failed")
+        assert job.error_code == "guide_not_found"
+
+
+def test_cinematic_generated_shape_mismatch(settings, db_factory, storage, mock_root, cam_project, tmp_path):
+    """A provider video of the wrong model shape is rejected before crop/encode (resume path: no resubmit)."""
+    cfg = default_config("mock_v1").model_dump(mode="json")
+    with db_factory() as db:
+        ids = []
+        for role, mime in (("scene", "image/png"), ("geometry_video", "video/mp4")):
+            a = Asset(project_id=cam_project.id, role=role, state="ready", object_key=f"x/{role}", mime=mime)
+            db.add(a)
+            db.flush()
+            ids.append(str(a.id))
+        db.commit()
+    cfg["scene_asset_id"] = ids[0]
+    set_revision_config(db_factory, cam_project, cfg, revision=1)
+    h = geometry_hash(CameraSketchConfig.model_validate(cfg))
+    gid = _fake_guide(db_factory, cam_project, cfg, 1, {"frame_count": 120, "geometry_hash": h,
+                                                        "geometry_video_asset_id": ids[1]})
+    runner = MockRunner(mock_root)
+    small = tmp_path / "g.mp4"
+    encode_mp4(iter([np.full((48, 64, 3), 100, np.uint8)] * 4), small, 64, 48)
+    ref = tmp_path / "r.png"
+    Image.new("RGB", (64, 48)).save(ref)
+    pjid = runner.submit("camera_cinematic_v1", {"guide_rgb": str(small), "guide_depth": str(small),
+                                                  "reference": str(ref), "prompt": "p", "seed": 1, "width": 64,
+                                                  "height": 48, "frames": 4, "control_strength": 0.0}, "pre")
+    jid = add_job(db_factory, cam_project, kind="camera.cinematic", options={"guide_job_id": str(gid)}, revision=1)
+    with db_factory() as db:
+        db.add(JobStage(job_id=jid, stage_name="generate", state="running", attempt=1, provider_job_id=pjid,
+                        submission_key=f"{jid}:generate:1"))
+        db.commit()
+    before = runner.submit_count
+    assert run_once(make_ctx(settings, db_factory, storage, runner))
+    job = load(db_factory, Job, jid)
+    assert job.state == "failed" and job.error_code == "generated_shape_mismatch"
+    assert runner.submit_count == before
 
 
 def test_cinematic_rejects_stale_guide(ctx, db_factory, storage, cam_project):

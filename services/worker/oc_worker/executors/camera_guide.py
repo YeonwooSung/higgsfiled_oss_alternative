@@ -4,7 +4,8 @@ fixed-range depth-guide MP4 and the 1-bit validity PNGs frame by frame (never 12
 - Geometry MP4: rendered RGB with holes <= 4 px inpainted (``fill_small_holes``); larger holes stay as
   rendered (black), never stretched. This is the deterministic "Path render".
 - Validity: the post-fill valid mask (small inpainted holes count as valid; large holes are invalid).
-- Depth guide: one ``DepthGuideRange`` for the whole shot (from frame 0), invalid pixels nearest-valid filled.
+- Depth guide: one ``DepthGuideRange`` for the whole shot (union of the first and last frame's 1st/99th
+  percentile valid z), invalid pixels nearest-valid filled.
 - The cinematic guide RGB reuses the Geometry frames; the cinematic stage fills the remaining invalid pixels
   (validity mask) with the nearest valid pixel (``GUIDE_RGB_FILL``).
 """
@@ -30,6 +31,7 @@ from open_creative.camera_sketch.path import compile_path
 from open_creative.camera_sketch.render import (
     fill_small_holes,
     hole_ratio,
+    rasterize,
     render_sequence,
     target_visibility,
 )
@@ -116,7 +118,17 @@ def camera_guide(run: JobRun) -> tuple[list[str], dict]:
         patch = target_patch_points(extras.z_norm, extras.K_src, info.target_uv01)
         K_out = np.asarray(compiled.K, float)
         geo_mp4, dep_mp4, val_zip = (run.work_dir / x for x in ("geometry.mp4", "guide_depth.mp4", "validity.zip"))
-        holes, vis, digests, rng = [], [], [], None
+        holes, vis, digests = [], [], []
+
+        def pose_frame(i: int):
+            T = np.asarray(compiled.samples[i]["T_cw"], float)
+            return fill_small_holes(rasterize(mesh, None, K_out, T, out_w, out_h, texture=extras.scene_rgb),
+                                    SMALL_HOLE_PX)[0]
+
+        try:  # one range for the whole shot: union of the first and last frame (push-ins do not saturate)
+            rng = DepthGuideRange.from_frames(pose_frame(0), pose_frame(len(compiled.samples) - 1))
+        except ValueError as e:
+            raise StageFailed("guide_empty", "The shot shows no scene geometry.") from e
         with Mp4Writer(geo_mp4, out_w, out_h, fps=cfg.output.fps) as geo_w, \
                 Mp4Writer(dep_mp4, out_w, out_h, fps=cfg.output.fps) as dep_w, \
                 zipfile.ZipFile(val_zip, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -125,11 +137,6 @@ def camera_guide(run: JobRun) -> tuple[list[str], dict]:
                 if i % 5 == 0:
                     run.heartbeat()
                 fr, _ = fill_small_holes(raw, SMALL_HOLE_PX)
-                if rng is None:
-                    try:
-                        rng = DepthGuideRange.from_frame(fr)
-                    except ValueError as e:
-                        raise StageFailed("guide_empty", "The first frame shows no scene geometry.") from e
                 g, _ = depth_guide(fr, rng)
                 geo_w.write(fr.rgb)
                 dep_w.write(np.repeat(g[..., None], 3, axis=2))

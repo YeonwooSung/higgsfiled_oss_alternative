@@ -54,7 +54,9 @@ def test_depth_guide_fixed_range_same_point_same_value():
     hole[[0, -1], :] = False
     hole[:, [0, -1]] = False
     assert hole.any()
-    assert set(np.unique(g1[hole]).tolist()) <= {0, 85, 255}
+    # (valid pixels are the three levels plus valid edge-layer slivers along the box's horizontal edges)
+    assert set(np.unique(g1[hole]).tolist()) <= set(np.unique(g1[f119.valid]).tolist())
+    assert {0, 85, 255} <= set(np.unique(g1[f119.valid]).tolist())
 
 
 def test_depth_guide_range_degenerate_and_empty():
@@ -69,6 +71,27 @@ def test_depth_guide_range_degenerate_and_empty():
         DepthGuideRange.from_frame(empty)
     with pytest.raises(ValueError):
         DepthGuideRange(2.0, 1.0)
+
+
+def test_depth_guide_range_union_of_first_and_last_frame_push_in():
+    """A push-in brings everything closer: the last frame's near z is below frame 0's. The union
+    range keeps the last frame from saturating at white."""
+    K, mesh, img = three_level_scene()
+    col = vertex_colors(mesh, img)
+    f0 = rasterize(mesh, col, K, np.eye(4), W, H)
+    f_last = rasterize(mesh, col, K, pose(np.eye(3), [0.0, 0.0, 0.5]), W, H)  # push 0.5
+    r0 = DepthGuideRange.from_frame(f0)
+    ru = DepthGuideRange.from_frames(f0, f_last)
+    assert r0.basis == "frame0" and ru.basis == "union_first_last"
+    assert ru.near == pytest.approx(0.5, abs=1e-4) and ru.far == pytest.approx(4.0, abs=1e-4)
+    assert ru.to_dict()["basis"] == "union_first_last"
+    box = f_last.valid & (f_last.z < 0.6)
+    assert (depth_guide(f_last, r0)[0][box] == 255).all()  # frame-0 range saturates the pushed box
+    g = depth_guide(f_last, ru)[0]
+    assert (g[box] == 255).all() and (depth_guide(f0, ru)[0][f0.valid & (f0.z < 1.1)] < 255).all()
+    with pytest.raises(ValueError):
+        DepthGuideRange.from_frames(Frame(f0.rgb, np.full(f0.z.shape, np.inf, np.float32),
+                                          np.zeros(f0.z.shape, bool)))
 
 
 def _frame(i: int, h: int, w: int, ch: int | None) -> np.ndarray:

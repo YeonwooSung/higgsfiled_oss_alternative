@@ -181,7 +181,7 @@ def _recipe(run: JobRun, src: Job, guide: Job) -> str:
 
 def camera_export(run: JobRun) -> tuple[list[str], dict]:
     opts = run.job.options_json
-    src = source_job(run, opts["source_job_id"], tuple(CAMERA_APP.export_formats), "render_not_found",
+    src = source_job(run, opts.get("source_job_id"), tuple(CAMERA_APP.export_formats), "render_not_found",
                      "Render job not found.")
     fmt = opts["format"]
     if fmt not in CAMERA_APP.export_formats[src.kind]:
