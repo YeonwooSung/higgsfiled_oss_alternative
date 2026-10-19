@@ -1,0 +1,10 @@
+{
+  "name": "open-creative-apps",
+  "private": true,
+  "packageManager": "pnpm@10.26.1",
+  "scripts": {
+    "dev:product-lock": "pnpm --filter @oc/product-lock dev",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck"
+  }
+}

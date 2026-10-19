@@ -1,0 +1,13 @@
+{
+  "name": "@oc/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "gen:openapi": "cd ../.. && uv run python -c \"import json; from oc_api.app import create_app; from oc_api.settings import Settings; print(json.dumps(create_app(Settings(database_url='sqlite://'), create_tables=False).openapi(), indent=2))\" > packages/contracts/openapi.json",
+    "typecheck": "tsc --noEmit -p .",
+    "test": "echo 'no tests'"
+  }
+}
