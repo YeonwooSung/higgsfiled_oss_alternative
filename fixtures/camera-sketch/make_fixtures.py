@@ -4,7 +4,8 @@ Run: uv run python fixtures/camera-sketch/make_fixtures.py
 Writes per scene: <name>.png (RGB), <name>.depth.png (16-bit GT inverse depth, near = bright)
 and scenes.json. Scenes are textured (noise/stripes/grids) so feature tracking has corners to
 follow. Fixed seeds -> byte-identical outputs. The PNGs are also copied to
-apps/camera-sketch/public/samples/. (parity.v1.json is added by a later task.)
+apps/camera-sketch/public/samples/. Finally make_parity.py writes parity.v1.json (Python -> TS
+camera-math parity fixture; it only reads scenes.json).
 """
 
 import hashlib
@@ -13,9 +14,15 @@ import shutil
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
 
-from open_creative.camera_sketch.scene import DAV2_SMALL, encode_depth_png16, rgb_pixel_hash
+# make_parity is the sibling script (this directory is on sys.path when run as a script).
+from make_parity import main as make_parity
+from open_creative.camera_sketch.scene import (
+    DAV2_SMALL,
+    encode_depth_png16,
+    rgb_pixel_hash,
+)
+from PIL import Image
 
 OUT = Path(__file__).parent
 SAMPLES = OUT.parents[1] / "apps" / "camera-sketch" / "public" / "samples"
@@ -141,6 +148,7 @@ def main():
         }
         shutil.copyfile(png, SAMPLES / png.name)
     (OUT / "scenes.json").write_text(json.dumps(meta, indent=2) + "\n")
+    make_parity()
 
 
 if __name__ == "__main__":
