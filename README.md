@@ -91,5 +91,7 @@ gives the same composite and the same integrity report.
   the UI reports that separately as a diagnostic ("Video compression check").
 - Generated backgrounds are not bit-exact across GPUs or library versions; the recipe reproduces the
   same graph, models, settings and inputs.
+- Deleting a project removes its storage and asset rows once its jobs have stopped. Provider-side artifacts
+  (open-weights profile) are recorded as `cleanup_tasks(target=provider)` but not deleted automatically yet.
 - No prices are hard-coded. Estimates show reserved GPU-second caps and "price unknown".
 - Code is MIT. Model weights keep their own licenses (LTX-2.3 uses a community license).

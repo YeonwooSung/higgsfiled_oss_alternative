@@ -77,14 +77,19 @@ class ComfySdkRunner:
             validate_values(manifest, bindings)
         except (BindingError, FileNotFoundError) as e:
             raise ProviderRejected(str(e)) from e
-        wf = self.client.workflows.from_json(graph)
-        for name, value in bindings.items():
-            spec = manifest["bindings"][name]
-            if spec["type"] == "image":
-                value = self.client.assets.from_file(value)
-            elif spec["type"] == "json":
-                value = json.dumps(value, separators=(",", ":"))
-            wf.set_input(str(spec["node_id"]), spec["input"], value)
+        try:  # nothing has been sent to /jobs yet: network errors are safe to retry
+            wf = self.client.workflows.from_json(graph)
+            for name, value in bindings.items():
+                spec = manifest["bindings"][name]
+                if spec["type"] == "image":
+                    value = self.client.assets.from_file(value)
+                elif spec["type"] == "json":
+                    value = json.dumps(value, separators=(",", ":"))
+                wf.set_input(str(spec["node_id"]), spec["input"], value)
+        except httpx.HTTPError as e:
+            raise ProviderUnavailable(str(e)) from e
+        except Exception as e:  # noqa: BLE001 - a graph/input the SDK refuses is deterministic
+            raise ProviderRejected(str(e)) from e
         try:
             job = self.client.submit(wf, idempotency_key=submission_key)
         except Exception as e:  # noqa: BLE001 - every failure is classified

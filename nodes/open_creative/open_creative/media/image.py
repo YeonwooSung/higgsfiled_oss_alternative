@@ -100,11 +100,16 @@ def mask_to_png_bytes(mask: np.ndarray) -> bytes:
     return buf.getvalue()
 
 
-def load_mask_png(data: bytes) -> np.ndarray:
-    """Load a grayscale (or RGBA, using alpha) mask PNG as float32 [0,1]."""
-    img = Image.open(io.BytesIO(data))
+def load_mask_png(data: bytes, max_pixels: int = MAX_IMAGE_PIXELS) -> np.ndarray:
+    """Load a grayscale (or RGBA, using alpha) mask PNG as float32 [0,1]. Size is checked before decoding."""
+    try:
+        img = Image.open(io.BytesIO(data))
+    except (Image.UnidentifiedImageError, OSError):
+        raise MediaError("unsupported_format", "mask must be PNG") from None
     if img.format != "PNG":
         raise MediaError("unsupported_format", "mask must be PNG")
+    if img.width * img.height > max_pixels:
+        raise MediaError("too_many_pixels", "mask has too many pixels")
     if img.mode in ("RGBA", "LA"):
         arr = np.asarray(img.getchannel("A"))
     else:

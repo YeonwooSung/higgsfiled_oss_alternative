@@ -7,6 +7,7 @@ import { api } from "../api/client";
 import { maskToPngBlob } from "../hooks/assets";
 import { useI18n } from "../i18n";
 import { BRUSH_MAX, BRUSH_MIN } from "../model/mask";
+import { waitForJob } from "../model/waitForJob";
 import { useEditor, type Tool } from "../state/editorStore";
 import { startJob } from "../state/jobs";
 import { useMask } from "../state/maskStore";
@@ -55,12 +56,7 @@ function Tools() {
     setMessage(null);
     try {
       const { asset, inspect_job_id } = await api.uploadAsset(project!.id, "mask", await maskToPngBlob(mask.buffer), "mask.png");
-      for (let i = 0; i < 40; i++) {
-        const j = await api.getJob(inspect_job_id);
-        if (j.state === "succeeded") break;
-        if (j.state === "failed") throw new Error(j.error?.message);
-        await new Promise((r) => setTimeout(r, 300));
-      }
+      await waitForJob((id) => api.getJob(id), inspect_job_id); // keeps the strokes if inspection fails
       mask.markClean();
       update((c) => { c.mask_asset_id = asset.id; });
       await useEditor.getState().refresh();

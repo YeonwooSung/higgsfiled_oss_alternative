@@ -72,10 +72,10 @@ class LocalStorage:
         try:
             body, sig = token.split(".", 1)
             expected = _b64(hmac.new(self._secret, body.encode(), hashlib.sha256).digest())
-            if not hmac.compare_digest(sig, expected):
+            if not hmac.compare_digest(sig.encode(), expected.encode()):
                 raise TokenError("bad signature")
             claims = json.loads(_unb64(body))
-        except (ValueError, json.JSONDecodeError) as e:
+        except (ValueError, TypeError, UnicodeError, json.JSONDecodeError) as e:
             raise TokenError("malformed token") from e
         if claims.get("op") != op or claims.get("exp", 0) < time.time():
             raise TokenError("expired or wrong operation")

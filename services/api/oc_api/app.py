@@ -8,9 +8,13 @@ from .routes import assets, exports, jobs, projects, sessions, shares, storage
 from .storage import make_storage
 from .settings import Settings
 
+KNOWN_DEFAULT_SECRETS = {"dev-only-change-me", "change-me-to-a-long-random-string"}
+
 
 def create_app(settings: Settings | None = None, *, create_tables: bool | None = None) -> FastAPI:
     settings = settings or Settings()
+    if settings.cookie_secure and settings.signing_secret in KNOWN_DEFAULT_SECRETS:
+        raise RuntimeError("Set OC_SIGNING_SECRET to a random value; the default would make signed URLs forgeable.")
     app = FastAPI(title="Open Creative Apps API", version="0.1.0", openapi_url="/api/v1/openapi.json",
                   docs_url="/api/v1/docs")
     app.state.settings = settings

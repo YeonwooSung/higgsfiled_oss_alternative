@@ -65,8 +65,12 @@ def _product(run: JobRun, asset, data: bytes):
 def _mask(run: JobRun, asset, data: bytes):
     from PIL import Image
 
+    if len(data) > 20 * 1024 * 1024:
+        raise MediaError("too_large")
     try:
         m = load_mask_png(data)
+    except MediaError:
+        raise
     except Exception as e:  # noqa: BLE001 - anything undecodable is rejected
         raise MediaError("unsupported_format") from e
     with Image.open(io.BytesIO(data)) as im:

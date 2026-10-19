@@ -253,6 +253,8 @@ class JobRun:
 
     def finish(self, state: str, *, error_code: str | None = None, message: str | None = None,
                outputs: list[str] | None = None, result: dict | None = None) -> None:
+        # A worker that stalled past its lease must not overwrite the new owner's job.
+        self.heartbeat(force=True)
         self.job.state = state
         self.job.error_code, self.job.error_message = error_code, message
         if outputs is not None:

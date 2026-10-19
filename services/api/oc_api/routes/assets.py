@@ -80,9 +80,12 @@ def complete_asset(asset_id: str, body: AssetComplete, request: Request, db: DbS
     storage = request.app.state.storage
     if not storage.exists(asset.object_key):
         raise ApiError(409, "upload_missing", "No uploaded bytes found for this asset.", retryable=True)
+    size = storage.size(asset.object_key)
+    if size > MAX_IMAGE_BYTES or size > (asset.bytes or MAX_IMAGE_BYTES):
+        # Presigned S3 PUTs cannot enforce the declared size; check before reading anything.
+        storage.delete_prefix(asset.object_key)
+        raise ApiError(413, "too_large", "Upload is larger than declared (images must be 20 MB or smaller).")
     data = storage.get_bytes(asset.object_key)
-    if len(data) > MAX_IMAGE_BYTES:
-        raise ApiError(413, "too_large", "Images must be 20 MB or smaller.")
     digest = hashlib.sha256(data).hexdigest()
     if digest != body.sha256.lower():
         raise ApiError(422, "hash_mismatch", "Uploaded bytes do not match the provided sha256.", field="sha256")

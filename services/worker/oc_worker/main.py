@@ -42,6 +42,14 @@ def run_once(ctx: WorkerContext) -> bool:
 
 
 def _execute(run: JobRun) -> None:
+    try:
+        _run_and_finish(run)
+    except LeaseLost:
+        run.db.rollback()
+        log.warning("lease lost job=%s; another worker owns it", run.job.id)
+
+
+def _run_and_finish(run: JobRun) -> None:
     job = run.job
     executor = EXECUTORS.get(job.kind)
     try:
@@ -65,8 +73,7 @@ def _execute(run: JobRun) -> None:
         run.db.commit()
         run.finish("failed", error_code=e.code, message=e.message)
     except LeaseLost:
-        run.db.rollback()
-        log.warning("lease lost job=%s; another worker owns it", job.id)
+        raise
     except Exception:  # noqa: BLE001
         log.exception("job %s crashed", job.id)
         run.db.rollback()

@@ -20,7 +20,7 @@ from ..apps_registry import APP_KINDS, validate_config
 from ..db import utcnow
 from ..deps import current_session, get_db, owned_project, parse_uuid
 from ..errors import ApiError
-from ..jobs_service import add_event
+from ..jobs_service import add_event, request_cancel
 from ..models import (ACTIVE_JOB_STATES, TERMINAL_JOB_STATES, IdempotencyRecord, Job, JobCost, JobEvent,
                       JobStage, Project, ProjectRevision)
 from ..models import Session as SessionRow
@@ -190,20 +190,13 @@ def get_job(job_id: str, db: DbSession = Depends(get_db), session: SessionRow = 
 @router.post("/jobs/{job_id}/cancel", status_code=202)
 def cancel_job(job_id: str, db: DbSession = Depends(get_db), session: SessionRow = Depends(current_session)):
     job = _owned_job(job_id, db, session)
-    if job.state in TERMINAL_JOB_STATES:
+    state = request_cancel(db, job.id)
+    if state is None:
+        db.rollback()
+        db.refresh(job)
         raise ApiError(409, "already_finished", f"Job already {job.state}.")
-    now = utcnow()
-    job.cancellation_requested_at = job.cancellation_requested_at or now
-    if job.state == "queued" and job.lease_owner is None:
-        # Never claimed: nothing reached a provider, so nothing was spent.
-        job.state, job.finished_at = "cancelled", now
-        for cost in db.scalars(select(JobCost).where(JobCost.job_id == job.id)):
-            cost.actual_units_nullable, cost.settled_at = 0, now
-        add_event(db, job, "state", {"state": "cancelled"})
-    elif job.state != "cancel_requested":
-        job.state = "cancel_requested"
-        add_event(db, job, "state", {"state": "cancel_requested"})
     db.commit()
+    db.refresh(job)
     return job_out(job)
 
 
