@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Job } from "@oc/contracts";
-import { waitForJob } from "../src/model/waitForJob";
+import { waitForJob } from "../src/waitForJob";
 
 const j = (state: Job["state"]) => ({ id: "j", state, error: null } as unknown as Job);
 const noSleep = async () => {};

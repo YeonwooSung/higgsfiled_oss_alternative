@@ -7,7 +7,8 @@
 export type Uuid = string;
 export type Aspect = "9:16" | "16:9";
 export type Motion = "subtle" | "balanced";
-export type JobKind =
+export type AppSlug = "product-lock" | "camera-sketch";
+export type ProductLockJobKind =
   | "product.segment"
   | "product.background"
   | "product.background_video"
@@ -15,6 +16,8 @@ export type JobKind =
   | "product.inspect"
   | "asset.inspect"
   | "export";
+export type CameraJobKind = "camera.analyze" | "camera.guide" | "camera.cinematic" | "camera.export" | "asset.inspect";
+export type JobKind = ProductLockJobKind | CameraJobKind;
 export type JobState =
   | "queued"
   | "preparing"
@@ -70,7 +73,19 @@ export type AssetRole =
   | "integrity"
   | "inspection"
   | "cutout_preview"
-  | "recipe";
+  | "recipe"
+  // Camera Sketch
+  | "scene"
+  | "depth"
+  | "depth_preview"
+  | "path_artifact"
+  | "geometry_video"
+  | "guide_depth_video"
+  | "guide_validity"
+  | "cinematic_video"
+  | "motion_report"
+  | "path_export"
+  | "guides_export";
 
 export interface Asset {
   id: Uuid;
@@ -94,7 +109,7 @@ export interface Asset {
   download_url?: string;
 }
 
-export interface Job {
+export interface Job<R = Record<string, unknown> | null> {
   id: Uuid;
   project_id: Uuid;
   kind: JobKind;
@@ -107,22 +122,24 @@ export interface Job {
   cancellation_requested: boolean;
   error: { code: string; message: string } | null;
   output_asset_ids: Uuid[];
-  result: Record<string, unknown> | null;
+  result: R;
   created_at: string;
   finished_at: string | null;
   stages?: { name: string; state: string; attempt: number; error_code: string | null }[];
 }
 
-export interface Project {
+export interface ProjectOf<S extends AppSlug, C> {
   id: Uuid;
-  app_slug: "product-lock";
+  app_slug: S;
   title: string;
   current_revision: number;
-  config: ProductLockConfig;
+  config: C;
   assets: Asset[];
   recent_jobs: Job[];
   created_at: string;
 }
+export type Project = ProjectOf<"product-lock", ProductLockConfig>;
+export type CameraSketchProject = ProjectOf<"camera-sketch", CameraSketchConfig>;
 
 export interface Preset {
   id: string;
@@ -200,3 +217,231 @@ export interface Integrity {
 export interface ApiErrorBody {
   error: { code: string; message: string; field?: string; retryable: boolean; request_id: string; details?: Record<string, unknown> };
 }
+
+// ---- Camera Sketch (mirrors services/api/oc_api/camera_sketch/*, open_creative.camera_sketch.path) ----
+
+export type CameraMode = "geometry" | "cinematic";
+export type CameraPresetId = "push_in" | "slide" | "small_arc";
+export type CameraEasing = "linear" | "ease_in_out";
+export type ControlPreset = "low" | "medium" | "high";
+
+export interface SketchPoint {
+  t: number;
+  u: number;
+  v: number;
+}
+
+export interface CameraSketchConfig {
+  schema_version: 1;
+  scene_asset_id: Uuid | null;
+  depth_asset_id: Uuid | null;
+  target: { u: number; v: number; depth_scale: number };
+  camera: { focal_length_mm_equiv: number; sensor_width_mm_assumed: 36; roll_deg: 0 };
+  path: {
+    preset: CameraPresetId;
+    sketch_space: "target_screen_position";
+    sketch_points: SketchPoint[];
+    lateral_ratio: number;
+    push_ratio: number;
+    arc_deg: number;
+    easing: CameraEasing;
+  };
+  mode: CameraMode;
+  generation: { seed: number; control_preset: ControlPreset; extra_prompt: string };
+  output: { aspect: Aspect; duration_ms: 5000; fps: 24 };
+  scene: { depth_contrast: number; edge_protection: number; show_holes: boolean };
+  model_profile: string;
+}
+
+/** One entry of `GET /camera-sketch/presets` (presets.v1.json). */
+export interface CameraPreset {
+  id: CameraPresetId;
+  label_en: string;
+  label_ko: string;
+  bounds: { lateral_ratio: [number, number]; push_ratio: [number, number]; arc_deg: [number, number] };
+  default: { lateral_ratio: number; push_ratio: number; arc_deg: number };
+}
+
+/** 4x4 row-major world-to-camera matrix (OpenCV convention: x right, y down, z forward). */
+export type Mat4 = number[][];
+
+export type CompileStatus = "ok" | "warning" | "invalid";
+
+/** Machine codes in `CompiledPath.reasons` / `CompileResponse.warnings`. */
+export type PathReason =
+  | "unsupported_sketch"
+  | "framing_clamped"
+  | "param_out_of_bounds"
+  | "framing_unsolvable"
+  | "camera_upside_down"
+  | "camera_turned_around"
+  | "target_behind_camera"
+  | "target_out_of_frame"
+  | "invalid_input"
+  | "non_finite"
+  | "unknown_easing"
+  | "unknown_preset";
+
+export interface CompiledPath {
+  schema_version: number;
+  solver_version: string;
+  coordinate_convention: "opencv_T_cw";
+  K: number[][];
+  source_to_output: { scale: number; offset_x: number; offset_y: number; out_w: number; out_h: number; src_w: number; src_h: number };
+  depth_mapping:
+    | ({ kind: "inverse_relative" | "depth_relative"; scale: number; offset: number; eps: number; z_far_cap: number; target_z: number } & Record<string, unknown>)
+    | null;
+  preset: string;
+  params: Record<string, number>;
+  easing: string;
+  fps: number;
+  control_points: number[][];
+  keyframes: { t: number; T_cw: Mat4; desired_uv: [number, number]; requested_uv: [number, number] }[];
+  samples: { t_ms: number; T_cw: Mat4 }[];
+  diagnostics: {
+    framing_rms_px: number | null;
+    framing_rms_rel: number | null;
+    target_in_front_min_z: number | null;
+    target_in_frame_fraction: number | null;
+    hole_ratio: number | null;
+    framing_clamped: boolean;
+    details: ({ code: string } & Record<string, unknown>)[];
+  };
+  status: CompileStatus;
+  reasons: string[];
+  suggested_params: Record<string, number> | null;
+}
+
+export interface CompileRequest {
+  revision: number;
+  sketch: SketchPoint[];
+  preset: string;
+  parameters?: {
+    lateral_ratio?: number | null;
+    push_ratio?: number | null;
+    arc_deg?: number | null;
+    easing?: CameraEasing | null;
+    focal_length_mm_equiv?: number | null;
+  };
+}
+
+export interface CompileResponse {
+  path: CompiledPath;
+  control_points: number[][];
+  warnings: string[];
+  status: CompileStatus;
+  hole_ratio: number | null;
+  deferred: boolean;
+}
+
+export interface CameraPresetsResponse {
+  presets: CameraPreset[];
+}
+
+export type MotionReason =
+  | "no_frames"
+  | "length_mismatch"
+  | "unsupported_frame"
+  | "shape_mismatch"
+  | "low_texture_generated"
+  | "low_texture_geometry"
+  | "tracking_lost_geometry"
+  | "tracking_lost_generated"
+  | "target_drift"
+  | "subject_change";
+
+/** Generated-motion QA; `unknown` (never 0 or pass) when tracking cannot run. */
+export interface MotionReport {
+  status: "ok" | "check" | "unknown";
+  tracked_points: number;
+  target_drift_px: number | null;
+  similarity_mean: number | null;
+  reasons: MotionReason[];
+  similarity_window_min: number | null;
+  similarity_min: number | null;
+  target_px_out?: number[];
+  reference?: "geometry_video";
+  exact_camera_control?: false;
+}
+
+export interface DepthGuideRangeInfo {
+  near: number;
+  far: number;
+  mapping: "inverse_depth_near_white";
+  percentiles: number[];
+  basis: string;
+  fill: string;
+}
+
+export interface CameraAnalyzeResult {
+  depth_asset_id: Uuid;
+  depth_preview_asset_id: Uuid;
+  convention: { kind: string; scale: number; offset: number; eps: number };
+  intrinsics_suggestion: {
+    focal_length_mm_equiv: number;
+    sensor_width_mm_assumed: number;
+    width: number;
+    height: number;
+    K: number[][];
+  };
+  applied: false;
+  revision: number;
+}
+
+export interface CameraGuideResult {
+  frame_count: number;
+  hole_ratio_max: number;
+  hole_ratio_mean: number;
+  target_visibility_min: number;
+  framing_rms_rel: number | null;
+  warnings: string[];
+  fill_strategy: Record<string, string>;
+  depth_guide: DepthGuideRangeInfo;
+  mesh_stride: number;
+  path_status: CompileStatus;
+  mode: "geometry";
+  label: string;
+  geometry_hash: string;
+  revision: number;
+  mock: boolean;
+  path_asset_id: Uuid;
+  geometry_video_asset_id: Uuid;
+  guide_depth_video_asset_id: Uuid;
+  guide_validity_asset_id: Uuid;
+}
+
+export interface CameraCinematicResult {
+  mode: "cinematic";
+  label: string;
+  exact_camera_control: false;
+  frame_count: number;
+  guide_job_id: Uuid;
+  qa: MotionReport;
+  cinematic_video_asset_id: Uuid;
+  motion_report_asset_id: Uuid;
+  revision: number;
+  mock: boolean;
+  seed: number;
+  control_preset: ControlPreset;
+}
+
+export type CameraExportFormat = "mp4" | "path_json" | "guides_zip" | "recipe_zip";
+
+export interface CameraExportResult {
+  format: CameraExportFormat;
+  source_job_id: Uuid;
+  revision: number;
+  mode: CameraMode;
+}
+
+export interface CameraJobResultMap {
+  "camera.analyze": CameraAnalyzeResult;
+  "camera.guide": CameraGuideResult;
+  "camera.cinematic": CameraCinematicResult;
+  "camera.export": CameraExportResult;
+}
+
+/** A camera job with `result` typed by kind (null until the job succeeds). */
+export type CameraJob<K extends keyof CameraJobResultMap = keyof CameraJobResultMap> = {
+  [P in K]: Omit<Job<CameraJobResultMap[P] | null>, "kind"> & { kind: P };
+}[K];

@@ -2,7 +2,7 @@
 
 import type { Job, JobKind } from "@oc/contracts";
 import { api } from "../api/client";
-import { watchJob, type SourceLike } from "../model/jobWatcher";
+import { watchJob, type SourceLike } from "@oc/web-core";
 import { useEditor } from "./editorStore";
 
 export function followJob(job: Job): Promise<Job> {

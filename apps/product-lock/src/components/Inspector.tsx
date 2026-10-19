@@ -7,7 +7,7 @@ import { api } from "../api/client";
 import { maskToPngBlob } from "../hooks/assets";
 import { useI18n } from "../i18n";
 import { BRUSH_MAX, BRUSH_MIN } from "../model/mask";
-import { waitForJob } from "../model/waitForJob";
+import { waitForJob } from "@oc/web-core";
 import { useEditor, type Tool } from "../state/editorStore";
 import { startJob } from "../state/jobs";
 import { useMask } from "../state/maskStore";

@@ -3,8 +3,8 @@
 import type { Asset, AssetRole, Job, ProductLockConfig, Project } from "@oc/contracts";
 import { create } from "zustand";
 import { api } from "../api/client";
-import { Autosaver } from "../model/autosave";
-import { History } from "../model/history";
+import { Autosaver } from "@oc/web-core";
+import { History } from "@oc/web-core";
 
 export type Tool = "select" | "add" | "remove" | "protect";
 export type View = "compose" | "mask" | "result";

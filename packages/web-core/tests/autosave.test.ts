@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { Autosaver } from "../src/model/autosave";
+import { Autosaver } from "../src/autosave";
 
 describe("Autosaver", () => {
   it("debounces edits by 600ms and saves the latest config with the expected revision", async () => {

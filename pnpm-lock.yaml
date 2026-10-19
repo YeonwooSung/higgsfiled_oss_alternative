@@ -16,6 +16,9 @@ importers:
       '@oc/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      '@oc/web-core':
+        specifier: workspace:*
+        version: link:../../packages/web-core
       '@radix-ui/react-dialog':
         specifier: ^1.3.1
         version: 1.3.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -98,6 +101,25 @@ importers:
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+
+  packages/web-core:
+    dependencies:
+      '@oc/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+    devDependencies:
+      '@types/react':
+        specifier: ^19.3.0
+        version: 19.3.0
+      react:
+        specifier: ^19.3.1
+        version: 19.3.1
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.9
+        version: 2.1.9(@types/node@20.19.43)(jsdom@30.1.3)
 
 packages:
 

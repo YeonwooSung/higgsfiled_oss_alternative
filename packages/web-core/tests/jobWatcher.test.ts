@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Job } from "@oc/contracts";
-import { watchJob } from "../src/model/jobWatcher";
+import { watchJob } from "../src/jobWatcher";
 
 const job = (state: Job["state"]): Job =>
   ({ id: "j1", state, stage: null, progress: null } as unknown as Job);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { History } from "../src/model/history";
+import { History } from "../src/history";
 
 describe("History", () => {
   it("undoes and redoes", () => {
