@@ -1,3 +1,4 @@
+# Product Lock (:3000) and Camera Sketch (:3001): two web apps + one API + CPU worker + Postgres (+ optional MinIO).
 # Product Lock: web + API + CPU worker + Postgres (+ optional MinIO). GPU inference runs on Comfy.
 # Usage: cp .env.example .env && docker compose -f infra/docker-compose.yml --env-file .env up --build
 name: open-creative
@@ -38,6 +39,11 @@ services:
   web:
     build: { context: .., dockerfile: infra/Dockerfile.web, args: { API_ORIGIN: "http://api:8000" } }
     ports: [ "3000:3000" ]
+    depends_on: [ api ]
+
+  web-camera:
+    build: { context: .., dockerfile: infra/Dockerfile.web, args: { API_ORIGIN: "http://api:8000", APP: camera-sketch, PORT: "3001" } }
+    ports: [ "3001:3001" ]
     depends_on: [ api ]
 
   # S3-compatible storage. Enable with `--profile s3` and OC_STORAGE_BACKEND=s3; the browser must be able to

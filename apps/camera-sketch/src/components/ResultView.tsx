@@ -83,8 +83,8 @@ export function ResultView({ mobile = false }: { mobile?: boolean }) {
 
   const pathAsset = assetById(project, gres?.path_asset_id);
   const pathUrl = useAssetUrl(pathAsset);
-  // TODO(Task 17 README): with OC_STORAGE_BACKEND=s3 this fetch of the signed read URL (and share-page
-  // playback) is cross-origin, so the bucket needs a CORS rule allowing GET from the web origin.
+  // With OC_STORAGE_BACKEND=s3 this fetch of the signed read URL is cross-origin; bucket CORS requirements:
+  // README "Camera Sketch" > "S3 / MinIO: bucket CORS".
   const artifact = useQuery({
     queryKey: ["path-artifact", pathAsset?.id],
     queryFn: async () => (await (await fetch(pathUrl!)).json()) as { user_config?: { scene_asset_id?: string; output?: { aspect?: "16:9" | "9:16" } } },

@@ -3,16 +3,23 @@ RUN corepack enable
 # Next.js resolves rewrites at build time, so the API origin is a build argument.
 ARG API_ORIGIN=http://api:8000
 ENV API_ORIGIN=$API_ORIGIN
+# Which app to build and serve (apps/<APP>, package @oc/<APP>) and its port. Defaults keep Product Lock unchanged.
+ARG APP=product-lock
+ARG PORT=3000
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages packages
-COPY apps/product-lock apps/product-lock
-RUN pnpm install --frozen-lockfile && pnpm --filter @oc/product-lock build
+# packages/ includes @oc/web-core, which the camera-sketch app (and its depth-prep Web Worker chunk) imports.
+COPY apps/${APP} apps/${APP}
+RUN pnpm install --frozen-lockfile --filter "@oc/${APP}..." && pnpm --filter "@oc/${APP}" build
 
 FROM node:20-slim
 RUN corepack enable
+ARG APP=product-lock
+ARG PORT=3000
 WORKDIR /app
 COPY --from=build /app /app
-ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1
-EXPOSE 3000
-CMD ["pnpm", "--filter", "@oc/product-lock", "start"]
+ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 APP=$APP
+EXPOSE $PORT
+# Each app's `start` script pins its own port (product-lock 3000, camera-sketch 3001).
+CMD ["sh", "-c", "exec pnpm --filter @oc/$APP start"]

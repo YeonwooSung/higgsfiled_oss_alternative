@@ -4,6 +4,7 @@
   "packageManager": "pnpm@10.26.1",
   "scripts": {
     "dev:product-lock": "pnpm --filter @oc/product-lock dev",
+    "dev:camera-sketch": "pnpm --filter @oc/camera-sketch dev",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck"
   }

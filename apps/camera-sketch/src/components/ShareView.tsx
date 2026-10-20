@@ -77,9 +77,8 @@ export function ShareView({ token }: { token: string }) {
     },
     retry: false,
   });
-  // The public route redirects to a signed read URL. TODO(Task 17 README): on the S3 backend the video
-  // then plays cross-origin from the bucket; plain <video> playback needs no CORS, but the bucket
-  // must allow GET from the web origin if the page ever reads the bytes (fetch / canvas).
+  // The public route redirects to a signed read URL; on the S3 backend the video plays cross-origin from the
+  // bucket. Bucket CORS requirements: README "Camera Sketch" > "S3 / MinIO: bucket CORS".
   const src = `/api/v1/public/shares/${encodeURIComponent(token)}`;
   const m = meta.data;
   const mode = m?.mode ?? (m?.role === "cinematic_video" ? "cinematic" : m?.role === "geometry_video" ? "geometry" : null);
