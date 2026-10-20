@@ -5,7 +5,7 @@ import { Autosaver, History } from "@oc/web-core";
 import { create } from "zustand";
 import { api } from "../api/client";
 import { PARAMS, type ParamName } from "../model/path";
-import { lateralProposal, sketchFromStroke } from "../model/sketch";
+import { lateralProposal, scaleSketchPoints, sketchFromStroke } from "../model/sketch";
 
 export type SaveState = "saved" | "saving" | "error" | "conflict";
 export type Tool = "none" | "target" | "sketch" | "keyframe";
@@ -59,7 +59,10 @@ interface EditorState {
   commitSketch: (stroke: readonly (readonly number[])[]) => void;
   /** Clear the sketch, keep preset and params ("Restore preset"). */
   restorePreset: () => void;
-  /** "Apply reduced motion": write the compiler's `suggested_params` as a normal (undoable) edit. */
+  /**
+   * "Apply reduced motion": write the compiler's `suggested_params` as a normal (undoable) edit;
+   * `sketch_scale` < 1 scales the stored sketch displacement about its first point.
+   */
   applySuggestedParams: (params: Record<string, number>) => void;
 }
 
@@ -202,8 +205,13 @@ export const useEditor = create<EditorState>((set, get) => {
     restorePreset: () => get().update((c) => { c.path.sketch_points = []; }),
     applySuggestedParams: (params) => {
       const valid = PARAMS.filter((k) => typeof params[k] === "number" && Number.isFinite(params[k]));
-      if (!valid.length) return;
-      get().update((c) => { for (const k of valid) c.path[k as ParamName] = params[k]; });
+      const ss = params.sketch_scale;
+      const scale = typeof ss === "number" && Number.isFinite(ss) && ss > 0 && ss < 1 ? ss : null;
+      if (!valid.length && scale === null) return;
+      get().update((c) => {
+        for (const k of valid) c.path[k as ParamName] = params[k];
+        if (scale !== null && c.path.sketch_points.length) c.path.sketch_points = scaleSketchPoints(c.path.sketch_points, scale);
+      });
     },
 
     flush: async () => {

@@ -150,6 +150,7 @@ export const ko: Dict = {
   removePoint: "점 삭제",
   moreSettings: "타깃·장면·렌더 설정",
   freehandToggle: "이미지 위에 그리기",
+  sketchScaleChange: "스케치 이동 → {value}%",
   reason_unsupported_sketch: "스케치가 닫힌 고리이거나 크게 되돌아갑니다. P0에서는 지원하지 않습니다.",
   reason_framing_clamped: "프레이밍을 안전 영역(프레임의 5–95%) 안으로 제한했습니다.",
   reason_param_out_of_bounds: "움직임 값이 이 프리셋의 범위를 벗어났습니다.",

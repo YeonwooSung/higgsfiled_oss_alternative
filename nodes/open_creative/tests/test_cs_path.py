@@ -17,7 +17,10 @@ from open_creative.camera_sketch.path import (
     compile_path,
     load_presets,
     preset_center,
+    is_control_points,
+    scale_sketch,
     simplify_sketch,
+    sketch_control_points,
     solve_framing,
 )
 from open_creative.camera_sketch.scene import (
@@ -207,7 +210,7 @@ def test_small_arc_keeps_distance_and_7_deg_is_invalid(room):
     assert np.abs(dist - np.linalg.norm(room.target_world)).max() <= 1e-6
     bad = compile_path(cfg("small_arc", arc_deg=7.0), room, OUT_W, OUT_H)
     assert bad.status == "invalid" and "param_out_of_bounds" in bad.reasons
-    assert bad.suggested_params == {"lateral_ratio": 0.0, "push_ratio": 0.0, "arc_deg": 3.5}
+    assert bad.suggested_params == {"lateral_ratio": 0.0, "push_ratio": 0.0, "arc_deg": 3.5, "sketch_scale": 1.0}
     assert_json_safe(bad)
 
 
@@ -226,7 +229,7 @@ def test_sketch_framing_follows_and_clamps_near_edge(room):
     d = cp.to_dict()
     assert cp.status == "warning" and "framing_clamped" in cp.reasons
     k = d["keyframes"]
-    assert [x["t"] for x in k] == [0.0, 1.0]  # collinear sketch -> 2 control points
+    assert [x["t"] for x in k] == [0.0, 0.5, 1.0]  # control points are kept as given (user times)
     assert k[-1]["requested_uv"][0] == pytest.approx(0.9 + 0.12)
     assert all(x["desired_uv"][0] <= 0.95 + 1e-12 for x in k[1:])
     # The last keyframe frames the target exactly at its solved position.
@@ -249,7 +252,7 @@ def test_target_behind_camera_is_invalid_without_nan(room):
     near = SceneInfo(room.K_src, 960, 540, np.array([0.0, 0.0, 0.08]), (0.5, 0.5))
     cp = compile_path(cfg("push_in", push_ratio=0.10), near, OUT_W, OUT_H)
     assert cp.status == "invalid" and cp.reasons
-    assert cp.suggested_params == {"lateral_ratio": 0.0, "push_ratio": 0.025, "arc_deg": 0.0}
+    assert cp.suggested_params == {"lateral_ratio": 0.0, "push_ratio": 0.025, "arc_deg": 0.0, "sketch_scale": 1.0}
     assert_json_safe(cp)
 
 
@@ -303,7 +306,7 @@ def test_push_is_additive_on_slide_and_arc(room):
 def test_suggestion_halves_only_nonzero_params(room):
     cp = compile_path(cfg("slide", lateral_ratio=0.08, push_ratio=0.0), room, OUT_W, OUT_H)
     assert cp.status == "invalid"
-    assert cp.suggested_params == {"lateral_ratio": 0.04, "push_ratio": 0.0, "arc_deg": 0.0}
+    assert cp.suggested_params == {"lateral_ratio": 0.04, "push_ratio": 0.0, "arc_deg": 0.0, "sketch_scale": 1.0}
 
 
 @pytest.mark.parametrize("c", [
@@ -342,3 +345,65 @@ def test_non_finite_poses_clear_artifact(room, monkeypatch):
     d = cp.to_dict()
     assert d["keyframes"] == d["samples"] == d["control_points"] == []
     assert_json_safe(cp)
+
+
+# ---- control points vs raw capture ------------------------------------------
+
+
+def test_control_point_times_are_used_as_given(room):
+    sk = [(0.0, 0.5, 0.5), (0.2, 0.55, 0.48), (1.0, 0.56, 0.5)]  # far from arc-length timing
+    cp = compile_path(cfg("slide", sk, lateral_ratio=0.02), room, OUT_W, OUT_H)
+    assert cp.status in ("ok", "warning")
+    assert [k["t"] for k in cp.keyframes] == [0.0, 0.2, 1.0]
+    assert cp.control_points == [list(p) for p in sk]
+    late = compile_path(cfg("slide", [(0.0, 0.5, 0.5), (0.8, 0.55, 0.48), (1.0, 0.56, 0.5)], lateral_ratio=0.02),
+                        room, OUT_W, OUT_H)
+    assert late.samples[40]["T_cw"] != cp.samples[40]["T_cw"]  # retiming changes the shot
+
+
+@pytest.mark.parametrize("sk", [
+    [(0.0, 0.5, 0.5), (0.5, 0.6, 0.5), (0.9, 0.6, 0.6)],    # last t != 1
+    [(0.1, 0.5, 0.5), (1.0, 0.6, 0.5)],                      # first t != 0
+    [(0.0, 0.5, 0.5), (0.6, 0.6, 0.5), (0.6, 0.7, 0.5), (1.0, 0.7, 0.6)],  # not strictly increasing
+    [(0.0, 0.5, 0.5), (0.7, 0.6, 0.5), (0.4, 0.7, 0.5), (1.0, 0.7, 0.6)],  # out of order
+])
+def test_bad_control_points_are_invalid_input(room, sk):
+    cp = compile_path(cfg("slide", sk, lateral_ratio=0.0), room, OUT_W, OUT_H)
+    assert cp.status == "invalid" and cp.reasons == ["invalid_input"]
+    assert cp.diagnostics["details"][0]["field"] == "sketch_points"
+
+
+def test_raw_capture_is_still_simplified():
+    pts = [(k / 49, 0.2 + 0.4 * k / 49, 0.5) for k in range(50)]
+    ctrl, warn = sketch_control_points(pts)
+    assert ctrl == simplify_sketch(pts)[0] and warn is None
+    assert sketch_control_points([(0.3, 0.4, 0.6)]) == ([(0.0, 0.4, 0.6), (1.0, 0.4, 0.6)], None)
+    assert is_control_points([(0.0, 0.1, 0.1), (1.0, 0.2, 0.2)])
+    assert not is_control_points([(0.0, 0.1, 0.1)])
+
+
+def test_control_point_loop_or_backtrack_warns():
+    back = [(0.0, 0.3, 0.5), (0.5, 0.6, 0.5), (1.0, 0.35, 0.52)]
+    assert sketch_control_points(back)[1] == "unsupported_sketch"
+
+
+def test_scale_sketch_about_first_point():
+    sk = [(0.0, 0.5, 0.5), (0.3, 0.7, 0.4), (1.0, 0.9, 0.6)]
+    assert scale_sketch(sk, 0.5) == [(0.0, 0.5, 0.5), (0.3, 0.6, 0.45), (1.0, 0.7, 0.55)]
+
+
+def test_suggestion_scales_a_sketch_when_halving_params_is_not_enough():
+    # Wide lens, target at the top-left corner of a portrait source (parity case
+    # ``invalid_framing_unsolvable``): halving the params alone does not fix it, scaling the
+    # sketch displacement too does.
+    from open_creative.camera_sketch.camera import intrinsics
+    K = intrinsics(20.0, 576, 1024)
+    corner = SceneInfo(K, 576, 1024, np.linalg.solve(K, [0.02 * 576, 0.0, 1.0]) * 0.3, (0.02, 0.0))
+    sk = [(0.0, 0.5, 0.5), (1.0, 0.05, 0.95)]
+    cp = compile_path(cfg("slide", sk, lateral_ratio=0.05, push_ratio=0.1), corner, 720, 1280)
+    assert cp.status == "invalid" and "framing_unsolvable" in cp.reasons
+    assert cp.suggested_params == {"lateral_ratio": 0.025, "push_ratio": 0.05, "arc_deg": 0.0, "sketch_scale": 0.5}
+    only_params = compile_path(cfg("slide", sk, lateral_ratio=0.025, push_ratio=0.05), corner, 720, 1280)
+    assert any(r in cs_path.MOTION_REASONS for r in only_params.reasons)
+    fixed = compile_path(cfg("slide", scale_sketch(sk, 0.5), lateral_ratio=0.025, push_ratio=0.05), corner, 720, 1280)
+    assert not any(r in cs_path.MOTION_REASONS for r in fixed.reasons)

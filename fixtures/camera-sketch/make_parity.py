@@ -11,7 +11,9 @@ Sections (add new ones as top-level keys of ``build()``'s dict, e.g. mesh face c
 - ``compile``: per case the inputs (cfg, scene, output size) and Python's K_src, K_out,
   cover-fit, control points, keyframes, 10 sampled poses (by index), target projections in
   OUTPUT pixels for those samples, status, reasons and suggested params.
-- ``simplify_sketch``: raw sketches -> control points + warning.
+- ``simplify_sketch``: raw sketches -> control points + warning (arc-length times).
+- ``sketch_control_points``: config sketches -> control points as compiled (2..5 points keep their
+  user times; 1 or > 5 points are simplified; invalid times -> ``error: true``).
 - ``solve_framing``: desired framing -> smoothed/bounded framing.
 - ``framing_rotation``: direct (c, target, px, K) -> R cases incl. angle-wrap branches.
 - ``prepare_z``: a small synthetic z map (full input + output, ``smooth`` on/off) and the room
@@ -41,6 +43,7 @@ from open_creative.camera_sketch.path import (
     SceneInfo,
     compile_path,
     simplify_sketch,
+    sketch_control_points,
     solve_framing,
 )
 from open_creative.camera_sketch.render import STRETCH_VALID, _project, _signed_area
@@ -142,7 +145,47 @@ def _compile_cases() -> list[dict]:
     cases.append(_compile_case("invalid_framing_unsolvable", corner, "9:16",
                                _cfg("slide", sketch=[(0, 0.5, 0.5), (1, 0.05, 0.95)],
                                     lateral_ratio=0.05, push_ratio=0.1)))
+    # user-timed control points (t NOT the arc-length fraction): used as given
+    cases.append(_compile_case("room_16x9_slide_user_times", room, "16:9",
+                               _cfg("slide", sketch=[(0.0, 0.5, 0.5), (0.15, 0.55, 0.47), (0.8, 0.58, 0.5),
+                                                     (1.0, 0.6, 0.52)], lateral_ratio=0.03)))
+    cases.append(_compile_case("facade_9x16_arc_user_times_linear", facade, "9:16",
+                               {**_cfg("small_arc", sketch=[(0.0, 0.5, 0.5), (0.7, 0.46, 0.52), (1.0, 0.45, 0.5)],
+                                       arc_deg=4.0), "easing": "linear"}))
+    cases.append(_compile_case("invalid_control_point_order", room, "16:9",
+                               _cfg("slide", sketch=[(0.0, 0.5, 0.5), (0.7, 0.55, 0.5), (0.4, 0.6, 0.5), (1.0, 0.62, 0.5)],
+                                    lateral_ratio=0.02)))
+    cases.append(_compile_case("invalid_control_point_end_t", room, "16:9",
+                               _cfg("slide", sketch=[(0.0, 0.5, 0.5), (0.9, 0.55, 0.5)], lateral_ratio=0.02)))
+    # suggested_params with sketch_scale < 1 (params halving alone is not enough)
+    cases.append(_compile_case("invalid_suggests_sketch_scale", corner, "9:16",
+                               _cfg("slide", sketch=[(0, 0.5, 0.5), (0.4, 0.3, 0.7), (1, 0.05, 0.95)],
+                                    lateral_ratio=0.05, push_ratio=0.1)))
     return cases
+
+
+def _control_point_cases() -> list[dict]:
+    """``sketch_control_points``: 2..5 points kept with their times, 1 or > 5 simplified, else error."""
+    raw = {
+        "user_times": [(0.0, 0.5, 0.5), (0.1, 0.6, 0.5), (1.0, 0.62, 0.55)],
+        "two_points": [(0.0, 0.3, 0.5), (1.0, 0.6, 0.4)],
+        "turn_back": [(0.0, 0.3, 0.5), (0.5, 0.6, 0.5), (1.0, 0.35, 0.52)],
+        "single_click": [(0.0, 0.4, 0.6)],
+        "raw_eight": [(k / 7, 0.2 + 0.05 * k, 0.5 + 0.01 * (k % 2)) for k in range(8)],
+        "bad_order": [(0.0, 0.5, 0.5), (0.6, 0.6, 0.5), (0.3, 0.7, 0.5)],
+        "bad_end": [(0.0, 0.5, 0.5), (0.95, 0.6, 0.5)],
+        "bad_repeat_t": [(0.0, 0.5, 0.5), (0.5, 0.6, 0.5), (0.5, 0.7, 0.5), (1.0, 0.8, 0.5)],
+    }
+    out = []
+    for name, pts in raw.items():
+        try:
+            ctrl, warning = sketch_control_points(pts)
+            out.append({"id": name, "points": [list(map(float, p)) for p in pts],
+                        "control_points": [list(map(float, c)) for c in ctrl], "warning": warning, "error": False})
+        except ValueError:
+            out.append({"id": name, "points": [list(map(float, p)) for p in pts], "control_points": None,
+                        "warning": None, "error": True})
+    return out
 
 
 def _simplify_cases() -> list[dict]:
@@ -323,6 +366,7 @@ def build() -> dict:
         "tolerances": {"target_px": 2.0, "pose": 1e-5, "simplify": 1e-6, "solve": 1e-6},
         "cover_fit": _cover_fit_cases(),
         "simplify_sketch": _simplify_cases(),
+        "sketch_control_points": _control_point_cases(),
         "solve_framing": _solve_cases(),
         "framing_rotation": _framing_rotation_cases(),
         "compile": _compile_cases(),

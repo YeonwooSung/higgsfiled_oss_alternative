@@ -174,6 +174,16 @@ describe("Apply reduced motion", () => {
     expect(useEditor.getState().revision).toBe(3); // undo is saved as another revision
   });
 
+  it("sketch_scale scales the stored sketch displacement in the same undo step", () => {
+    useEditor.getState().load(project());
+    useEditor.getState().update((c) => { c.path.sketch_points = [{ t: 0, u: 0.5, v: 0.5 }, { t: 0.3, u: 0.7, v: 0.4 }, { t: 1, u: 0.9, v: 0.5 }]; });
+    useEditor.getState().applySuggestedParams({ lateral_ratio: 0.02, push_ratio: 0.03, arc_deg: 0, sketch_scale: 0.5 });
+    expect(useEditor.getState().config!.path.sketch_points).toEqual([{ t: 0, u: 0.5, v: 0.5 }, { t: 0.3, u: 0.6, v: 0.45 }, { t: 1, u: 0.7, v: 0.5 }]);
+    expect(useEditor.getState().config!.path.lateral_ratio).toBe(0.02);
+    useEditor.getState().undo();
+    expect(useEditor.getState().config!.path.sketch_points[2]).toEqual({ t: 1, u: 0.9, v: 0.5 });
+    expect(useEditor.getState().config!.path.lateral_ratio).toBe(0.04);
+  });
   it("ignores unknown or non-finite keys", () => {
     useEditor.getState().load(project());
     useEditor.getState().applySuggestedParams({ lateral_ratio: Number.NaN, bogus: 1 } as Record<string, number>);

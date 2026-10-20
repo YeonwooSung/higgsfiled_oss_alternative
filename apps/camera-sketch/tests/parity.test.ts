@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import * as THREE from "three";
 import { afterAll, describe, expect, it } from "vitest";
 import { cameraCenter, coverFit, framingRotation, intrinsics, project, type Mat3, type Mat4, type Vec3 } from "../src/model/camera";
-import { compilePathProvisional, sceneInfoFromTarget, simplifySketch, solveFraming, type PathConfig } from "../src/model/path";
+import { compilePathProvisional, sceneInfoFromTarget, simplifySketch, sketchControlPoints, solveFraming, type PathConfig } from "../src/model/path";
 import { toThreeCamera, toThreePoint } from "../src/model/three";
 
 /** Python reference output: `uv run python fixtures/camera-sketch/make_parity.py`. */
@@ -36,6 +36,7 @@ interface Parity {
   tolerances: { target_px: number; pose: number; simplify: number; solve: number };
   cover_fit: { src: [number, number]; out: [number, number]; scale: number; offset_x: number; offset_y: number }[];
   simplify_sketch: { id: string; points: [number, number, number][]; control_points: number[][]; warning: string | null }[];
+  sketch_control_points: { id: string; points: [number, number, number][]; control_points: number[][] | null; warning: string | null; error: boolean }[];
   solve_framing: { id: string; desired: number[][]; framing: number[][]; unclamped: number[][] }[];
   framing_rotation: { c: Vec3; target: Vec3; px: [number, number]; K: Mat3; R: Mat3; wraps: boolean }[];
   compile: CompileCase[];
@@ -79,6 +80,16 @@ describe("parity fixture", () => {
     }
   });
 
+  it.each(P.sketch_control_points.map((c) => [c.id, c] as const))("sketchControlPoints %s", (_id, c) => {
+    if (c.error) {
+      expect(() => sketchControlPoints(c.points)).toThrow();
+      return;
+    }
+    const r = sketchControlPoints(c.points);
+    expect(r.warning).toBe(c.warning);
+    within("simplify", r.controlPoints, c.control_points, TOL.simplify);
+  });
+
   it.each(P.simplify_sketch.map((c) => [c.id, c] as const))("simplifySketch %s", (_id, c) => {
     const r = simplifySketch(c.points);
     expect(r.warning).toBe(c.warning);
@@ -113,7 +124,10 @@ describe.each(P.compile.map((c) => [c.id, c] as const))("compilePathProvisional 
     expect(res.reasons).toEqual(c.reasons);
     expect(res.params).toEqual(c.params);
     if (c.suggested_params === null) expect(res.suggested_params).toBeNull();
-    else within("pose", Object.values(res.suggested_params ?? {}), Object.values(c.suggested_params), 1e-12);
+    else {
+      expect(Object.keys(res.suggested_params ?? {}).sort()).toEqual(Object.keys(c.suggested_params).sort());
+      for (const k of Object.keys(c.suggested_params)) within("pose", res.suggested_params![k], c.suggested_params[k], 1e-12);
+    }
     expect(res.diagnostics.framing_clamped).toBe(c.diagnostics.framing_clamped);
     for (const k of ["framing_rms_px", "target_in_front_min_z", "target_in_frame_fraction"] as const) {
       const want = c.diagnostics[k];

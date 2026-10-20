@@ -148,6 +148,7 @@ export const en = {
   removePoint: "Remove point",
   moreSettings: "Target, scene and render settings",
   freehandToggle: "Draw on the image",
+  sketchScaleChange: "Sketch movement → {value}%",
   reason_unsupported_sketch: "This sketch closes into a loop or turns back sharply, which P0 does not support.",
   reason_framing_clamped: "The framing was kept inside the safe area (5–95% of the frame).",
   reason_param_out_of_bounds: "A motion value is outside this preset's range.",

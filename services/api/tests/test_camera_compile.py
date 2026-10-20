@@ -150,3 +150,20 @@ def test_bad_easing_422(session_client, ready):
     pid, rev = ready
     r = compile_(session_client, pid, rev, [], parameters={"easing": "bounce"})
     assert r.status_code == 422 and "easing" in r.json()["error"]["field"]
+
+
+def test_control_point_times_are_kept(session_client, ready):
+    pid, rev = ready
+    pts = [{"t": 0, "u": 0.5, "v": 0.5}, {"t": 0.2, "u": 0.53, "v": 0.49}, {"t": 1, "u": 0.55, "v": 0.5}]
+    b = compile_(session_client, pid, rev, pts, parameters={"lateral_ratio": 0.02}).json()
+    assert b["status"] in ("ok", "warning")
+    assert [k["t"] for k in b["path"]["keyframes"]] == [0.0, 0.2, 1.0]
+    assert b["control_points"] == [[0.0, 0.5, 0.5], [0.2, 0.53, 0.49], [1.0, 0.55, 0.5]]
+
+
+def test_misordered_control_points_are_invalid_input(session_client, ready):
+    pid, rev = ready
+    pts = [{"t": 0, "u": 0.5, "v": 0.5}, {"t": 0.7, "u": 0.53, "v": 0.49}, {"t": 0.4, "u": 0.55, "v": 0.5},
+           {"t": 1, "u": 0.56, "v": 0.5}]
+    b = compile_(session_client, pid, rev, pts).json()
+    assert b["status"] == "invalid" and b["warnings"] == ["invalid_input"]

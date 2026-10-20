@@ -102,7 +102,7 @@ describe("compilePathProvisional", () => {
     const r = compilePathProvisional({ preset: "slide", lateral_ratio: 0.08 }, room, 1280, 720);
     expect(r.status).toBe("invalid");
     expect(r.reasons).toEqual(["param_out_of_bounds"]);
-    expect(r.suggested_params).toEqual({ lateral_ratio: 0.04, push_ratio: 0, arc_deg: 0 });
+    expect(r.suggested_params).toEqual({ lateral_ratio: 0.04, push_ratio: 0, arc_deg: 0, sketch_scale: 1 });
   });
   it("passes the scene's depth mapping through", () => {
     const dm = { kind: "inverse_relative" as const, scale: 1, offset: 0, eps: 1e-6, z_far_cap: 50, target_z: 1 };

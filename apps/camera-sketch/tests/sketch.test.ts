@@ -6,7 +6,7 @@ import { ko } from "../src/i18n/ko";
 import { compilePathProvisional, PRESETS_V1, sceneInfoFromTarget, simplifySketch } from "../src/model/path";
 import {
   addControlPoint, captureSketch, keyframeTimeMs, lateralProposal, motionSuggestion, moveControlPoint, outputToSourceUv, PATH_REASONS, reasonKey,
-  removeControlPoint, retime, sketchAtTarget, sketchFromStroke, targetOutputUv,
+  removeControlPoint, scaleSketchPoints, setControlPointTime, sketchAtTarget, sketchFromStroke, suggestionToParams, targetOutputUv, timeMsToT,
   sourceToOutputUv, strengthOf, switchPreset, withStrength,
 } from "../src/model/sketch";
 
@@ -75,18 +75,39 @@ describe("lateral sign proposal (slide only, never applied silently)", () => {
   });
 });
 
-describe("control point edits", () => {
-  it("retime sets t to the arc-length fraction (what the compiler uses)", () => {
-    const p = retime([{ t: 0.9, u: 0, v: 0 }, { t: 0.1, u: 0.3, v: 0 }, { t: 0.5, u: 0.4, v: 0 }]);
-    expect(p[0].t).toBe(0);
-    expect(p[1].t).toBeCloseTo(0.75, 12);
-    expect(p[2].t).toBe(1);
+describe("control point edits (user times are kept)", () => {
+  it("moveControlPoint clamps to [0,1] and keeps every time", () => {
+    const pts = [{ t: 0, u: 0.1, v: 0.5 }, { t: 0.3, u: 0.15, v: 0.5 }, { t: 1, u: 0.2, v: 0.5 }];
+    const p = moveControlPoint(pts, 2, 1.5, 0.5);
+    expect(p[2]).toEqual({ t: 1, u: 1, v: 0.5 });
+    expect(p.map((q) => q.t)).toEqual([0, 0.3, 1]);
   });
-  it("moveControlPoint clamps to [0,1] and retimes", () => {
-    const p = moveControlPoint([{ t: 0, u: 0.1, v: 0.5 }, { t: 1, u: 0.2, v: 0.5 }], 1, 1.5, 0.5);
-    expect(p[1]).toEqual({ t: 1, u: 1, v: 0.5 });
-    const s = moveControlPoint([{ t: 0, u: 0.1, v: 0.5 }, { t: 1, u: 0.1, v: 0.5 }], 0, 0.1, 0.5);
-    expect(s.map((q) => q.t)).toEqual([0, 1]);
+  it("setControlPointTime keeps order, a minimum gap and fixed endpoints", () => {
+    const pts = [{ t: 0, u: 0.1, v: 0.5 }, { t: 0.3, u: 0.15, v: 0.5 }, { t: 0.6, u: 0.18, v: 0.5 }, { t: 1, u: 0.2, v: 0.5 }];
+    expect(setControlPointTime(pts, 1, 0.1).map((q) => q.t)).toEqual([0, 0.1, 0.6, 1]);
+    expect(setControlPointTime(pts, 1, 0.9).map((q) => q.t)).toEqual([0, 0.58, 0.6, 1]);
+    expect(setControlPointTime(pts, 1, -1).map((q) => q.t)).toEqual([0, 0.02, 0.6, 1]);
+    expect(setControlPointTime(pts, 0, 0.2).map((q) => q.t)).toEqual([0, 0.3, 0.6, 1]);
+    expect(setControlPointTime(pts, 3, 0.8).map((q) => q.t)).toEqual([0, 0.3, 0.6, 1]);
+    expect(setControlPointTime(pts, 2, Number.NaN)).toEqual(pts);
+    const crowded = [{ t: 0, u: 0, v: 0 }, { t: 0.01, u: 0, v: 0 }, { t: 0.02, u: 0, v: 0 }, { t: 1, u: 0, v: 0 }];
+    expect(setControlPointTime(crowded, 1, 0.5)).toEqual(crowded);
+    expect(timeMsToT(keyframeTimeMs(0.37))).toBeCloseTo(0.37, 12);
+    expect(timeMsToT(9999)).toBe(1);
+  });
+  it("retimed control points compile with exactly those keyframe times", () => {
+    const scene = sceneInfoFromTarget({ focalMm: 50, srcW: 1280, srcH: 720, u: 0.5, v: 0.5, depthScale: 1 });
+    const pts = setControlPointTime([{ t: 0, u: 0.5, v: 0.5 }, { t: 0.5, u: 0.53, v: 0.48 }, { t: 1, u: 0.55, v: 0.5 }], 1, 0.2);
+    const c = compilePathProvisional(slidePath({ sketch_points: pts }), scene, 1280, 720);
+    expect(c.keyframes.map((k) => k.t)).toEqual([0, 0.2, 1]);
+  });
+  it("capture drops consecutive repeats so control point times stay strictly increasing", () => {
+    const raw = captureSketch([[0, 0.5], [-0.1, 0.5], [0.2, 0.5], [0.4, 0.5]]);
+    expect(raw.map(([, u]) => u)).toEqual([0, 0.2, 0.4]);
+  });
+  it("scaleSketchPoints scales the displacement about the first point", () => {
+    expect(scaleSketchPoints([{ t: 0, u: 0.5, v: 0.5 }, { t: 0.4, u: 0.7, v: 0.3 }, { t: 1, u: 0.9, v: 0.5 }], 0.5))
+      .toEqual([{ t: 0, u: 0.5, v: 0.5 }, { t: 0.4, u: 0.6, v: 0.4 }, { t: 1, u: 0.7, v: 0.5 }]);
   });
 });
 
@@ -165,15 +186,20 @@ describe("editor helpers", () => {
     const c = compilePathProvisional(slidePath(), scene, 1280, 720);
     expect(keyframeTimeMs(1)).toBeCloseTo(c.samples[c.samples.length - 1].t_ms, 9);
   });
-  it("reduced motion: compiler suggestion first, else halve on high holes, else nothing", () => {
-    const bad = compilePathProvisional(slidePath({ lateral_ratio: 0.05, sketch_points: [{ t: 0, u: 0.5, v: 0.5 }, { t: 1, u: 0.97, v: 0.5 }] }), scene, 1280, 720);
+  it("reduced motion: compiler suggestion first, else halve params and sketch on high holes, else nothing", () => {
     const ok = compilePathProvisional(slidePath(), scene, 1280, 720);
+    const sk = [{ t: 0, u: 0.5, v: 0.5 }, { t: 1, u: 0.6, v: 0.5 }];
     expect(motionSuggestion(ok, 0.01)).toBeNull();
-    expect(motionSuggestion(ok, 0.2)).toEqual({ params: { lateral_ratio: 0.02, push_ratio: 0, arc_deg: 0 }, source: "holes" });
+    expect(motionSuggestion(ok, 0.2)).toEqual({ params: { lateral_ratio: 0.02, push_ratio: 0, arc_deg: 0 }, sketchScale: 1, source: "holes" });
+    expect(motionSuggestion(ok, 0.2, sk)).toEqual({ params: { lateral_ratio: 0.02, push_ratio: 0, arc_deg: 0 }, sketchScale: 0.5, source: "holes" });
+    const still = compilePathProvisional(slidePath({ lateral_ratio: 0 }), scene, 1280, 720);
+    expect(motionSuggestion(still, 0.2, sk)?.sketchScale).toBe(0.5); // a sketch-only shot still gets a proposal
+    expect(motionSuggestion(still, 0.2)).toBeNull();
     expect(motionSuggestion(null, 0.2)).toBeNull();
-    const fake = { ...ok, suggested_params: { lateral_ratio: 0.01, push_ratio: 0, arc_deg: 0 } };
-    expect(motionSuggestion(fake, 0.2)).toEqual({ params: { lateral_ratio: 0.01, push_ratio: 0, arc_deg: 0 }, source: "compiler" });
-    if (bad.suggested_params) expect(motionSuggestion(bad, null)?.source).toBe("compiler");
+    const fake = { ...ok, suggested_params: { lateral_ratio: 0.01, push_ratio: 0, arc_deg: 0, sketch_scale: 0.25 } };
+    const s = motionSuggestion(fake, 0.2)!;
+    expect(s).toEqual({ params: { lateral_ratio: 0.01, push_ratio: 0, arc_deg: 0 }, sketchScale: 0.25, source: "compiler" });
+    expect(suggestionToParams(s)).toEqual({ lateral_ratio: 0.01, push_ratio: 0, arc_deg: 0, sketch_scale: 0.25 });
   });
   it("target reticle at t=0 is the cover-fit position of the source target", () => {
     const s = sceneInfoFromTarget({ focalMm: 50, srcW: 720, srcH: 1280, u: 0.3, v: 0.4, depthScale: 1 });
@@ -183,16 +209,18 @@ describe("editor helpers", () => {
     expect(uv[0]).toBeCloseTo(want[0], 9);
     expect(uv[1]).toBeCloseTo(want[1], 9);
   });
-  it("numeric control point add/remove keeps 2..5 points", () => {
+  it("numeric control point add/remove keeps 2..5 points and valid times", () => {
     const two = sketchAtTarget([0.5, 1.2]);
     expect(two).toEqual([{ t: 0, u: 0.5, v: 1 }, { t: 1, u: 0.5, v: 1 }]);
     let p = [{ t: 0, u: 0.2, v: 0.5 }, { t: 1, u: 0.6, v: 0.5 }];
     p = addControlPoint(p);
-    expect(p.map((q) => q.u)).toEqual([0.2, 0.4, 0.6]);
-    expect(p[1].t).toBeCloseTo(0.5, 12);
+    expect(p).toEqual([{ t: 0, u: 0.2, v: 0.5 }, { t: 0.5, u: 0.4, v: 0.5 }, { t: 1, u: 0.6, v: 0.5 }]);
     for (let i = 0; i < 5; i++) p = addControlPoint(p);
     expect(p).toHaveLength(5);
-    expect(removeControlPoint(p, 2)).toHaveLength(4);
+    expect(p.map((q) => q.t)).toEqual([0, 0.5, 0.75, 0.875, 1]);
+    expect(removeControlPoint(p, 2).map((q) => q.t)).toEqual([0, 0.5, 0.875, 1]);
+    expect(removeControlPoint(p, 0).map((q) => q.t)).toEqual([0, 0.75, 0.875, 1]);
+    expect(removeControlPoint(p, 4).map((q) => q.t)).toEqual([0, 0.5, 0.75, 1]);
     expect(removeControlPoint([{ t: 0, u: 0, v: 0 }, { t: 1, u: 1, v: 1 }], 0)).toEqual([]);
   });
 });

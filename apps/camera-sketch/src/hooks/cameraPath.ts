@@ -6,7 +6,7 @@ import { useMemo } from "react";
 import { api } from "../api/client";
 import { compilePathProvisional, PRESETS_V1, sceneInfoFromTarget } from "../model/path";
 import { outputSize } from "../model/preview";
-import { motionSuggestion } from "../model/sketch";
+import { motionSuggestion, scaleSketchPoints } from "../model/sketch";
 import { assetById, currentServerPath, renderGate, useEditor, type RenderGate } from "../state/editorStore";
 
 /** `GET /camera-sketch/presets` (bounds, defaults, labels); the bundled v1 mirror until it arrives. */
@@ -40,11 +40,12 @@ export function useCameraPath() {
   const path = serverPath ?? provisional;
   const response: CompileResponse | null = serverPath && serverCompile ? serverCompile.response : null;
   const holeRatio = response?.hole_ratio ?? null;
-  const suggestion = useMemo(() => motionSuggestion(path, holeRatio), [path, holeRatio]);
-  const suggestedPath = useMemo(
-    () => (suggestion && info && pathCfg ? compilePathProvisional({ ...pathCfg, ...suggestion.params }, info, outW, outH, { presets, suggest: false }) : null),
-    [suggestion, info, pathCfg, outW, outH, presets],
-  );
+  const suggestion = useMemo(() => motionSuggestion(path, holeRatio, pathCfg?.sketch_points ?? []), [path, holeRatio, pathCfg]);
+  const suggestedPath = useMemo(() => {
+    if (!suggestion || !info || !pathCfg) return null;
+    const sketch = suggestion.sketchScale !== 1 && pathCfg.sketch_points.length ? scaleSketchPoints(pathCfg.sketch_points, suggestion.sketchScale) : pathCfg.sketch_points;
+    return compilePathProvisional({ ...pathCfg, ...suggestion.params, sketch_points: sketch }, info, outW, outH, { presets, suggest: false });
+  }, [suggestion, info, pathCfg, outW, outH, presets]);
   return { info, path, provisional: !serverPath, response, holeRatio, suggestion, suggestedPath, outW, outH, srcW, srcH };
 }
 

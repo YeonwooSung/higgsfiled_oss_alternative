@@ -4,7 +4,7 @@
  */
 import type { CameraPreset, CameraPresetId, CameraSketchConfig, CompiledPath, PathReason, SketchPoint } from "@oc/contracts";
 import { coverFit, project, type Vec2 } from "./camera";
-import { MAX_RAW_POINTS, PARAMS, simplifySketch, type ControlPoint, type ParamName } from "./path";
+import { MAX_RAW_POINTS, PARAMS, scaleSketch, simplifySketch, type ControlPoint, type ParamName } from "./path";
 
 type PathCfg = CameraSketchConfig["path"];
 const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
@@ -16,7 +16,9 @@ const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
  * [0, 1] (the compiler re-derives time from arc length; only the order matters).
  */
 export function captureSketch(stroke: readonly (readonly number[])[]): ControlPoint[] {
-  let pts = stroke.filter((p) => Number.isFinite(p[0]) && Number.isFinite(p[1])).map((p): Vec2 => [clamp01(p[0]), clamp01(p[1])]);
+  let pts = stroke.filter((p) => Number.isFinite(p[0]) && Number.isFinite(p[1])).map((p): Vec2 => [clamp01(p[0]), clamp01(p[1])])
+    // consecutive repeats (e.g. clamped at the border) would give equal control point times
+    .filter((p, i, a) => i === 0 || p[0] !== a[i - 1][0] || p[1] !== a[i - 1][1]);
   const n = pts.length;
   if (n > MAX_RAW_POINTS) pts = Array.from({ length: MAX_RAW_POINTS }, (_, k) => pts[Math.floor((k * (n - 1)) / (MAX_RAW_POINTS - 1))]);
   const m = pts.length;
@@ -50,19 +52,32 @@ export function lateralProposal(preset: string, lateral: number, points: readonl
   return want * (lateral !== 0 ? Math.abs(lateral) : LATERAL_PROPOSAL_DEFAULT);
 }
 
-/** `t` = cumulative arc length fraction, exactly how the compiler times control points. */
-export function retime(points: readonly SketchPoint[]): SketchPoint[] {
-  const cum = [0];
-  for (let i = 1; i < points.length; i++) cum.push(cum[i - 1] + Math.hypot(points[i].u - points[i - 1].u, points[i].v - points[i - 1].v));
-  const total = cum[cum.length - 1];
-  return points.map((p, i) => ({ t: total > 0 ? cum[i] / total : i === 0 ? 0 : 1, u: p.u, v: p.v }));
+/** Smallest gap between neighbouring control point times (0.02 of the shot, about 0.1 s). */
+export const MIN_T_GAP = 0.02;
+
+/**
+ * Move control point `i` (clamped into the frame). Its time is kept: control point times are user
+ * times (the compiler uses them as given; only a raw capture is timed by arc length).
+ */
+export function moveControlPoint(points: readonly SketchPoint[], i: number, u: number, v: number): SketchPoint[] {
+  return points.map((p, k) => (k === i ? { t: p.t, u: clamp01(u), v: clamp01(v) } : { ...p }));
 }
 
-/** Move control point `i` (clamped into the frame) and retime the sketch. */
-export function moveControlPoint(points: readonly SketchPoint[], i: number, u: number, v: number): SketchPoint[] {
-  const next = points.map((p, k) => (k === i ? { t: p.t, u: clamp01(u), v: clamp01(v) } : { ...p }));
-  return retime(next);
+/**
+ * Retime control point `i`: endpoints stay at 0 and 1; interior points are clamped between their
+ * neighbours with `MIN_T_GAP` (order never changes). Returns the points unchanged when there is no room.
+ */
+export function setControlPointTime(points: readonly SketchPoint[], i: number, t: number): SketchPoint[] {
+  const next = points.map((p) => ({ ...p }));
+  if (i <= 0 || i >= points.length - 1 || !Number.isFinite(t)) return next;
+  const lo = points[i - 1].t + MIN_T_GAP, hi = points[i + 1].t - MIN_T_GAP;
+  if (lo > hi) return next;
+  next[i].t = Math.min(hi, Math.max(lo, t));
+  return next;
 }
+
+/** Shot time (ms) -> control point time (keyframe `t` is reached at frame `t * 119`). */
+export const timeMsToT = (ms: number) => Math.min(1, Math.max(0, ms / LAST_FRAME_MS));
 
 /** OUTPUT-frame uv01 -> SOURCE image uv01 (inverse cover-fit; valid for the source pose, t = 0). */
 export function outputToSourceUv(uv: readonly number[], srcW: number, srcH: number, outW: number, outH: number): Vec2 {
@@ -147,22 +162,35 @@ export const LAST_FRAME_MS = (119 * 1000) / 24;
  */
 export const keyframeTimeMs = (t: number) => Math.min(1, Math.max(0, t)) * LAST_FRAME_MS;
 
+export interface MotionSuggestion {
+  params: Record<ParamName, number>;
+  /** Scale of the sketch displacement about its first point (1 = sketch unchanged). */
+  sketchScale: number;
+  source: "compiler" | "holes";
+}
+
 /**
  * Reduced-motion proposal for the "Apply reduced motion" button: the compiler's `suggested_params`
- * when it has them, else (hole ratio above the guardrail) the current motion halved. Never applied
- * automatically.
+ * (incl. `sketch_scale`) when it has them, else (hole ratio above the guardrail) the motion halved:
+ * params x 0.5 and, with a moving sketch, the sketch displacement x 0.5 (holes are often driven by
+ * the sketch's framing yaw). Never applied automatically.
  */
-export function motionSuggestion(path: CompiledPath | null, holeRatio: number | null): { params: Record<ParamName, number>; source: "compiler" | "holes" } | null {
+export function motionSuggestion(path: CompiledPath | null, holeRatio: number | null, sketch: readonly SketchPoint[] = []): MotionSuggestion | null {
   if (!path) return null;
   const sp = path.suggested_params;
   if (sp && PARAMS.every((k) => typeof sp[k] === "number" && Number.isFinite(sp[k]))) {
-    return { params: Object.fromEntries(PARAMS.map((k) => [k, sp[k]])) as Record<ParamName, number>, source: "compiler" };
+    const ss = typeof sp.sketch_scale === "number" && Number.isFinite(sp.sketch_scale) ? sp.sketch_scale : 1;
+    return { params: Object.fromEntries(PARAMS.map((k) => [k, sp[k]])) as Record<ParamName, number>, sketchScale: ss, source: "compiler" };
   }
-  if (holeRatio !== null && holeRatio > HOLE_WARN_RATIO && PARAMS.some((k) => (path.params[k] ?? 0) !== 0)) {
-    return { params: Object.fromEntries(PARAMS.map((k) => [k, (path.params[k] ?? 0) * 0.5])) as Record<ParamName, number>, source: "holes" };
+  const moving = sketch.some((p) => p.u !== sketch[0].u || p.v !== sketch[0].v);
+  if (holeRatio !== null && holeRatio > HOLE_WARN_RATIO && (moving || PARAMS.some((k) => (path.params[k] ?? 0) !== 0))) {
+    return { params: Object.fromEntries(PARAMS.map((k) => [k, (path.params[k] ?? 0) * 0.5])) as Record<ParamName, number>, sketchScale: moving ? 0.5 : 1, source: "holes" };
   }
   return null;
 }
+
+/** The suggestion as `applySuggestedParams` input (`suggested_params` shape incl. `sketch_scale`). */
+export const suggestionToParams = (s: MotionSuggestion): Record<string, number> => ({ ...s.params, sketch_scale: s.sketchScale });
 
 /** Target position in the OUTPUT frame (uv01) for a pose: where the amber reticle is drawn. */
 export function targetOutputUv(K: number[][], Tcw: number[][], targetWorld: readonly number[], outW: number, outH: number): Vec2 | null {
@@ -176,15 +204,23 @@ export function sketchAtTarget(targetOut: readonly number[]): SketchPoint[] {
   return [{ t: 0, u, v }, { t: 1, u, v }];
 }
 
-/** Insert a control point halfway between the last two (max 5), keeping arc-length times. */
+/** Insert a control point halfway (in position and time) between the last two (max 5). */
 export function addControlPoint(points: readonly SketchPoint[]): SketchPoint[] {
   if (points.length >= 5 || points.length < 2) return points.map((p) => ({ ...p }));
   const a = points[points.length - 2], b = points[points.length - 1];
-  return retime([...points.slice(0, -1), { t: 0, u: (a.u + b.u) / 2, v: (a.v + b.v) / 2 }, b]);
+  return [...points.slice(0, -1).map((p) => ({ ...p })), { t: (a.t + b.t) / 2, u: (a.u + b.u) / 2, v: (a.v + b.v) / 2 }, { ...b }];
 }
 
-/** Remove control point `i`; fewer than 2 points means no sketch (the preset path). */
+/** Remove control point `i` (a removed endpoint's neighbour becomes the new endpoint at t 0 / 1); fewer than 2 = no sketch. */
 export function removeControlPoint(points: readonly SketchPoint[], i: number): SketchPoint[] {
-  const next = points.filter((_, k) => k !== i);
-  return next.length < 2 ? [] : retime(next);
+  const next = points.filter((_, k) => k !== i).map((p) => ({ ...p }));
+  if (next.length < 2) return [];
+  next[0].t = 0;
+  next[next.length - 1].t = 1;
+  return next;
+}
+
+/** Scale the sketch displacement about its first point (times kept) — the `sketch_scale` suggestion. */
+export function scaleSketchPoints(points: readonly SketchPoint[], s: number): SketchPoint[] {
+  return scaleSketch(points.map((p) => [p.t, p.u, p.v]), s).map(([t, u, v]) => ({ t, u: clamp01(u), v: clamp01(v) }));
 }

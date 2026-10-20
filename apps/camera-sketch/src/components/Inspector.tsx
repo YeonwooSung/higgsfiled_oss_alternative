@@ -13,7 +13,7 @@ import { useI18n } from "../i18n";
 import { PARAMS, type ParamName } from "../model/path";
 import {
   addControlPoint, HOLE_WARN_RATIO, keyframeTimeMs, moveControlPoint, reasonKey, removeControlPoint, sketchAtTarget, sourceToOutputUv,
-  STRENGTH_PARAM, strengthOf, withStrength,
+  STRENGTH_PARAM, strengthOf, suggestionToParams, withStrength,
 } from "../model/sketch";
 import { useEditor } from "../state/editorStore";
 import { PresetPicker } from "./LeftPanel";
@@ -70,9 +70,12 @@ export function PathStatus({ cam }: { cam: CameraPathState }) {
         <Notice tone="warn">
           <p>{t("compareHint")}</p>
           <p className="tabular text-muted">
-            {PARAMS.filter((k) => cam.suggestion!.params[k] !== (path.params[k] ?? 0)).map((k) => `${t(PARAM_LABEL[k])} ${fmt(path.params[k] ?? 0)} → ${fmt(cam.suggestion!.params[k])}`).join(" · ")}
+            {[
+              ...PARAMS.filter((k) => cam.suggestion!.params[k] !== (path.params[k] ?? 0)).map((k) => `${t(PARAM_LABEL[k])} ${fmt(path.params[k] ?? 0)} → ${fmt(cam.suggestion!.params[k])}`),
+              ...(cam.suggestion.sketchScale !== 1 ? [t("sketchScaleChange", { value: Math.round(cam.suggestion.sketchScale * 100) })] : []),
+            ].join(" · ")}
           </p>
-          <Button size="sm" variant="primary" onClick={() => applySuggested(cam.suggestion!.params)}>{t("applyReducedMotion")}</Button>
+          <Button size="sm" variant="primary" onClick={() => applySuggested(suggestionToParams(cam.suggestion!))}>{t("applyReducedMotion")}</Button>
         </Notice>
       )}
       {!cam.provisional && cam.response && (

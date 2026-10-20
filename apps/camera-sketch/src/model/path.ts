@@ -32,6 +32,7 @@ export const NEAR = 0.05;
 export const FPS = 24;
 export const MAX_RAW_POINTS = 128;
 export const MAX_CONTROL_POINTS = 5;
+export const MIN_CONTROL_POINTS = 2;
 export const RDP_EPS0 = 0.005;
 export const RDP_MAX_DOUBLINGS = 32;
 export const CLOSED_DIST = 0.02;
@@ -128,18 +129,55 @@ export function simplifySketch(points: readonly (readonly number[])[]): { contro
   const ctrl: ControlPoint[] = idx.map((i) => [cum[i] / total, pts[i][1], pts[i][2]]);
   ctrl[0] = [0, ctrl[0][1], ctrl[0][2]];
   ctrl[ctrl.length - 1] = [1, ctrl[ctrl.length - 1][1], ctrl[ctrl.length - 1][2]];
+  return { controlPoints: ctrl, warning: shapeWarning(P, total, idx.map((i) => P[i])) };
+}
+
+/** `"unsupported_sketch"` when polyline `P` closes or control polyline `C` turns back > 120 degrees. */
+function shapeWarning(P: Pt[], total: number, C: Pt[]): "unsupported_sketch" | null {
   let warning: "unsupported_sketch" | null = null;
   const last = P[P.length - 1];
   if (Math.hypot(last[0] - P[0][0], last[1] - P[0][1]) <= CLOSED_DIST && total > CLOSED_MIN_LEN) warning = "unsupported_sketch";
   const dirs: Pt[] = [];
-  for (let k = 1; k < idx.length; k++) dirs.push([P[idx[k]][0] - P[idx[k - 1]][0], P[idx[k]][1] - P[idx[k - 1]][1]]);
+  for (let k = 1; k < C.length; k++) dirs.push([C[k][0] - C[k - 1][0], C[k][1] - C[k - 1][1]]);
   for (let i = 0; i < dirs.length; i++) {
     for (let j = i + 1; j < dirs.length; j++) {
       const a = dirs[i], b = dirs[j];
       if (a[0] * b[0] + a[1] * b[1] < BACKTRACK_COS * (Math.hypot(a[0], a[1]) * Math.hypot(b[0], b[1]))) warning = "unsupported_sketch";
     }
   }
-  return { controlPoints: ctrl, warning };
+  return warning;
+}
+
+/** 2..5 finite points with `t` strictly increasing from exactly 0 to exactly 1. */
+export function isControlPoints(points: readonly (readonly number[])[]): boolean {
+  if (points.length < MIN_CONTROL_POINTS || points.length > MAX_CONTROL_POINTS) return false;
+  if (!points.every((p) => p.every(Number.isFinite))) return false;
+  if (points[0][0] !== 0 || points[points.length - 1][0] !== 1) return false;
+  for (let i = 1; i < points.length; i++) if (!(points[i][0] > points[i - 1][0])) return false;
+  return true;
+}
+
+/**
+ * Sketch as given to the compiler -> control points + warning (path.py `sketch_control_points`):
+ * 2..5 points are control points with USER times (kept as given; must pass `isControlPoints`,
+ * else throws); 1 or > 5 points are a raw capture and go through `simplifySketch`.
+ */
+export function sketchControlPoints(points: readonly (readonly number[])[]): { controlPoints: ControlPoint[]; warning: "unsupported_sketch" | null } {
+  if (points.length >= MIN_CONTROL_POINTS && points.length <= MAX_CONTROL_POINTS) {
+    if (!isControlPoints(points)) throw new Error("control points need t strictly increasing from 0 to 1");
+    const ctrl = points.map((p) => [p[0], p[1], p[2]] as ControlPoint);
+    const C: Pt[] = ctrl.map((c) => [c[1], c[2]]);
+    let total = 0;
+    for (let i = 1; i < C.length; i++) total += Math.hypot(C[i][0] - C[i - 1][0], C[i][1] - C[i - 1][1]);
+    return { controlPoints: ctrl, warning: shapeWarning(C, total, C) };
+  }
+  return simplifySketch(points);
+}
+
+/** Scale the sketch displacement about the first control point (times unchanged). */
+export function scaleSketch(ctrl: readonly (readonly number[])[], s: number): ControlPoint[] {
+  const u0 = ctrl[0][1], v0 = ctrl[0][2];
+  return ctrl.map((c) => [c[0], u0 + s * (c[1] - u0), v0 + s * (c[2] - v0)] as ControlPoint);
 }
 
 // ---- framing least squares -------------------------------------------------------------
@@ -324,11 +362,12 @@ export function compilePathProvisional(
     dg.details.push({ code, ...detail });
   };
   const blocking = () => out.reasons.some((r) => !NON_BLOCKING.has(r));
+  let sketchCtrl: ControlPoint[] = []; // control points actually compiled (for the sketch_scale suggestion)
   const finish = (): CompiledPath => {
     if (blocking()) out.status = "invalid";
     else if (out.reasons.length) out.status = "warning";
     if ((opts.suggest ?? true) && out.reasons.some((r) => MOTION_REASONS.has(r))) {
-      out.suggested_params = suggestParams(cfg, params, scene, outW, outH, nFrames, opts.presets);
+      out.suggested_params = suggestParams(cfg, params, sketchCtrl, scene, outW, outH, nFrames, opts.presets);
     }
     return out;
   };
@@ -337,6 +376,7 @@ export function compilePathProvisional(
   if (easing !== "linear" && easing !== "ease_in_out") fail("unknown_easing");
   if (!Number.isInteger(nFrames) || nFrames < 2) fail("invalid_input", { field: "n_frames" });
   let raw: ControlPoint[] = [];
+  let parsed: { controlPoints: ControlPoint[]; warning: "unsupported_sketch" | null } = { controlPoints: [], warning: null };
   try {
     const sp: unknown = cfg.sketch_points;
     const list = sp || [];
@@ -349,6 +389,7 @@ export function compilePathProvisional(
       if (tri.length !== 3 || !tri.every(isFiniteNumber)) throw new Error("bad point");
       raw.push(tri as ControlPoint);
     }
+    if (raw.length) parsed = sketchControlPoints(raw);
   } catch {
     fail("invalid_input", { field: "sketch_points" });
     raw = [];
@@ -372,9 +413,9 @@ export function compilePathProvisional(
   const tOut: Vec2 = [(tu * scene.src_w * fit.scale + fit.offset_x) / outW, (tv * scene.src_h * fit.scale + fit.offset_y) / outH];
   let ctrl: ControlPoint[];
   if (raw.length) {
-    const r = simplifySketch(raw);
-    ctrl = r.controlPoints;
-    if (r.warning) fail(r.warning);
+    ctrl = parsed.controlPoints;
+    sketchCtrl = ctrl;
+    if (parsed.warning) fail(parsed.warning);
   } else {
     ctrl = [[0, 0.5, 0.5], [1, 0.5, 0.5]];
   }
@@ -444,15 +485,26 @@ export function compilePathProvisional(
   return finish();
 }
 
-/** Largest `params * 0.5**k` (k = 1..4; zero params stay 0) whose compile has no motion reason. */
+/**
+ * Smallest reduction whose compile has no motion reason (path.py `_suggest_params`): for k = 1..4
+ * (f = 0.5**k) try (1) params * f (zero params stay 0) with the sketch unchanged -> sketch_scale 1,
+ * then (2, only with a moving sketch) params * f AND the sketch displacement * f -> sketch_scale f.
+ */
 function suggestParams(
-  cfg: PathConfig, params: Record<string, number>, scene: SceneInfo, outW: number, outH: number, nFrames: number, presets?: CameraPreset[],
+  cfg: PathConfig, params: Record<string, number>, sketch: ControlPoint[], scene: SceneInfo, outW: number, outH: number, nFrames: number,
+  presets?: CameraPreset[],
 ): Record<string, number> | null {
   if (!Object.keys(params).length) return null;
+  const moving = sketch.some((c) => c[1] !== sketch[0][1] || c[2] !== sketch[0][2]);
   for (let k = 1; k < 5; k++) {
-    const trial = Object.fromEntries(PARAMS.map((p) => [p, params[p] !== 0 ? params[p] * 0.5 ** k : 0])) as Record<ParamName, number>;
-    const res = compilePathProvisional({ ...cfg, ...trial }, scene, outW, outH, { nFrames, presets, suggest: false });
-    if (!res.reasons.some((r) => MOTION_REASONS.has(r))) return trial;
+    const f = 0.5 ** k;
+    const trial = Object.fromEntries(PARAMS.map((p) => [p, params[p] !== 0 ? params[p] * f : 0])) as Record<ParamName, number>;
+    for (const ss of moving ? [1, f] : [1]) {
+      const c: PathConfig = { ...cfg, ...trial };
+      if (ss !== 1) c.sketch_points = scaleSketch(sketch, ss).map(([t, u, v]) => ({ t, u, v }));
+      const res = compilePathProvisional(c, scene, outW, outH, { nFrames, presets, suggest: false });
+      if (!res.reasons.some((r) => MOTION_REASONS.has(r))) return { ...trial, sketch_scale: ss };
+    }
   }
   return null;
 }

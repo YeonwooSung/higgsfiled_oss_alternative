@@ -35,6 +35,7 @@ NEAR = 0.05
 FPS = 24
 MAX_RAW_POINTS = 128
 MAX_CONTROL_POINTS = 5
+MIN_CONTROL_POINTS = 2
 RDP_EPS0 = 0.005
 RDP_MAX_DOUBLINGS = 32
 CLOSED_DIST = 0.02
@@ -141,16 +142,59 @@ def simplify_sketch(
         idx = [0, len(P) - 1]
     ctrl = [(float(cum[i] / total), pts[i][1], pts[i][2]) for i in idx]
     ctrl[0], ctrl[-1] = (0.0, *ctrl[0][1:]), (1.0, *ctrl[-1][1:])
+    return ctrl, _shape_warning(P, total, P[idx])
+
+
+def _shape_warning(P: np.ndarray, total: float, C: np.ndarray) -> str | None:
+    """``"unsupported_sketch"`` when polyline ``P`` (arc length ``total``) closes or control
+    polyline ``C`` turns back by more than 120 degrees between ANY two segments."""
     warning = None
     if float(np.hypot(*(P[-1] - P[0]))) <= CLOSED_DIST and total > CLOSED_MIN_LEN:
         warning = "unsupported_sketch"
-    dirs = np.diff(P[idx], axis=0)
+    dirs = np.diff(C, axis=0)
     for i in range(len(dirs)):
         for j in range(i + 1, len(dirs)):
             a, b = dirs[i], dirs[j]
             if float(a @ b) < BACKTRACK_COS * float(np.hypot(*a) * np.hypot(*b)):
                 warning = "unsupported_sketch"
-    return ctrl, warning
+    return warning
+
+
+def is_control_points(points: list[tuple[float, float, float]]) -> bool:
+    """2..5 finite points with ``t`` strictly increasing from exactly 0.0 to exactly 1.0."""
+    if not MIN_CONTROL_POINTS <= len(points) <= MAX_CONTROL_POINTS:
+        return False
+    if not all(math.isfinite(x) for p in points for x in p):
+        return False
+    ts = [p[0] for p in points]
+    return ts[0] == 0.0 and ts[-1] == 1.0 and all(b > a for a, b in zip(ts, ts[1:]))
+
+
+def sketch_control_points(
+    points: list[tuple[float, float, float]],
+) -> tuple[list[tuple[float, float, float]], str | None]:
+    """Sketch as given to ``compile_path`` -> control points + optional warning.
+
+    - 2..5 points are CONTROL POINTS: their ``t`` are user times and are used as given (no
+      arc-length retiming); they must satisfy ``is_control_points`` else ``ValueError``.
+    - 1 point (a click) or more than 5 points are a RAW capture: ``simplify_sketch`` (drawing
+      order, arc-length times).
+    The shape warning is the same for both (closed loop / > 120 degree turn back).
+    """
+    if MIN_CONTROL_POINTS <= len(points) <= MAX_CONTROL_POINTS:
+        if not is_control_points(points):
+            raise ValueError("control points need t strictly increasing from 0 to 1")
+        ctrl = [(float(t), float(u), float(v)) for t, u, v in points]
+        C = np.array([(u, v) for _, u, v in ctrl])
+        total = float(np.hypot(*np.diff(C, axis=0).T).sum())
+        return ctrl, _shape_warning(C, total, C)
+    return simplify_sketch(points)
+
+
+def scale_sketch(ctrl: list, s: float) -> list[tuple[float, float, float]]:
+    """Scale the sketch displacement about the first control point (times unchanged)."""
+    u0, v0 = float(ctrl[0][1]), float(ctrl[0][2])
+    return [(float(t), u0 + s * (float(u) - u0), v0 + s * (float(v) - v0)) for t, u, v in ctrl]
 
 
 # ---- framing least squares -------------------------------------------------------------
@@ -305,7 +349,8 @@ def compile_path(
 ) -> CompiledPath:
     """Compile a §10 ``path`` config into keyframes and ``n_frames`` dense ``T_cw`` samples.
 
-    ``cfg``: ``preset``, ``sketch_points`` ([{t,u,v}] or [(t,u,v)], may be empty),
+    ``cfg``: ``preset``, ``sketch_points`` ([{t,u,v}] or [(t,u,v)], may be empty; 2..5 points are
+    control points with user times, 1 or > 5 points a raw capture — see ``sketch_control_points``),
     ``lateral_ratio``/``push_ratio``/``arc_deg`` (missing -> preset default), ``easing``.
     Keyframes: one per control point (no sketch -> t = 0 and 1 with constant framing). For
     key k: ``e_k = ease(t_k)``, center ``preset_center(e_k)``, R = ``framing_rotation`` toward
@@ -341,13 +386,15 @@ def compile_path(
             out.reasons.append(code)
         dg["details"].append({"code": code, **detail})
 
+    sketch_ctrl: list = []  # control points actually compiled (for the sketch_scale suggestion)
+
     def finish() -> CompiledPath:
         if any(r not in ("unsupported_sketch", "framing_clamped") for r in out.reasons):
             out.status = "invalid"
         elif out.reasons:
             out.status = "warning"
         if _suggest and any(r in MOTION_REASONS for r in out.reasons):
-            out.suggested_params = _suggest_params(cfg, out.params, scene, out_w, out_h, n_frames)
+            out.suggested_params = _suggest_params(cfg, out.params, sketch_ctrl, scene, out_w, out_h, n_frames)
         return out
 
     if name not in presets:
@@ -363,9 +410,10 @@ def compile_path(
             if len(tri) != 3 or not all(_finite_number(x) for x in tri):
                 raise ValueError
             raw.append(tuple(float(x) for x in tri))
+        ctrl_in, warning = sketch_control_points(raw) if raw else ([], None)
     except (ValueError, TypeError, KeyError):
         fail("invalid_input", field="sketch_points")
-        raw = []
+        raw, ctrl_in, warning = [], [], None
     if out.reasons:
         return finish()
     preset = presets[name]
@@ -391,7 +439,8 @@ def compile_path(
     t_out = np.array([(tu * scene.src_w * fit.scale + fit.offset_x) / out_w,
                       (tv * scene.src_h * fit.scale + fit.offset_y) / out_h])
     if raw:
-        ctrl, warning = simplify_sketch(raw)
+        ctrl = ctrl_in
+        sketch_ctrl[:] = ctrl
         if warning:
             fail(warning)
     else:
@@ -459,17 +508,27 @@ def compile_path(
 
 
 def _suggest_params(
-    cfg: dict, params: dict, scene: SceneInfo, out_w: int, out_h: int, n_frames: int
+    cfg: dict, params: dict, sketch: list, scene: SceneInfo, out_w: int, out_h: int, n_frames: int
 ) -> dict | None:
-    """Largest ``params * 0.5**k`` (k = 1..4) whose compile has no motion reason; else None.
+    """Smallest reduction whose compile has no motion reason; else None.
 
-    Only nonzero params are halved; zero params stay exactly ``0.0``.
+    For ``k = 1..4`` (``f = 0.5**k``), in this order:
+      1. params ``* f`` (only nonzero params are scaled; zero params stay exactly ``0.0``),
+         sketch unchanged -> ``{..params, "sketch_scale": 1.0}``;
+      2. only with a sketch: params ``* f`` AND the sketch displacement about its first control
+         point ``* f`` (``scale_sketch``; times unchanged) -> ``{..params, "sketch_scale": f}``.
     """
     if not params:
         return None
+    moving = any((u, v) != (sketch[0][1], sketch[0][2]) for _, u, v in sketch)
     for k in range(1, 5):
-        trial = {p: (params[p] * 0.5**k if params[p] != 0 else 0.0) for p in PARAMS}
-        res = compile_path({**cfg, **trial}, scene, out_w, out_h, n_frames, _suggest=False)
-        if not any(r in MOTION_REASONS for r in res.reasons):
-            return trial
+        f = 0.5**k
+        trial = {p: (params[p] * f if params[p] != 0 else 0.0) for p in PARAMS}
+        for ss in ((1.0, f) if moving else (1.0,)):
+            c = {**cfg, **trial}
+            if ss != 1.0:
+                c["sketch_points"] = [{"t": t, "u": u, "v": v} for t, u, v in scale_sketch(sketch, ss)]
+            res = compile_path(c, scene, out_w, out_h, n_frames, _suggest=False)
+            if not any(r in MOTION_REASONS for r in res.reasons):
+                return {**trial, "sketch_scale": ss}
     return None
