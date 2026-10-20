@@ -25,13 +25,18 @@ async def put_object(token: str, request: Request):
         raise ApiError(403, "invalid_upload_url", "Upload link is invalid or expired.") from None
     if request.headers.get("content-type", "").split(";")[0].strip() != claims["mime"]:
         raise ApiError(415, "unsupported_media_type", "Content-Type does not match the declared type.")
-    chunks, total = [], 0
-    async for chunk in request.stream():
-        total += len(chunk)
-        if total > claims["max"]:
-            raise ApiError(413, "too_large", "Upload is larger than declared.")
-        chunks.append(chunk)
-    storage.put_bytes(claims["k"], b"".join(chunks), claims["mime"])
+    tmp = storage.begin_write(claims["k"])
+    total = 0
+    try:
+        with tmp.open("wb") as out:
+            async for chunk in request.stream():
+                total += len(chunk)
+                if total > claims["max"]:
+                    raise ApiError(413, "too_large", "Upload is larger than declared.")
+                out.write(chunk)
+        storage.commit_write(claims["k"], tmp)
+    finally:
+        tmp.unlink(missing_ok=True)
     return Response(status_code=200)
 
 

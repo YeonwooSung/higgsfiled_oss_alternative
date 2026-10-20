@@ -13,11 +13,14 @@ import json
 import shutil
 import time
 from datetime import UTC, datetime
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Protocol
 
 MIME_EXT = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "video/mp4": ".mp4",
-            "application/json": ".json", "application/zip": ".zip"}
+            "video/quicktime": ".mov", "video/webm": ".webm", "audio/mp4": ".m4a", "application/json": ".json", "application/zip": ".zip"}
+
+CHUNK_SIZE = 1024 * 1024
 
 
 def object_key(session_id, project_id, asset_id, role: str, mime: str) -> str:
@@ -30,6 +33,7 @@ class Storage(Protocol):
     def put_bytes(self, key: str, data: bytes, mime: str | None = None) -> None: ...
     def put_file(self, key: str, path: Path, mime: str | None = None) -> None: ...
     def get_bytes(self, key: str) -> bytes: ...
+    def iter_chunks(self, key: str, chunk_size: int = ...) -> Iterator[bytes]: ...
     def get_file(self, key: str, path: Path) -> Path: ...
     def exists(self, key: str) -> bool: ...
     def size(self, key: str) -> int: ...
@@ -112,6 +116,20 @@ class LocalStorage:
     def get_bytes(self, key: str) -> bytes:
         return self._path(key).read_bytes()
 
+    def iter_chunks(self, key: str, chunk_size: int = CHUNK_SIZE) -> Iterator[bytes]:
+        with self._path(key).open("rb") as f:
+            while chunk := f.read(chunk_size):
+                yield chunk
+
+    def begin_write(self, key: str) -> Path:
+        """Temp path (same directory) to stream an upload into; ``commit_write`` publishes it atomically."""
+        p = self._path(key)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        return p.with_suffix(p.suffix + ".part")
+
+    def commit_write(self, key: str, tmp: Path) -> None:
+        tmp.replace(self._path(key))
+
     def get_file(self, key: str, path: Path) -> Path:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(self._path(key), path)
@@ -163,6 +181,9 @@ class S3Storage:
 
     def get_bytes(self, key: str) -> bytes:
         return self.s3.get_object(Bucket=self.bucket, Key=key)["Body"].read()
+
+    def iter_chunks(self, key: str, chunk_size: int = CHUNK_SIZE) -> Iterator[bytes]:
+        yield from self.s3.get_object(Bucket=self.bucket, Key=key)["Body"].iter_chunks(chunk_size)
 
     def get_file(self, key: str, path: Path) -> Path:
         Path(path).parent.mkdir(parents=True, exist_ok=True)

@@ -23,7 +23,7 @@ router = APIRouter()
 
 
 class ProjectCreate(BaseModel):
-    app_slug: Literal["product-lock", "camera-sketch"]
+    app_slug: Literal["product-lock", "camera-sketch", "pocket-vfx"]
     title: str = Field(min_length=1, max_length=120)
 
 

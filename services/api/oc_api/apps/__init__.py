@@ -35,6 +35,7 @@ class AppModule(Protocol):
     export_source_key: str  # options key holding the source job id
     workflows: tuple[str, ...]  # bindings GPU profiles need for this app
     kind_workflows: dict[str, tuple[str, ...]]  # kind -> the workflows that kind needs (absent: ``workflows``)
+    # Optional ``upload_limits: dict[role, int]`` (bytes) overrides DEFAULT_UPLOAD_BYTES per role.
 
     def default_config(self, profile: str) -> BaseModel: ...
 
@@ -46,12 +47,17 @@ class AppModule(Protocol):
     def capabilities_extra(self) -> dict: ...
 
 
+DEFAULT_UPLOAD_BYTES = 20 * 1024 * 1024
 APPS: dict[str, AppModule] = {}
 
 
 def kind_workflows(app: AppModule, kind: str | None) -> tuple[str, ...]:
     """Workflows a profile must provide for ``kind`` (the app's full set when the kind is unknown / unmapped)."""
     return app.kind_workflows.get(kind, app.workflows) if kind else app.workflows
+
+
+def upload_limit(app: AppModule, role: str) -> int:
+    return getattr(app, "upload_limits", {}).get(role, DEFAULT_UPLOAD_BYTES)
 
 
 def get_app(slug: str) -> AppModule:
@@ -66,8 +72,11 @@ def _register() -> None:
 
     from .camera_sketch import MODULE as camera_sketch
 
+    from .pocket_vfx import MODULE as pocket_vfx
+
     APPS[product_lock.slug] = product_lock
     APPS[camera_sketch.slug] = camera_sketch
+    APPS[pocket_vfx.slug] = pocket_vfx
 
 
 _register()

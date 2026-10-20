@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
 
-from ..apps import get_app
+from ..apps import get_app, upload_limit
 from ..deps import current_session, get_db, owned_project, parse_uuid
 from ..errors import ApiError
 from ..jobs_service import enqueue_internal_job
@@ -21,7 +21,22 @@ from ..storage import object_key
 
 router = APIRouter()
 
-MAX_IMAGE_BYTES = 20 * 1024 * 1024
+def _is_video(mimes: tuple[str, ...]) -> bool:
+    return all(m.startswith("video/") for m in mimes)
+
+
+def _format_message(mimes: tuple[str, ...]) -> str:
+    if _is_video(mimes):
+        return "Use an MP4, MOV or WebM video."
+    return "Use JPG, PNG or WebP (masks: PNG)."
+
+
+def _limit_label(limit: int) -> str:
+    return f"{limit // (1024 * 1024)} MB"
+
+
+def _too_large_message(limit: int, mimes: tuple[str, ...]) -> str:
+    return f"{'Videos' if _is_video(mimes) else 'Images'} must be {_limit_label(limit)} or smaller."
 
 
 class AssetInit(BaseModel):
@@ -48,13 +63,15 @@ def owned_asset(asset_id: str, db: DbSession, session: SessionRow) -> Asset:
 def init_asset(project_id: str, body: AssetInit, request: Request, db: DbSession = Depends(get_db),
                session: SessionRow = Depends(current_session)):
     project = owned_project(project_id, db, session)
-    roles = get_app(project.app_slug).upload_roles
+    app = get_app(project.app_slug)
+    roles = app.upload_roles
     if body.role not in roles:
         raise ApiError(422, "invalid_role", f"role {body.role!r} cannot be uploaded", field="role")
     if body.mime not in roles[body.role]:
-        raise ApiError(415, "unsupported_media_type", "Use JPG, PNG or WebP (masks: PNG).", field="mime")
-    if body.bytes > MAX_IMAGE_BYTES:
-        raise ApiError(413, "too_large", "Images must be 20 MB or smaller.", field="bytes")
+        raise ApiError(415, "unsupported_media_type", _format_message(roles[body.role]), field="mime")
+    limit = upload_limit(app, body.role)
+    if body.bytes > limit:
+        raise ApiError(413, "too_large", _too_large_message(limit, roles[body.role]), field="bytes")
     asset_id = uuid.uuid4()
     key = object_key(session.id, project.id, asset_id, f"{body.role}-original", body.mime)
     asset = Asset(id=asset_id, project_id=project.id, role=body.role, state="pending_upload", object_key=key,
@@ -78,15 +95,18 @@ def complete_asset(asset_id: str, body: AssetComplete, request: Request, db: DbS
     if not storage.exists(asset.object_key):
         raise ApiError(409, "upload_missing", "No uploaded bytes found for this asset.", retryable=True)
     size = storage.size(asset.object_key)
-    if size > MAX_IMAGE_BYTES or size > (asset.bytes or MAX_IMAGE_BYTES):
+    limit = upload_limit(get_app(db.get(Project, asset.project_id).app_slug), asset.role)
+    if size > limit or size > (asset.bytes or limit):
         # Presigned S3 PUTs cannot enforce the declared size; check before reading anything.
         storage.delete_prefix(asset.object_key)
-        raise ApiError(413, "too_large", "Upload is larger than declared (images must be 20 MB or smaller).")
-    data = storage.get_bytes(asset.object_key)
-    digest = hashlib.sha256(data).hexdigest()
+        raise ApiError(413, "too_large", f"Upload is larger than declared (maximum {_limit_label(limit)}).")
+    hasher = hashlib.sha256()
+    for chunk in storage.iter_chunks(asset.object_key):
+        hasher.update(chunk)
+    digest = hasher.hexdigest()
     if digest != body.sha256.lower():
         raise ApiError(422, "hash_mismatch", "Uploaded bytes do not match the provided sha256.", field="sha256")
-    asset.sha256, asset.bytes, asset.state = digest, len(data), "uploaded"
+    asset.sha256, asset.bytes, asset.state = digest, size, "uploaded"
     project = db.get(Project, asset.project_id)
     job = enqueue_internal_job(db, project, "asset.inspect", {"asset_id": str(asset.id)})
     db.commit()

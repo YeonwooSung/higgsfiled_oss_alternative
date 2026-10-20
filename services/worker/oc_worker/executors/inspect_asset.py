@@ -4,29 +4,36 @@ from __future__ import annotations
 
 import hashlib
 import io
+from dataclasses import asdict
 
 from open_creative.media.image import MediaError, load_mask_png, mask_to_png_bytes, normalize_image, to_png_bytes
+from open_creative.media.video_ingest import SourceInfo, filmstrip, normalize_clip, probe_source, proxy_size
 from open_creative.product_lock.masks import mask_from_alpha
 
 from ..stages import JobRun, StageFailed
+
+_VIDEO_ROLES = frozenset({"clip"})
 
 
 def inspect_asset(run: JobRun) -> tuple[list[str], dict]:
     asset = run.asset(run.job.options_json["asset_id"])
     if asset.state == "ready":
         return [str(asset.id)], dict(run.job.result_json or {})
-    data = run.ctx.storage.get_bytes(asset.object_key)
     run.transition("postprocessing", "inspect")
     try:
+        if asset.role in _VIDEO_ROLES:
+            return _clip(run, asset)
+        data = run.ctx.storage.get_bytes(asset.object_key)
         if asset.role == "product":
             return _product(run, asset, data)
-        if asset.role == "scene":
+        if asset.role in ("scene", "clean_plate"):
             return _product(run, asset, data, suggest_mask=False)
         return _mask(run, asset, data)
     except MediaError as e:
         asset.state, asset.error_code = "rejected", e.code
         run.db.commit()
-        raise StageFailed(e.code, _MESSAGES.get(e.code, "The file could not be used.")) from e
+        messages = {**_MESSAGES, **_MESSAGES_VIDEO} if asset.role in _VIDEO_ROLES else _MESSAGES
+        raise StageFailed(e.code, messages.get(e.code, "The file could not be used.")) from e
 
 
 _MESSAGES = {
@@ -34,6 +41,14 @@ _MESSAGES = {
     "unsupported_format": "Use a JPG, PNG or WebP image.",
     "too_many_pixels": "Images must be 24 megapixels or smaller.",
     "decode_failed": "The image could not be decoded.",
+}
+_MESSAGES_VIDEO = {
+    "too_large": "Videos must be 100 MB or smaller.",
+    "unsupported_format": "Use an MP4, MOV or WebM video.",
+    "too_long": "Clips must be 60 seconds or shorter.",
+    "unsupported_codec": "This video codec is not supported.",
+    "multiple_video_streams": "This video codec is not supported.",
+    "too_large_dims": "Videos must be 4096 pixels or smaller on the longest side.",
 }
 
 
@@ -81,3 +96,50 @@ def _mask(run: JobRun, asset, data: bytes):
     asset.state = "ready"
     run.db.commit()
     return [str(asset.id)], {}
+
+
+def _preview_size(info: SourceInfo) -> tuple[int, int]:
+    """Display aspect fitted inside the proxy box, even dimensions (aspect preserved, no letterbox)."""
+    bw, bh = proxy_size(info.display_w, info.display_h)
+    scale = min(bw / info.display_w, bh / info.display_h, 1.0)
+    return (max(2, round(info.display_w * scale / 2) * 2), max(2, round(info.display_h * scale / 2) * 2))
+
+
+def _clip(run: JobRun, asset):
+    """Probe the uploaded clip, then store a proxy-size CFR 24 preview of the whole source and a filmstrip.
+    The original stays untouched; the preview is never the original."""
+    src = run.fetch(asset)
+    try:
+        info = probe_source(src)
+    except MediaError:
+        raise
+    except Exception as e:  # noqa: BLE001 - ffprobe failures on undecodable bytes
+        raise MediaError("unsupported_codec") from e
+    pw, ph = _preview_size(info)
+    preview = run.work_dir / "clip_preview.mp4"
+    try:
+        normalize_clip(src, preview, info, 0, info.duration_ms, pw, ph)
+    except MediaError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise MediaError("unsupported_codec") from e
+    strip = run.work_dir / "clip_filmstrip.png"
+    indices = filmstrip(preview, strip)
+    asset.meta_json = {"source": asdict(info), "original_sha256": asset.sha256 or _sha256_file(src)}
+    asset.width, asset.height = info.display_w, info.display_h
+    asset.duration_ms, asset.frame_count = info.duration_ms, info.frame_count
+    asset.state = "ready"
+    run.db.commit()
+    preview_id = run.store_asset("clip_preview", preview, "video/mp4", source_asset_id=asset.id,
+                                 meta={"fps": 24, "rotation_applied": info.rotation})
+    strip_id = run.store_asset("clip_filmstrip", strip, "image/png", source_asset_id=asset.id,
+                               meta={"frame_indices": indices})
+    return [str(asset.id), preview_id, strip_id], {"preview_asset_id": preview_id, "filmstrip_asset_id": strip_id}
+
+
+def _sha256_file(path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(1024 * 1024):
+            h.update(chunk)
+    return h.hexdigest()
