@@ -197,7 +197,7 @@ function NumberCell({ label, value, onChange }: { label: string; value: number; 
           const v = Number(e.target.value);
           if (e.target.value !== "" && Number.isFinite(v)) onChange(Math.min(1, Math.max(0, v)));
         }}
-        className="min-h-[44px] w-16 rounded-button border border-border bg-panel px-1.5 text-right text-[13px] tabular-nums text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent md:min-h-0 md:py-0.5" />
+        className="min-h-[44px] w-[4.5rem] rounded-button border border-border bg-panel px-1 text-right text-[13px] tabular-nums text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent md:min-h-0 md:py-0.5" />
     </label>
   );
 }
@@ -216,7 +216,7 @@ function TimeCell({ index, count, t: tt, onChange }: { index: number; count: num
           const v = Number(e.target.value);
           if (e.target.value !== "" && Number.isFinite(v)) onChange(timeMsToT(v * 1000));
         }}
-        className="min-h-[44px] w-16 rounded-button border border-border bg-panel px-1.5 text-right text-[13px] tabular-nums text-ink disabled:text-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent md:min-h-0 md:py-0.5" />
+        className="min-h-[44px] w-14 rounded-button border border-border bg-panel px-1 text-right text-[13px] tabular-nums text-ink disabled:text-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent md:min-h-0 md:py-0.5" />
       s
     </label>
   );
@@ -237,7 +237,7 @@ export function PathSection({ cam }: { cam: CameraPathState }) {
       {pts.length === 0 ? <p className="text-xs text-muted">{t("noSketch")}</p> : (
         <ol className="space-y-1.5" aria-label={t("sketch")}>
           {pts.map((p, i) => (
-            <li key={i} className="flex flex-wrap items-center gap-2">
+            <li key={i} className="flex flex-wrap items-center gap-1.5">
               <span className="w-5 text-center text-xs font-semibold text-ink" aria-label={t("keyframeN", { n: i + 1 })}>{i + 1}</span>
               <TimeCell index={i} count={pts.length} t={p.t}
                 onChange={(tt) => update((c) => { c.path.sketch_points = setControlPointTime(c.path.sketch_points, i, tt); }, `cp:${i}:t`)} />
