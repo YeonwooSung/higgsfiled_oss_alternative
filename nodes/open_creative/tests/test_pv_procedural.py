@@ -168,6 +168,16 @@ def test_unknown_preset_and_palette():
         _impact(50, params={**IMPACT, "palette": "pink"})
 
 
+def test_preset_without_renderer_is_rejected(monkeypatch):
+    from open_creative.pocket_vfx import procedural
+
+    presets = procedural.load_presets()
+    fake = {**presets, "frost_nova_v1": {**presets["blink_out_v1"], "id": "frost_nova_v1"}}
+    monkeypatch.setattr(procedural, "load_presets", lambda: fake)
+    with pytest.raises(ValueError, match="no procedural renderer"):
+        render_effect("frost_nova_v1", BLINK, WIN, 50, None, W, H, 1, _body_mask())
+
+
 def test_aura_requires_mask_or_anchor():
     with pytest.raises(ValueError):
         render_effect("energy_aura_v1", AURA, WIN, 50, None, W, H, 1, None)

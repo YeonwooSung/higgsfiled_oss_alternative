@@ -14,6 +14,21 @@ def test_linear_to_srgb_clips():
     assert out.dtype == np.uint8 and list(out) == [0, 255]
 
 
+def test_linear_to_srgb_matches_reference_search():
+    from open_creative.pocket_vfx.color import _LUT, _MID
+
+    rng = np.random.default_rng(0)
+    mid32 = _MID.astype(np.float32)
+    xs32 = np.concatenate(
+        [rng.random(200_000, dtype=np.float32), mid32, np.nextafter(mid32, 2), np.nextafter(mid32, -1), _LUT]
+    ).astype(np.float32)
+    xs64 = np.concatenate([rng.random(200_000), _MID, np.nextafter(_MID, 2), np.nextafter(_MID, -1)])
+    for xs in (xs32, xs64):
+        ref = np.searchsorted(_MID, np.clip(xs.astype(np.float64), 0.0, 1.0)).astype(np.uint8)
+        out = linear_to_srgb(xs)
+        assert out.dtype == np.uint8 and np.array_equal(out, ref)
+
+
 def test_over_premult():
     dst = np.full((2, 2, 3), 0.5, np.float32)
     src = np.full((2, 2, 3), 0.25, np.float32)

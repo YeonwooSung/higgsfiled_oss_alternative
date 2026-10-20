@@ -86,10 +86,12 @@ def render_effect(
         if m is None and anchor_px is None:
             raise ValueError("energy_aura needs a mask or anchor_px")
         patches = _aura(p, pal, window, frame, anchor_px, out_w, out_h, seed, m)
-    else:  # blink_out_v1
+    elif preset_id == "blink_out_v1":
         if m is None:
             raise ValueError("blink_out needs a subject mask")
         patches = _blink(p, pal, window, frame, out_w, out_h, seed, m)
+    else:
+        raise ValueError(f"preset {preset_id!r} has no procedural renderer")
     return _compose(patches, out_w, out_h)
 
 
