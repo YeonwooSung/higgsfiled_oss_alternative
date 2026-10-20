@@ -69,3 +69,18 @@ describe("fitGizmo scale override", () => {
     expect(f.map([0.5, 0.5])).toEqual([100, 50]);
   });
 });
+
+describe("stage zoom (CSS only)", () => {
+  it("keeps the point under the cursor, clamps 1..4 and keeps the frame covered", async () => {
+    const { zoomAt, NO_ZOOM } = await import("../src/model/preview");
+    const z = zoomAt(NO_ZOOM, 200, 100, 2, 800, 450);
+    expect(z).toEqual({ scale: 2, tx: -200, ty: -100 });
+    // content point under the cursor: (200 - tx) / scale = 200
+    expect((200 - z.tx) / z.scale).toBe(200);
+    expect(zoomAt(z, 0, 0, 100, 800, 450).scale).toBe(4);
+    expect(zoomAt(z, 400, 200, 0.01, 800, 450)).toEqual({ scale: 1, tx: 0, ty: 0 });
+    const edge = zoomAt(NO_ZOOM, 800, 450, 3, 800, 450);
+    expect(edge).toEqual({ scale: 3, tx: -1600, ty: -900 });
+    expect(zoomAt(NO_ZOOM, 10, 10, Number.NaN, 800, 450)).toEqual(NO_ZOOM);
+  });
+});

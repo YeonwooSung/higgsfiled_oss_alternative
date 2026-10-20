@@ -141,7 +141,7 @@ export const PATH_REASONS = [
 ] as const satisfies readonly PathReason[];
 
 /** Editor-side block reasons (not compiler codes). */
-export const EDITOR_REASONS = ["compile_pending", "depth_missing", "holes_high", "compile_failed"] as const;
+export const EDITOR_REASONS = ["compile_pending", "depth_missing", "holes_high", "compile_failed", "save_failed"] as const;
 
 const KNOWN = new Set<string>([...PATH_REASONS, ...EDITOR_REASONS]);
 export type ReasonKey = `reason_${(typeof PATH_REASONS)[number] | (typeof EDITOR_REASONS)[number]}` | "reason_unknown";

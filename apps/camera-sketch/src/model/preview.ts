@@ -74,3 +74,25 @@ export function cameraGlyph(Tcw: Mat4, view: GizmoView, size: number, halfFovTan
 
 /** Output size for an aspect (constraints: 1280x720 or 720x1280). */
 export const outputSize = (aspect: "16:9" | "9:16"): [number, number] => (aspect === "9:16" ? [720, 1280] : [1280, 720]);
+
+/** Stage view zoom (CSS only — never the camera / focal length): `scale` 1..4 and a pixel translate. */
+export interface StageZoom {
+  scale: number;
+  tx: number;
+  ty: number;
+}
+export const STAGE_ZOOM_MIN = 1;
+export const STAGE_ZOOM_MAX = 4;
+export const NO_ZOOM: StageZoom = { scale: 1, tx: 0, ty: 0 };
+
+/**
+ * Zoom by `factor` about the frame point `(cx, cy)` (CSS px in the `w x h` frame): the content point
+ * under the cursor stays put, the scale is clamped to 1..4 and the translate keeps the frame covered.
+ * Transform = `translate(tx, ty) scale(scale)` with origin 0 0.
+ */
+export function zoomAt(z: StageZoom, cx: number, cy: number, factor: number, w: number, h: number): StageZoom {
+  const scale = Math.min(STAGE_ZOOM_MAX, Math.max(STAGE_ZOOM_MIN, z.scale * (Number.isFinite(factor) && factor > 0 ? factor : 1)));
+  const k = scale / z.scale;
+  const clampT = (t: number, size: number) => Math.min(0, Math.max(size * (1 - scale), t));
+  return { scale, tx: clampT(cx - (cx - z.tx) * k, w), ty: clampT(cy - (cy - z.ty) * k, h) };
+}

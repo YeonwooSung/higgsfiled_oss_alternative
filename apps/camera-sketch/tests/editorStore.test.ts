@@ -7,7 +7,7 @@ const api = vi.hoisted(() => ({
   getProject: vi.fn(),
 }));
 vi.mock("../src/api/client", () => ({ api }));
-const { useEditor, currentServerPath, renderGate } = await import("../src/state/editorStore");
+const { useEditor, currentServerPath, renderGate, stopCompileLoop } = await import("../src/state/editorStore");
 
 const project = (over: Partial<CameraSketchConfig> = {}): CameraSketchProject => ({
   id: "p", app_slug: "camera-sketch", title: "t", current_revision: 1, assets: [], recent_jobs: [], created_at: "x",
@@ -138,12 +138,34 @@ describe("compile loop", () => {
     expect(api.compilePath).not.toHaveBeenCalled();
   });
 
-  it("records a compile failure without dropping the provisional path", async () => {
+  it("retries a failed compile once after 2 s, then records the error and offers Retry", async () => {
     api.compilePath.mockImplementation(async () => { throw Object.assign(new Error("x"), { code: "depth_missing" }); });
     useEditor.getState().load(project({ scene_asset_id: "s", depth_asset_id: "d" } as Partial<CameraSketchConfig>));
     await vi.advanceTimersByTimeAsync(300);
+    expect(api.compilePath).toHaveBeenCalledTimes(1);
+    expect(useEditor.getState().compileError).toBeNull(); // retry pending
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(api.compilePath).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(api.compilePath).toHaveBeenCalledTimes(2);
     expect(useEditor.getState().compileError).toBe("depth_missing");
     expect(useEditor.getState().serverCompile).toBeNull();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(api.compilePath).toHaveBeenCalledTimes(2); // no endless retries
+    api.compilePath.mockImplementation(async () => response("ok", 1));
+    useEditor.getState().retryCompile();
+    expect(useEditor.getState().compileError).toBeNull();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(api.compilePath).toHaveBeenCalledTimes(3);
+    expect(useEditor.getState().serverCompile?.revision).toBe(1);
+  });
+
+  it("stopCompileLoop cancels a scheduled compile (editor unmount)", async () => {
+    api.compilePath.mockImplementation(async () => response("ok", 0));
+    useEditor.getState().load(project({ scene_asset_id: "s", depth_asset_id: "d" } as Partial<CameraSketchConfig>));
+    stopCompileLoop();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(api.compilePath).not.toHaveBeenCalled();
   });
 });
 
@@ -224,6 +246,10 @@ describe("renderGate", () => {
     const bad = response("invalid", 2, { reasons: ["target_out_of_frame", "framing_clamped"] });
     expect(renderGate({ ...base, serverCompile: { revision: 2, response: bad } })).toEqual({ canRender: false, blockReasons: ["target_out_of_frame"] });
     expect(renderGate({ ...base, serverCompile: { revision: 2, response: response("warning", 2) } })).toEqual({ canRender: true, blockReasons: [] });
+  });
+  it("a failing autosave blocks with save_failed, not compile_pending", () => {
+    expect(renderGate({ ...base, saveState: "error", serverCompile: null })).toEqual({ canRender: false, blockReasons: ["save_failed"] });
+    expect(renderGate({ ...base, saveState: "error", serverCompile: { revision: 2, response: response("ok", 2) } }).blockReasons).toEqual(["save_failed"]);
   });
   it("needs a depth map", () => {
     expect(renderGate({ ...base, config: { scene_asset_id: "s", depth_asset_id: null } as unknown as CameraSketchConfig, serverCompile: null }).blockReasons).toEqual(["depth_missing"]);

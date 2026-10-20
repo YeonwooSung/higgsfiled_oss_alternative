@@ -12,7 +12,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { LinearFilter, LinearMipmapLinearFilter, PerspectiveCamera, Scene, Texture, WebGLRenderer } from "three";
 import type { PreviewScene } from "../hooks/previewScene";
 import { useI18n } from "../i18n";
-import { poseAtTime } from "../model/preview";
+import { NO_ZOOM, poseAtTime, zoomAt, type StageZoom } from "../model/preview";
 import { toThreeCamera } from "../model/three";
 import { DepthMesh } from "./DepthMesh";
 
@@ -67,6 +67,21 @@ export function PreviewStage(p: PreviewStageProps) {
   const [fit, setFit] = useState<{ w: number; h: number } | null>(null);
   const [drawError, setDrawError] = useState(false);
   const texture = useTexture(p.bitmap);
+  // Scroll wheel zooms the stage VIEW only (CSS transform); the camera and focal length never change.
+  const frameRef = useRef<HTMLDivElement>(null);
+  const [zoom, setZoom] = useState<StageZoom>(NO_ZOOM);
+  useEffect(() => {
+    const el = frameRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      const r = el.getBoundingClientRect();
+      e.preventDefault();
+      setZoom((z) => zoomAt(z, e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * 0.0015), r.width, r.height));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+  useEffect(() => setZoom(NO_ZOOM), [fit?.w, fit?.h]);
 
   const draw = () => {
     const g = gl.current;
@@ -169,10 +184,19 @@ export function PreviewStage(p: PreviewStageProps) {
   return (
     <figure ref={figRef} data-region="camera-view" className={cx("flex min-h-0 min-w-0 flex-col items-center justify-center", p.className)}>
       <figcaption className="sr-only">{t("cameraView")}</figcaption>
-      <div className="relative shrink-0 overflow-hidden rounded-panel bg-stage ring-1 ring-border"
+      <div ref={frameRef} className="relative shrink-0 overflow-hidden rounded-panel bg-stage ring-1 ring-border"
         style={fit ? { width: fit.w, height: fit.h } : { width: "100%", aspectRatio: `${p.outW} / ${p.outH}` }}>
-        <canvas ref={canvasRef} className="block h-full w-full" aria-label={t("cameraView")} role="img" />
-        {fit && p.overlay?.(fit)}
+        <div className="absolute inset-0 origin-top-left" data-region="stage-zoom"
+          style={zoom.scale !== 1 ? { transform: `translate(${zoom.tx}px, ${zoom.ty}px) scale(${zoom.scale})` } : undefined}>
+          <canvas ref={canvasRef} className="block h-full w-full" aria-label={t("cameraView")} role="img" />
+          {fit && p.overlay?.(fit)}
+        </div>
+        {zoom.scale !== 1 && (
+          <button type="button" onClick={() => setZoom(NO_ZOOM)} title={t("zoomResetHint")}
+            className="absolute right-2 top-2 min-h-[32px] rounded-button border border-border bg-panel/90 px-2 text-[11px] font-medium text-ink tabular hover:bg-app">
+            {t("zoomReset", { value: Math.round(zoom.scale * 100) })}
+          </button>
+        )}
         <div className="pointer-events-none absolute left-2 top-2 flex flex-wrap gap-1.5">
           {p.provisional && (
             <span title={t("provisionalHint")} className="rounded-button border border-border bg-panel/90 px-2 py-0.5 text-[11px] font-medium text-muted">

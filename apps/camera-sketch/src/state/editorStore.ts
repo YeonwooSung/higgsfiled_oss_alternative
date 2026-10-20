@@ -12,6 +12,8 @@ export type Tool = "none" | "target" | "sketch" | "keyframe";
 
 /** Debounce between a saved revision and its `POST camera-path/compile` (after the 600 ms autosave). */
 export const COMPILE_DEBOUNCE_MS = 300;
+/** Delay of the single automatic retry after a failed compile request. */
+export const COMPILE_RETRY_MS = 2000;
 /** Compiler reasons that never block rendering (they are warnings). */
 const NON_BLOCKING = new Set(["unsupported_sketch", "framing_clamped"]);
 
@@ -57,6 +59,8 @@ interface EditorState {
   dismissLateralProposal: () => void;
   /** Pointer stroke (OUTPUT uv01, drawing order) -> sketch control points (one undo step). */
   commitSketch: (stroke: readonly (readonly number[])[]) => void;
+  /** Retry the compile of the current saved revision after a failure (the "Retry" action). */
+  retryCompile: () => void;
   /** Clear the sketch, keep preset and params ("Restore preset"). */
   restorePreset: () => void;
   /**
@@ -69,6 +73,13 @@ interface EditorState {
 let history: History<CameraSketchConfig> | null = null;
 let saver: Autosaver<CameraSketchConfig> | null = null;
 let compileTimer: ReturnType<typeof setTimeout> | null = null;
+let lastSaved: { projectId: string; revision: number; cfg: CameraSketchConfig } | null = null;
+
+/** Stop a scheduled compile (or its retry); called on project switch and when the editor unmounts. */
+export function stopCompileLoop() {
+  if (compileTimer) clearTimeout(compileTimer);
+  compileTimer = null;
+}
 let lastEdit: { key: string; at: number } | null = null;
 const COALESCE_MS = 1000;
 
@@ -84,9 +95,9 @@ export const useEditor = create<EditorState>((set, get) => {
    * Authoritative compile of a SAVED revision, 300 ms after it was saved. A response is applied only
    * while its revision is still the latest saved one (late responses for older revisions are dropped).
    */
-  const scheduleCompile = (projectId: string, revision: number, cfg: CameraSketchConfig) => {
-    if (compileTimer) clearTimeout(compileTimer);
-    compileTimer = null;
+  const scheduleCompile = (projectId: string, revision: number, cfg: CameraSketchConfig, delayMs = COMPILE_DEBOUNCE_MS, attempt = 0) => {
+    stopCompileLoop();
+    lastSaved = { projectId, revision, cfg };
     if (!cfg.scene_asset_id || !cfg.depth_asset_id) return;
     compileTimer = setTimeout(() => {
       compileTimer = null;
@@ -98,10 +109,16 @@ export const useEditor = create<EditorState>((set, get) => {
         parameters: { lateral_ratio: p.lateral_ratio, push_ratio: p.push_ratio, arc_deg: p.arc_deg, easing: p.easing },
       }).then(
         (response) => { if (live()) set({ serverCompile: { revision, response }, compileError: null }); },
-        (e) => { if (live()) set({ compileError: (e as { code?: string }).code ?? "compile_failed" }); },
+        (e) => {
+          if (!live()) return;
+          // One automatic retry after 2 s; then the error shows with a Retry action.
+          if (attempt === 0) scheduleCompile(projectId, revision, cfg, COMPILE_RETRY_MS, 1);
+          else set({ compileError: (e as { code?: string }).code ?? "compile_failed" });
+        },
       );
-    }, COMPILE_DEBOUNCE_MS);
+    }, delayMs);
   };
+
 
   return {
     project: null,
@@ -126,8 +143,7 @@ export const useEditor = create<EditorState>((set, get) => {
 
     load: (project) => {
       saver?.cancel();
-      if (compileTimer) clearTimeout(compileTimer);
-      compileTimer = null;
+      stopCompileLoop();
       history = new History(clone(project.config));
       lastEdit = null;
       saver = new Autosaver<CameraSketchConfig>({
@@ -202,6 +218,12 @@ export const useEditor = create<EditorState>((set, get) => {
       get().update((c) => { c.path.lateral_ratio = v; });
     },
     dismissLateralProposal: () => set({ lateralProposal: null }),
+    retryCompile: () => {
+      const l = lastSaved;
+      if (!l || l.projectId !== get().project?.id || l.revision !== get().revision) return;
+      set({ compileError: null });
+      scheduleCompile(l.projectId, l.revision, l.cfg, 0, 1);
+    },
     restorePreset: () => get().update((c) => { c.path.sketch_points = []; }),
     applySuggestedParams: (params) => {
       const valid = PARAMS.filter((k) => typeof params[k] === "number" && Number.isFinite(params[k]));
@@ -242,6 +264,7 @@ export function renderGate(
   s: Pick<EditorState, "serverCompile" | "revision" | "saveState" | "config"> & { compileError?: string | null },
 ): RenderGate {
   if (!s.config?.scene_asset_id || !s.config.depth_asset_id) return { canRender: false, blockReasons: ["depth_missing"] };
+  if (s.saveState === "error") return { canRender: false, blockReasons: ["save_failed"] };
   if (s.compileError) return { canRender: false, blockReasons: [s.compileError === "depth_missing" ? "depth_missing" : "compile_failed"] };
   const path = currentServerPath(s);
   if (!path) return { canRender: false, blockReasons: ["compile_pending"] };

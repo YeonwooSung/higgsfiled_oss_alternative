@@ -10,7 +10,7 @@ import { useEffect, useRef } from "react";
 import type { CameraPathState } from "../hooks/cameraPath";
 import { useI18n } from "../i18n";
 import { ease } from "../model/camera";
-import { keyframeTimeMs, LAST_FRAME_MS } from "../model/sketch";
+import { keyframeTimeMs, LAST_FRAME_MS, setControlPointTime, timeMsToT } from "../model/sketch";
 import { useEditor } from "../state/editorStore";
 
 const DURATION_MS = 5000;
@@ -58,7 +58,15 @@ export function Timeline({ cam, compact }: { cam: CameraPathState; compact?: boo
   const tool = useEditor((s) => s.tool);
   const update = useEditor((s) => s.update);
   const track = useRef<HTMLDivElement>(null);
-  const keyframes = cam.path?.keyframes ?? [];
+  const sketch = useEditor((s) => s.config!.path.sketch_points);
+  // Markers: the sketch's control point times (user times, compiled as given); no sketch -> the compiled keyframes.
+  const markers = sketch.length ? sketch.map((p) => p.t) : (cam.path?.keyframes ?? []).map((k) => k.t);
+  const dragging = useRef<{ i: number; moved: boolean } | null>(null);
+  const canDrag = (i: number) => tool === "keyframe" && sketch.length > 0 && i > 0 && i < sketch.length - 1;
+  const tFromX = (clientX: number) => {
+    const r = track.current!.getBoundingClientRect();
+    return timeMsToT(Math.min(1, Math.max(0, (clientX - r.left) / r.width)) * DURATION_MS);
+  };
 
   const seekFromX = (clientX: number) => {
     const r = track.current!.getBoundingClientRect();
@@ -90,12 +98,32 @@ export function Timeline({ cam, compact }: { cam: CameraPathState; compact?: boo
       <div className="relative flex-1 select-none px-2">
         {/* keyframe markers (click to jump there) */}
         <div className="relative h-6">
-          {keyframes.map((k, i) => (
-            <button key={i} type="button" onClick={() => { useEditor.setState({ playing: false }); useEditor.getState().setPlayheadMs(keyframeTimeMs(k.t)); }}
-              aria-label={`${t("keyframeN", { n: i + 1 })} · ${(keyframeTimeMs(k.t) / 1000).toFixed(2)} s`} title={t("cpTimeHint")}
-              className={cx("absolute top-0 flex h-6 w-6 -translate-x-1/2 items-center justify-center rounded-full border text-[11px] font-semibold",
-                tool === "keyframe" ? "border-accent bg-app text-accent" : "border-path/60 bg-stage text-path")}
-              style={{ left: x(keyframeTimeMs(k.t)) }}>
+          {markers.map((mt, i) => (
+            <button key={i} type="button"
+              onClick={() => {
+                if (dragging.current?.moved) return;
+                useEditor.setState({ playing: false });
+                useEditor.getState().setPlayheadMs(keyframeTimeMs(mt));
+              }}
+              onPointerDown={(e) => {
+                if (!canDrag(i)) return;
+                e.currentTarget.setPointerCapture(e.pointerId);
+                dragging.current = { i, moved: false };
+              }}
+              onPointerMove={(e) => {
+                const d = dragging.current;
+                if (!d || d.i !== i || !e.currentTarget.hasPointerCapture(e.pointerId)) return;
+                d.moved = true;
+                const tt = tFromX(e.clientX);
+                update((c) => { c.path.sketch_points = setControlPointTime(c.path.sketch_points, i, tt); }, `kt:${i}`);
+              }}
+              onPointerUp={() => { setTimeout(() => { dragging.current = null; }, 0); }}
+              aria-label={`${t("keyframeN", { n: i + 1 })} · ${(keyframeTimeMs(mt) / 1000).toFixed(2)} s`}
+              title={canDrag(i) ? t("keyframeDragHint") : t("cpTimeHint")}
+              className={cx("absolute top-0 flex h-6 w-6 -translate-x-1/2 touch-none items-center justify-center rounded-full border text-[11px] font-semibold",
+                tool === "keyframe" ? "border-accent bg-app text-accent" : "border-path/60 bg-stage text-path",
+                canDrag(i) && "cursor-ew-resize ring-2 ring-accent/30")}
+              style={{ left: x(keyframeTimeMs(mt)) }}>
               {i + 1}
             </button>
           ))}
@@ -106,6 +134,12 @@ export function Timeline({ cam, compact }: { cam: CameraPathState; compact?: boo
           onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); seekFromX(e.clientX); }}
           onPointerMove={(e) => { if (e.currentTarget.hasPointerCapture(e.pointerId)) seekFromX(e.clientX); }}
           onKeyDown={(e) => {
+            if (e.key === " ") {
+              // the playhead slider owns Space: it plays/pauses (the global shortcut leaves sliders alone)
+              e.preventDefault();
+              if (!e.repeat) useEditor.setState({ playing: !useEditor.getState().playing });
+              return;
+            }
             const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
             if (!step) return;
             e.preventDefault();
@@ -117,7 +151,7 @@ export function Timeline({ cam, compact }: { cam: CameraPathState; compact?: boo
               {i % 2 === 0 && <span className="absolute left-1 top-[-2px] text-[10px] text-muted tabular">{i / 2}s</span>}
             </div>
           ))}
-          {keyframes.map((k, i) => <div key={i} className="absolute inset-y-0 border-l border-dashed border-path/50" style={{ left: x(keyframeTimeMs(k.t)) }} />)}
+          {markers.map((mt, i) => <div key={i} className="absolute inset-y-0 border-l border-dashed border-path/50" style={{ left: x(keyframeTimeMs(mt)) }} />)}
           <div className="pointer-events-none absolute inset-y-[-4px] w-0.5 -translate-x-1/2 bg-ink" style={{ left: x(playheadMs) }} />
         </div>
       </div>

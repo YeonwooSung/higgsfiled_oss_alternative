@@ -12,7 +12,7 @@ import { usePresets, useRenderGate, type CameraPathState } from "../hooks/camera
 import { useI18n } from "../i18n";
 import { PARAMS, type ParamName } from "../model/path";
 import {
-  addControlPoint, HOLE_WARN_RATIO, keyframeTimeMs, moveControlPoint, reasonKey, removeControlPoint, sketchAtTarget, sourceToOutputUv,
+  addControlPoint, HOLE_WARN_RATIO, keyframeTimeMs, LAST_FRAME_MS, moveControlPoint, setControlPointTime, timeMsToT, reasonKey, removeControlPoint, sketchAtTarget, sourceToOutputUv,
   STRENGTH_PARAM, strengthOf, suggestionToParams, withStrength,
 } from "../model/sketch";
 import { useEditor } from "../state/editorStore";
@@ -35,6 +35,8 @@ function Notice({ tone, icon, children }: { tone: "warn" | "error" | "info"; ico
 export function PathStatus({ cam }: { cam: CameraPathState }) {
   const { t } = useI18n();
   const compileError = useEditor((s) => s.compileError);
+  const retryCompile = useEditor((s) => s.retryCompile);
+  const saveFailed = useEditor((s) => s.saveState === "error");
   const hasSketch = useEditor((s) => !!s.config?.path.sketch_points.length);
   const restorePreset = useEditor((s) => s.restorePreset);
   const applySuggested = useEditor((s) => s.applySuggestedParams);
@@ -45,8 +47,14 @@ export function PathStatus({ cam }: { cam: CameraPathState }) {
   const holesHigh = cam.holeRatio !== null && cam.holeRatio > HOLE_WARN_RATIO;
   return (
     <div className="space-y-2" data-region="path-status">
-      {cam.provisional && !compileError && <Notice tone="info">{t("serverChecking")}</Notice>}
-      {compileError && <Notice tone="error">{t(reasonKey(compileError === "depth_missing" ? "depth_missing" : "compile_failed"))}</Notice>}
+      {saveFailed ? <Notice tone="error">{t("reason_save_failed")}</Notice>
+        : cam.provisional && !compileError && <Notice tone="info">{t("serverChecking")}</Notice>}
+      {compileError && (
+        <Notice tone="error">
+          <p>{t(reasonKey(compileError === "depth_missing" ? "depth_missing" : "compile_failed"))}</p>
+          <Button size="sm" onClick={retryCompile} icon={<RotateCcw className="h-3.5 w-3.5" />}>{t("retry")}</Button>
+        </Notice>
+      )}
       {path.status === "invalid" && (
         <Notice tone="error">
           <p className="font-semibold">{t("pathInvalid")}</p>
@@ -147,13 +155,27 @@ function TargetSection() {
   );
 }
 
+/** The active preset (picked in the left panel, spec §4); the inspector shows its params only. */
+function PresetLabel() {
+  const { t, locale } = useI18n();
+  const presets = usePresets();
+  const id = useEditor((s) => s.config!.path.preset);
+  const p = presets.find((x) => x.id === id);
+  return (
+    <div className="flex justify-between text-[13px]">
+      <span>{t("preset")}</span>
+      <span className="font-medium text-accent">{p ? (locale === "ko" ? p.label_ko : p.label_en) : id}</span>
+    </div>
+  );
+}
+
 function CameraSection() {
   const { t } = useI18n();
   const focal = useEditor((s) => s.config!.camera.focal_length_mm_equiv);
   const update = useEditor((s) => s.update);
   return (
     <Section title={t("secCamera")}>
-      <PresetPicker />
+      <PresetLabel />
       <ParamSlider k="lateral_ratio" />
       <LateralProposal />
       <ParamSlider k="push_ratio" />
@@ -180,6 +202,26 @@ function NumberCell({ label, value, onChange }: { label: string; value: number; 
   );
 }
 
+/** Keyframe time in seconds; the first and last keyframes are fixed at 0 s and the end of the shot. */
+function TimeCell({ index, count, t: tt, onChange }: { index: number; count: number; t: number; onChange: (t: number) => void }) {
+  const { t } = useI18n();
+  const id = useId();
+  const sec = keyframeTimeMs(tt) / 1000;
+  const fixed = index === 0 || index === count - 1;
+  return (
+    <label htmlFor={id} className="flex items-center gap-1 text-xs text-muted" title={fixed ? t("cpTimeFixed") : t("cpTimeHint")}>
+      <input id={id} type="number" min={0} max={fmt(LAST_FRAME_MS / 1000, 2)} step={0.05} value={fmt(sec, 2)} inputMode="decimal" disabled={fixed}
+        aria-label={`${t("keyframeN", { n: index + 1 })} · ${t("cpTime")} (s)`}
+        onChange={(e) => {
+          const v = Number(e.target.value);
+          if (e.target.value !== "" && Number.isFinite(v)) onChange(timeMsToT(v * 1000));
+        }}
+        className="min-h-[44px] w-16 rounded-button border border-border bg-panel px-1.5 text-right text-[13px] tabular-nums text-ink disabled:text-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent md:min-h-0 md:py-0.5" />
+      s
+    </label>
+  );
+}
+
 /** Control points (time + output position), easing, reset — the numeric form of the Sketch / Move keyframe tools. */
 export function PathSection({ cam }: { cam: CameraPathState }) {
   const { t } = useI18n();
@@ -197,7 +239,8 @@ export function PathSection({ cam }: { cam: CameraPathState }) {
           {pts.map((p, i) => (
             <li key={i} className="flex flex-wrap items-center gap-2">
               <span className="w-5 text-center text-xs font-semibold text-ink" aria-label={t("keyframeN", { n: i + 1 })}>{i + 1}</span>
-              <span className="w-12 text-xs tabular text-muted" title={t("cpTimeHint")}>{fmt(keyframeTimeMs(p.t) / 1000, 2)} s</span>
+              <TimeCell index={i} count={pts.length} t={p.t}
+                onChange={(tt) => update((c) => { c.path.sketch_points = setControlPointTime(c.path.sketch_points, i, tt); }, `cp:${i}:t`)} />
               <NumberCell label="u" value={p.u} onChange={(u) => update((c) => { c.path.sketch_points = moveControlPoint(c.path.sketch_points, i, u, c.path.sketch_points[i].v); }, `cp:${i}:u`)} />
               <NumberCell label="v" value={p.v} onChange={(v) => update((c) => { c.path.sketch_points = moveControlPoint(c.path.sketch_points, i, c.path.sketch_points[i].u, v); }, `cp:${i}:v`)} />
               <button type="button" aria-label={`${t("removePoint")} ${i + 1}`} onClick={() => update((c) => { c.path.sketch_points = removeControlPoint(c.path.sketch_points, i); })}

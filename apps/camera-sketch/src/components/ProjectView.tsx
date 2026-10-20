@@ -15,7 +15,7 @@ import { useEditorShortcuts } from "../hooks/shortcuts";
 import { useI18n } from "../i18n";
 import { poseAtTime } from "../model/preview";
 import { moveControlPoint, outputToSourceUv, sketchAtTarget, sourceToOutputUv, targetOutputUv } from "../model/sketch";
-import { assetById, useEditor } from "../state/editorStore";
+import { assetById, stopCompileLoop, useEditor } from "../state/editorStore";
 import { CameraGizmo } from "./CameraGizmo";
 import { Inspector, MobileEdit } from "./Inspector";
 import { LeftPanel, ToolPicker } from "./LeftPanel";
@@ -94,7 +94,8 @@ function CameraStage({ cam, freehand }: { cam: CameraPathState; freehand: boolea
       onTarget={(uvOut) => {
         if (!srcW || !srcH) return;
         const [u, v] = outputToSourceUv(uvOut, srcW, srcH, outW, outH);
-        // New target: depth correction back to auto (the depth-map median under the target).
+        // New target: depth correction back to auto (x1): the scene is normalized so the median depth
+        // of the valid patch under the new target is 1 unit.
         update((c) => { c.target.u = u; c.target.v = v; c.target.depth_scale = 1; });
       }}
       onStroke={commitSketch}
@@ -142,6 +143,8 @@ export function ProjectView({ projectId }: { projectId: string }) {
   const cam = useCameraPath();
   useEditorShortcuts();
   usePlayback();
+  // The compile loop's timer is module-level: stop it when the editor goes away.
+  useEffect(() => stopCompileLoop, []);
 
   // The target tool maps clicks back to the source image through the t = 0 (source) view; leaving
   // t = 0 (scrub, play) ends it.

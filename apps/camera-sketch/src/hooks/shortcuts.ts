@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { useEditor } from "../state/editorStore";
 
 const NON_TEXT_INPUTS = new Set(["checkbox", "radio", "button", "submit", "reset", "range", "color", "file"]);
+const INTERACTIVE_ROLES = new Set(["button", "checkbox", "radio", "switch", "slider", "menuitem", "tab", "option", "spinbutton"]);
 
 /** True while focus is in a text field (shortcuts are disabled while typing, shared spec §9). */
 export function isTyping(el: EventTarget | null): boolean {
@@ -13,15 +14,44 @@ export function isTyping(el: EventTarget | null): boolean {
   return el instanceof HTMLInputElement && !NON_TEXT_INPUTS.has(el.type);
 }
 
+/** Facts about the focused element the shortcut mapping needs (pure input for `shortcutFor`). */
+export interface FocusInfo {
+  tag: string;
+  type?: string;
+  role?: string | null;
+  editable?: boolean;
+}
+
+/**
+ * Focus on a control that Space activates or edits itself: any input, select, textarea, button,
+ * link, contenteditable, or an element with an interactive ARIA role. Space is left to it.
+ */
+export function ownsSpace(f: FocusInfo | null): boolean {
+  if (!f) return false;
+  const tag = f.tag.toUpperCase();
+  if (f.editable || ["INPUT", "SELECT", "TEXTAREA", "BUTTON", "A", "SUMMARY"].includes(tag)) return true;
+  return !!f.role && INTERACTIVE_ROLES.has(f.role);
+}
+
+export function focusInfo(el: EventTarget | null): FocusInfo | null {
+  if (!(el instanceof HTMLElement) || el === document.body) return null;
+  return { tag: el.tagName, type: el instanceof HTMLInputElement ? el.type : undefined, role: el.getAttribute("role"), editable: el.isContentEditable };
+}
+
 export type ShortcutAction = "undo" | "redo" | "play" | "cancel" | null;
 
-/** Key event -> editor action (pure, for tests). */
-export function shortcutFor(e: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "shiftKey" | "altKey">, typing: boolean): ShortcutAction {
+/**
+ * Key event -> editor action (pure, for tests). `typing`: focus in a text field (all shortcuts off).
+ * `spaceOwned`: focus on a control that Space activates (Space is not hijacked for playback).
+ */
+export function shortcutFor(
+  e: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "shiftKey" | "altKey">, typing: boolean, spaceOwned = false,
+): ShortcutAction {
   if (typing) return null;
   const mod = e.metaKey || e.ctrlKey;
   if (mod && !e.altKey && e.key.toLowerCase() === "z") return e.shiftKey ? "redo" : "undo";
   if (mod || e.altKey) return null;
-  if (e.key === " ") return "play";
+  if (e.key === " ") return spaceOwned ? null : "play";
   if (e.key === "Escape") return "cancel";
   return null;
 }
@@ -30,7 +60,7 @@ export function shortcutFor(e: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey"
 export function useEditorShortcuts() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const action = shortcutFor(e, isTyping(e.target));
+      const action = shortcutFor(e, isTyping(e.target), ownsSpace(focusInfo(e.target)));
       if (!action || (action === "play" && e.repeat)) return;
       const s = useEditor.getState();
       e.preventDefault();
@@ -39,15 +69,7 @@ export function useEditorShortcuts() {
       else if (action === "play") useEditor.setState({ playing: !s.playing });
       else if (action === "cancel") s.setTool("none");
     };
-    // A focused button would also "click" on Space keyup; swallow it when Space is the play shortcut.
-    const onKeyUp = (e: KeyboardEvent) => {
-      if (e.key === " " && !isTyping(e.target) && !(e.metaKey || e.ctrlKey || e.altKey)) e.preventDefault();
-    };
     window.addEventListener("keydown", onKey);
-    window.addEventListener("keyup", onKeyUp);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("keyup", onKeyUp);
-    };
+    return () => window.removeEventListener("keydown", onKey);
   }, []);
 }
