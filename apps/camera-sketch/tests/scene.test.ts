@@ -1,7 +1,7 @@
 import type { Asset, CameraSketchConfig, Job } from "@oc/contracts";
 import { describe, expect, it } from "vitest";
 import { en } from "../src/i18n/en";
-import { SAMPLES, jobLabelKey, analysisState, depthToLink, sceneToLink } from "../src/flow/scene";
+import { SAMPLES, jobLabelKey, analysisState, depthToLink, handledScenesOnLoad, sceneToLink } from "../src/flow/scene";
 
 const asset = (p: Partial<Asset>): Asset => ({
   id: "a", project_id: "p", role: "scene", state: "ready", sha256: null, mime: "image/png", bytes: 1, width: 1, height: 1,
@@ -26,6 +26,19 @@ describe("sceneToLink", () => {
   it("ignores pending assets and already-linked scenes", () => {
     expect(sceneToLink([asset({ state: "uploaded" })], cfg())).toBeNull();
     expect(sceneToLink([asset({ id: "s" })], cfg({ scene_asset_id: "s" }))).toBeNull();
+  });
+  it("never re-links a handled scene or one older than the configured scene", () => {
+    const assets = [asset({ id: "old", created_at: "2026-01-01T00:00:00Z" }), asset({ id: "new", created_at: "2026-01-02T00:00:00Z" })];
+    // config points back to "old" (undo / deliberate choice) after "new" was linked once
+    expect(sceneToLink(assets, cfg({ scene_asset_id: "old" }), ["new"])).toBeNull();
+    // a newer upload than the configured scene that was never handled is still linked
+    expect(sceneToLink(assets, cfg({ scene_asset_id: "old" }), [])).toBe("new");
+    expect(sceneToLink(assets, cfg({ scene_asset_id: "new" }), [])).toBeNull();
+  });
+  it("treats every scene present at load as handled when the config already has a scene", () => {
+    const assets = [asset({ id: "a" }), asset({ id: "b", created_at: "2026-02-01T00:00:00Z" })];
+    expect(handledScenesOnLoad(assets, cfg({ scene_asset_id: "a" }))).toEqual(["a", "b"]);
+    expect(handledScenesOnLoad(assets, cfg())).toEqual([]);
   });
 });
 

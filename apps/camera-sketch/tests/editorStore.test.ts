@@ -8,6 +8,7 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock("../src/api/client", () => ({ api }));
 const { useEditor, currentServerPath, renderGate, stopCompileLoop } = await import("../src/state/editorStore");
+const { sceneToLink } = await import("../src/flow/scene");
 
 const project = (over: Partial<CameraSketchConfig> = {}): CameraSketchProject => ({
   id: "p", app_slug: "camera-sketch", title: "t", current_revision: 1, assets: [], recent_jobs: [], created_at: "x",
@@ -56,6 +57,41 @@ describe("automatic links are not undo steps", () => {
     expect(useEditor.getState().canUndo).toBe(false);
     useEditor.getState().redo();
     expect(useEditor.getState().config!.depth_asset_id).toBe("d");
+  });
+});
+
+describe("scene auto-link and undo", () => {
+  const scene = (id: string, created_at: string) => ({
+    id, project_id: "p", role: "scene", state: "ready", created_at, meta: {}, source_asset_id: null,
+  }) as unknown as CameraSketchProject["assets"][number];
+  const withAssets = (p: CameraSketchProject, assets: CameraSketchProject["assets"]) => ({ ...p, assets });
+
+  it("links an uploaded scene once; undo of a later scene change is not reverted", () => {
+    const s1 = scene("s1", "2026-01-01T00:00:00Z"), s2 = scene("s2", "2026-01-02T00:00:00Z");
+    useEditor.getState().load(withAssets(project(), [s1]));
+    const linkNow = () => sceneToLink(useEditor.getState().project!.assets, useEditor.getState().config!, useEditor.getState().handledSceneIds);
+    expect(linkNow()).toBe("s1");
+    useEditor.getState().linkScene("s1");
+    expect(linkNow()).toBeNull();
+    // a second upload arrives (refresh) and is linked once
+    useEditor.setState({ project: { ...useEditor.getState().project!, assets: [s1, s2] } });
+    expect(linkNow()).toBe("s2");
+    useEditor.getState().linkScene("s2");
+    // the user switches back to s1 (an undoable edit), then undoes and redoes it
+    useEditor.getState().update((c) => { c.scene_asset_id = "s1"; c.depth_asset_id = null; });
+    expect(linkNow()).toBeNull(); // not re-linked to the newest scene
+    useEditor.getState().undo();
+    expect(useEditor.getState().config!.scene_asset_id).toBe("s2");
+    expect(linkNow()).toBeNull();
+    useEditor.getState().redo();
+    expect(useEditor.getState().config!.scene_asset_id).toBe("s1");
+    expect(linkNow()).toBeNull();
+  });
+
+  it("a reload with a scene set does not relink older uploads", () => {
+    const s1 = scene("s1", "2026-01-01T00:00:00Z"), s2 = scene("s2", "2026-01-02T00:00:00Z");
+    useEditor.getState().load(withAssets(project({ scene_asset_id: "s1" }), [s1, s2]));
+    expect(sceneToLink(useEditor.getState().project!.assets, useEditor.getState().config!, useEditor.getState().handledSceneIds)).toBeNull();
   });
 });
 

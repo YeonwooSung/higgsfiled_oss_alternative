@@ -185,10 +185,12 @@ export function ProjectView({ projectId }: { projectId: string }) {
     return () => clearInterval(id);
   }, [waiting]);
 
-  // Link the uploaded scene into the config; clearing depth keeps the server lineage check satisfied.
-  const sceneId = project && config ? sceneToLink(project.assets, config) : null;
+  // Link a newly uploaded scene into the config once (clearing depth keeps the server lineage check
+  // satisfied); a scene the editor already handled is never re-linked, so undo is not overridden.
+  const handledSceneIds = useEditor((s) => s.handledSceneIds);
+  const sceneId = project && config ? sceneToLink(project.assets, config, handledSceneIds) : null;
   useEffect(() => {
-    if (sceneId) useEditor.getState().link((c) => { c.scene_asset_id = sceneId; c.depth_asset_id = null; });
+    if (sceneId) useEditor.getState().linkScene(sceneId);
   }, [sceneId]);
 
   // The analyze executor does not write the config; the client PATCHes the depth asset.

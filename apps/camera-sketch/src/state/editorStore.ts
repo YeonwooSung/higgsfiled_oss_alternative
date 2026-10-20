@@ -4,6 +4,7 @@ import type { CameraSketchConfig, CameraSketchProject, CompileResponse, Job } fr
 import { Autosaver, History } from "@oc/web-core";
 import { create } from "zustand";
 import { api } from "../api/client";
+import { handledScenesOnLoad } from "../flow/scene";
 import { PARAMS, type ParamName } from "../model/path";
 import { lateralProposal, scaleSketchPoints, sketchFromStroke } from "../model/sketch";
 
@@ -37,6 +38,13 @@ interface EditorState {
   update: (mutate: (draft: CameraSketchConfig) => void, coalesce?: string) => void;
   /** Automatic link (not a user edit): saved, but never an undo step and never undone. */
   link: (mutate: (draft: CameraSketchConfig) => void) => void;
+  /**
+   * Scene assets the upload -> config auto-link has handled (linked once, or already present when the project
+   * loaded with a scene set). `sceneToLink` never links them again, so undo / a chosen scene is not overridden.
+   */
+  handledSceneIds: readonly string[];
+  /** Auto-link a newly uploaded scene (clears the depth, records the scene as handled). */
+  linkScene: (sceneId: string) => void;
   undo: () => void;
   redo: () => void;
   flush: () => Promise<number>;
@@ -140,6 +148,7 @@ export const useEditor = create<EditorState>((set, get) => {
     tool: "none",
     setTool: (tool) => set({ tool }),
     lateralProposal: null,
+    handledSceneIds: [],
 
     load: (project) => {
       saver?.cancel();
@@ -164,7 +173,9 @@ export const useEditor = create<EditorState>((set, get) => {
         onError: (e) => set({ saveState: "error", saveCode: (e as { code?: string }).code ?? null }),
       });
       const jobs = Object.fromEntries(project.recent_jobs.map((j) => [j.id, j]));
-      set({ project, config: clone(project.config), revision: project.current_revision, canUndo: false, canRedo: false,
+      const handled = handledScenesOnLoad(project.assets, project.config);
+      const handledSceneIds = get().project?.id === project.id ? [...new Set([...get().handledSceneIds, ...handled])] : handled;
+      set({ project, handledSceneIds, config: clone(project.config), revision: project.current_revision, canUndo: false, canRedo: false,
         saveState: "saved", jobs: { ...get().jobs, ...jobs }, serverCompile: null, compileError: null, lateralProposal: null,
         playing: false, playheadMs: get().project?.id === project.id ? get().playheadMs : 0 });
       scheduleCompile(project.id, project.current_revision, project.config);
@@ -201,6 +212,10 @@ export const useEditor = create<EditorState>((set, get) => {
       });
       set({ config: clone(history.current), saveState: "saving" });
       saver!.schedule(clone(history.current));
+    },
+    linkScene: (sceneId) => {
+      if (!get().handledSceneIds.includes(sceneId)) set({ handledSceneIds: [...get().handledSceneIds, sceneId] });
+      get().link((c) => { c.scene_asset_id = sceneId; c.depth_asset_id = null; });
     },
     undo: () => { lastEdit = null; if (history?.canUndo) applyLocal(clone(history.undo())); },
     redo: () => { lastEdit = null; if (history?.canRedo) applyLocal(clone(history.redo())); },

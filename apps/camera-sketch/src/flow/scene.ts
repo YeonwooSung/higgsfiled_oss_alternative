@@ -8,12 +8,25 @@ export const SAMPLES = [
 ] as const;
 export type SampleId = (typeof SAMPLES)[number]["id"];
 
-/** Newest ready `scene` asset that the config does not reference yet (upload -> config link). */
-export function sceneToLink(assets: Asset[], config: Pick<CameraSketchConfig, "scene_asset_id">): string | null {
+/**
+ * Newest ready `scene` asset to auto-link into the config (upload -> config link), or null.
+ * Only a scene the editor has not handled yet is linked (`handled`: scenes already linked once, or present when
+ * the project loaded with a scene set) and only when it is newer than the configured scene. A config that
+ * points elsewhere (an undo, a deliberate scene choice) is never re-linked.
+ */
+export function sceneToLink(assets: Asset[], config: Pick<CameraSketchConfig, "scene_asset_id">,
+  handled: readonly string[] = []): string | null {
   const ready = assets.filter((a) => a.role === "scene" && a.state === "ready");
   if (!ready.length) return null;
   const newest = ready.reduce((a, b) => (b.created_at > a.created_at ? b : a));
-  return newest.id === config.scene_asset_id ? null : newest.id;
+  if (newest.id === config.scene_asset_id || handled.includes(newest.id)) return null;
+  const current = assets.find((a) => a.id === config.scene_asset_id);
+  return current && current.created_at >= newest.created_at ? null : newest.id;
+}
+
+/** Scene ids the auto-link treats as already handled when a project (re)loads. */
+export function handledScenesOnLoad(assets: Asset[], config: Pick<CameraSketchConfig, "scene_asset_id">): string[] {
+  return config.scene_asset_id ? assets.filter((a) => a.role === "scene").map((a) => a.id) : [];
 }
 
 /**
