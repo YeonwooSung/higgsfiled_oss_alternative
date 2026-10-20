@@ -107,7 +107,10 @@ export default function SketchOverlay(p: SketchOverlayProps) {
             shadowColor={STAGE} shadowBlur={3} shadowOpacity={0.9} listening={false} />
         )}
         {px.length > 1 && (
-          <Text x={px[px.length - 1][0] + 10} y={px[px.length - 1][1] - 20} text={p.labels.sketch} fontSize={12} fontStyle="600"
+          // label beside the last point, flipped inward near the right/top edge so it stays in frame
+          <Text x={px[px.length - 1][0] > p.w - 80 ? px[px.length - 1][0] - 90 : px[px.length - 1][0] + 12}
+            y={px[px.length - 1][1] < 28 ? px[px.length - 1][1] + 12 : px[px.length - 1][1] - 22} width={78}
+            align={px[px.length - 1][0] > p.w - 80 ? "right" : "left"} text={p.labels.sketch} fontSize={12} fontStyle="600"
             fill={SKETCH} shadowColor={STAGE} shadowBlur={4} shadowOpacity={1} listening={false} />
         )}
         {px.map(([x, y], i) => (

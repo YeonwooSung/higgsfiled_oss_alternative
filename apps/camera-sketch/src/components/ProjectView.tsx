@@ -209,17 +209,18 @@ export function ProjectView({ projectId }: { projectId: string }) {
       <TopBar />
       <div className="flex min-h-0 flex-1 flex-col md:grid md:grid-cols-[240px_minmax(0,1fr)_320px] md:grid-rows-[minmax(0,1fr)_140px]">
         <aside data-region="left" aria-label={t("panelLeft")} className="scroll-panel hidden border-r border-border bg-panel md:col-start-1 md:row-span-2 md:row-start-1 md:block">
-          <LeftPanel />
+          {desktop ? <LeftPanel /> : null}
         </aside>
         <main className="flex min-h-0 min-w-0 flex-col md:col-start-2 md:row-start-1">
           {hasDepth ? <CameraStage cam={cam} freehand={freehand} /> : <SceneStage />}
         </main>
         <aside data-region="right" aria-label={t("panelInspector")} className="scroll-panel hidden flex-col gap-3 border-l border-border bg-panel p-3 md:col-start-3 md:row-span-2 md:row-start-1 md:flex">
           <CameraViews cam={cam} />
-          {hasDepth && cam.path ? <Inspector cam={cam} /> : <p className="text-xs text-muted">{t("noDepth")}</p>}
+          {/* desktop only: the mobile Edit sheet hosts its own controls (no duplicate, hidden inputs) */}
+          {desktop && (hasDepth && cam.path ? <Inspector cam={cam} /> : <p className="text-xs text-muted">{t("noDepth")}</p>)}
         </aside>
         <div className="hidden md:col-start-2 md:row-start-2 md:block">
-          {hasDepth && cam.path ? <Timeline cam={cam} /> : <div className="h-[140px] border-t border-border bg-panel" />}
+          {desktop && hasDepth && cam.path ? <Timeline cam={cam} /> : <div className="h-[140px] border-t border-border bg-panel" />}
         </div>
         {!desktop && hasDepth && cam.path && <Timeline cam={cam} compact />}
       </div>
