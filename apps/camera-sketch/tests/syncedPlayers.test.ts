@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FRAME_S, mirrorFollower, needsSeek, type MediaLike } from "../src/model/sync";
+import { FRAME_S, mirrorFollower, needsSeek, shouldPublishTime, syncFollower, TIME_UI_MS, type MediaLike } from "../src/model/sync";
 
 class FakeMedia implements MediaLike {
   seeks: number[] = [];
@@ -57,5 +57,25 @@ describe("sync drift rule", () => {
     const unloaded = new FakeMedia(0, true, 1, 0, Number.NaN);
     expect(mirrorFollower(leader, unloaded)).toBe(false);
     expect(unloaded.seeks).toEqual([]);
+  });
+  it("pauses hidden followers without seeking and resyncs them when shown", () => {
+    const leader = new FakeMedia(2, false);
+    const f = new FakeMedia(1, false);
+    expect(syncFollower(leader, f, false)).toBe(false);
+    expect(f.paused).toBe(true);
+    expect(f.seeks).toEqual([]);
+    leader.currentTime = 3.5;
+    expect(syncFollower(leader, f, true)).toBe(true);
+    expect(f.seeks).toEqual([3.5]);
+    expect(f.paused).toBe(false);
+  });
+});
+
+describe("time display throttle", () => {
+  it("publishes at most every TIME_UI_MS while playing, immediately while paused, never without a change", () => {
+    expect(shouldPublishTime(0, TIME_UI_MS - 1, false, true)).toBe(false);
+    expect(shouldPublishTime(0, TIME_UI_MS, false, true)).toBe(true);
+    expect(shouldPublishTime(0, 1, true, true)).toBe(true);
+    expect(shouldPublishTime(0, 10_000, false, false)).toBe(false);
   });
 });

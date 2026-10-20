@@ -245,7 +245,6 @@ export const ko: Dict = {
   qaPassed: "검사 통과",
   qaCheck: "피사체 변화 감지 — 확인 필요",
   qaUnknown: "확인할 수 없음",
-  qaRunning: "아직 검사 전",
   qa_no_frames: "프레임을 읽지 못했습니다.",
   qa_length_mismatch: "생성 영상과 Geometry 영상의 길이가 다릅니다.",
   qa_unsupported_frame: "분석할 수 없는 프레임이 있습니다.",
@@ -277,4 +276,8 @@ export const ko: Dict = {
   err_render_busy: "이 프로젝트의 다른 렌더가 아직 실행 중입니다.",
   err_queue_full: "대기 중인 작업이 너무 많습니다. 작업이 끝난 뒤 다시 시도하세요.",
   err_gpu_busy: "이 세션에서 이미 생성 작업이 실행 중입니다.",
+  estimateWarnings: "Geometry guide에 경고가 있습니다. 생성 결과에도 반영될 수 있으니 먼저 움직임을 줄이고 Geometry를 다시 렌더하는 것을 고려하세요:",
+  estimateHoleMax: "Guide 구멍: 프레임의 최대 {value}%",
+  viewSwitch: "편집기 또는 결과 보기",
+  downloadNoUrl: "다운로드 링크를 만들지 못했습니다. 다시 시도하세요.",
 };

@@ -12,7 +12,7 @@ import { Pause, Play } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useI18n } from "../i18n";
 import type { TrajectoryPoint } from "../model/results";
-import { FRAME_S, mirrorFollower } from "../model/sync";
+import { FRAME_S, shouldPublishTime, syncFollower } from "../model/sync";
 
 export interface PlayerSource {
   id: string;
@@ -63,18 +63,33 @@ export function SyncedPlayers({ sources, visibleIds, columns = 1, aspect, trajec
   const videos = sources.filter((s) => s.kind === "video" && s.url);
   const leaderId = (videos.find((s) => visibleIds.includes(s.id)) ?? videos[0])?.id ?? null;
   const leader = useCallback(() => (leaderId ? refs.current.get(leaderId) ?? null : null), [leaderId]);
+  const visibleRef = useRef(new Set(visibleIds));
+  visibleRef.current = new Set(visibleIds);
 
-  // Sync loop: every animation frame, followers mirror the leader (seek only past one frame of drift).
+  // Sync loop: every animation frame, visible followers mirror the leader (seek only past one frame of
+  // drift); hidden ones are paused and re-synced when shown. React state (time display, overlay) is
+  // only published ~10 Hz while playing, so the tree does not re-render every frame.
   useEffect(() => {
     let raf = 0;
+    let publishedAt = 0;
+    let publishedT = -1;
+    let publishedPlaying: boolean | null = null;
     const tick = () => {
       const l = leader();
       if (l && l.readyState >= 1) {
-        for (const [id, v] of refs.current) if (id !== leaderId) mirrorFollower(l, v);
+        for (const [id, v] of refs.current) if (id !== leaderId) syncFollower(l, v, visibleRef.current.has(id));
         timeRef.current = l.currentTime;
         playingRef.current = !l.paused;
-        setTime((prev) => (Math.abs(prev - l.currentTime) > 1e-3 ? l.currentTime : prev));
-        setPlaying(!l.paused);
+        const now = performance.now();
+        if (shouldPublishTime(publishedAt, now, l.paused, Math.abs(publishedT - l.currentTime) > 1e-3)) {
+          publishedAt = now;
+          publishedT = l.currentTime;
+          setTime(l.currentTime);
+        }
+        if (publishedPlaying !== !l.paused) {
+          publishedPlaying = !l.paused;
+          setPlaying(!l.paused);
+        }
       }
       raf = requestAnimationFrame(tick);
     };

@@ -207,3 +207,16 @@ export function guideWarningCodes(warnings: unknown): string[] {
   const map: Record<string, string> = { hole_ratio_high: "holes_high", target_visibility_low: "visibility_low" };
   return [...new Set(warnings.filter((w): w is string => typeof w === "string").map((w) => map[w] ?? w))];
 }
+
+/**
+ * Warnings of the guide a Cinematic job would use (spec §12: warn before Generate). The guide's own
+ * `warnings` plus `holes_high` / `visibility_low` re-derived from its measured stats. Generate stays
+ * allowed (the user decides); these are shown in the estimate dialog.
+ */
+export function cinematicWarnings(result: unknown): string[] {
+  const r = (result ?? {}) as { warnings?: unknown; hole_ratio_max?: unknown; target_visibility_min?: unknown };
+  const out = guideWarningCodes(r.warnings);
+  if (typeof r.hole_ratio_max === "number" && r.hole_ratio_max > HOLE_WARN_RATIO) out.push("holes_high");
+  if (typeof r.target_visibility_min === "number" && r.target_visibility_min < VISIBILITY_WARN) out.push("visibility_low");
+  return [...new Set(out)];
+}

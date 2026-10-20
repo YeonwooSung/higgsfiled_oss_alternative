@@ -243,7 +243,6 @@ export const en = {
   qaPassed: "Checks passed",
   qaCheck: "Subject change detected — review",
   qaUnknown: "Couldn't verify",
-  qaRunning: "Not checked yet",
   qa_no_frames: "No frames could be read.",
   qa_length_mismatch: "The generated and Geometry videos have different lengths.",
   qa_unsupported_frame: "A frame could not be analyzed.",
@@ -275,6 +274,10 @@ export const en = {
   err_render_busy: "Another render is still running for this project.",
   err_queue_full: "Too many jobs are waiting. Try again when one finishes.",
   err_gpu_busy: "A generation is already running for this session.",
+  estimateWarnings: "The Geometry guide has warnings. Generation can follow them; consider reducing the motion and rendering Geometry again first:",
+  estimateHoleMax: "Guide holes: max {value}% of a frame",
+  viewSwitch: "Editor or results view",
+  downloadNoUrl: "The download link could not be created. Try again.",
 } as const;
 
 export type Dict = Record<keyof typeof en, string>;

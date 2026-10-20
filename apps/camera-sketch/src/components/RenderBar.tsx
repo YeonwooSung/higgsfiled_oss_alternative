@@ -10,12 +10,12 @@ import { TERMINAL_JOB_STATES, type CameraSketchConfig, type Estimate, type Job }
 import { Badge, Button } from "@oc/ui";
 import { useQuery } from "@tanstack/react-query";
 import { Box, CircleAlert, Loader2, Sparkles, TriangleAlert, X } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { api, ApiError } from "../api/client";
 import { useRenderGate, type CameraPathState } from "../hooks/cameraPath";
 import { useI18n } from "../i18n";
 import type { Dict } from "../i18n/en";
-import { cinematicGuide, geometryHash, geometryWarnings, progressPercent, renderError, stageKey, type GuideReason } from "../model/results";
+import { cinematicGuide, cinematicWarnings, geometryHash, geometryWarnings, progressPercent, renderError, stageKey, type GuideReason } from "../model/results";
 import { reasonKey } from "../model/sketch";
 import { useEditor } from "../state/editorStore";
 import { followJob } from "../state/jobs";
@@ -27,6 +27,7 @@ export function Modal({ open, title, onClose, children, actions }: {
   open: boolean; title: string; onClose: () => void; children: ReactNode; actions: ReactNode;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
   useEffect(() => {
     const d = ref.current;
     if (!d) return;
@@ -34,11 +35,11 @@ export function Modal({ open, title, onClose, children, actions }: {
     if (!open && d.open) d.close();
   }, [open]);
   return (
-    <dialog ref={ref} onClose={onClose} onCancel={(e) => { e.preventDefault(); onClose(); }} aria-labelledby="modal-title"
+    <dialog ref={ref} onClose={onClose} onCancel={(e) => { e.preventDefault(); onClose(); }} aria-labelledby={titleId}
       className="w-[min(440px,calc(100vw-32px))] rounded-panel border border-border bg-panel p-5 text-ink shadow-lg backdrop:bg-black/60">
       {open && (
         <>
-          <h2 id="modal-title" className="mb-3 text-[15px] font-semibold">{title}</h2>
+          <h2 id={titleId} className="mb-3 text-[15px] font-semibold">{title}</h2>
           <div className="space-y-2 text-[13px]">{children}</div>
           <div className="mt-5 flex flex-wrap justify-end gap-2">{actions}</div>
         </>
@@ -116,10 +117,17 @@ function apiErrorText(e: unknown, t: T): string {
   return t("genericError");
 }
 
-function EstimateBody({ estimate, t }: { estimate: Estimate; t: T }) {
+function EstimateBody({ estimate, warnings, holeMax, t }: { estimate: Estimate; warnings: string[]; holeMax: number | null; t: T }) {
   const p = estimate.profile;
   return (
     <>
+      {warnings.length > 0 && (
+        <div role="alert" className="space-y-1 rounded-button border border-amber-200 bg-amber-50 px-2.5 py-2 text-target" data-region="estimate-warnings">
+          <p className="flex items-start gap-1.5 font-medium"><TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />{t("estimateWarnings")}</p>
+          <ul className="list-disc space-y-0.5 pl-5">{warnings.map((w) => <li key={w}>{t(reasonKey(w))}</li>)}</ul>
+          {holeMax !== null && <p className="tabular">{t("estimateHoleMax", { value: (holeMax * 100).toFixed(1) })}</p>}
+        </div>
+      )}
       <p className="flex flex-wrap items-center gap-2">
         <span className="text-muted">{t("estimateProfile")}:</span> {p.label}
         {p.is_mock && <Badge tone="mock" title={t("mockExplain")}>{t("mock")}</Badge>}
@@ -150,7 +158,7 @@ export function RenderBar({ cam, onDone, compact }: { cam: CameraPathState; onDo
   const caps = useQuery({ queryKey: ["caps"], queryFn: () => api.cameraCapabilities(), staleTime: 60_000 });
   const profile = caps.data?.profiles.find((p) => p.id === config?.model_profile);
   const [confirm, setConfirm] = useState<string[] | null>(null);
-  const [estimate, setEstimate] = useState<{ estimate: Estimate; guideId: string } | null>(null);
+  const [estimate, setEstimate] = useState<{ estimate: Estimate; guideId: string; warnings: string[]; holeMax: number | null } | null>(null);
   const [pending, setPending] = useState<"guide" | "cinematic" | null>(null);
   const [error, setError] = useState<string | null>(null);
   if (!config || !project) return null;
@@ -188,7 +196,11 @@ export function RenderBar({ cam, onDone, compact }: { cam: CameraPathState; onDo
     setPending("cinematic");
     try {
       const revision = await useEditor.getState().flush();
-      setEstimate({ estimate: await api.estimate(project.id, "camera.cinematic", revision, { guide_job_id: guide.id }), guideId: guide.id });
+      const gres = guide.result as { hole_ratio_max?: unknown } | null;
+      setEstimate({
+        estimate: await api.estimate(project.id, "camera.cinematic", revision, { guide_job_id: guide.id }), guideId: guide.id,
+        warnings: cinematicWarnings(guide.result), holeMax: typeof gres?.hole_ratio_max === "number" ? gres.hole_ratio_max : null,
+      });
     } catch (e) {
       setError(apiErrorText(e, t));
     } finally {
@@ -236,13 +248,13 @@ export function RenderBar({ cam, onDone, compact }: { cam: CameraPathState; onDo
       <Modal open={!!estimate} title={t("estimateTitle")} onClose={() => setEstimate(null)}
         actions={<>
           <Button variant="ghost" onClick={() => setEstimate(null)}>{t("cancel")}</Button>
-          <Button variant="primary" disabled={!estimate || (estimate.estimate.uses_gpu && !estimate.estimate.profile.available)}
+          <Button variant="primary" disabled={!estimate || !estimate.estimate.profile.available}
             icon={<Sparkles className="h-4 w-4" aria-hidden />}
             onClick={() => { const e = estimate!; setEstimate(null); void submit("camera.cinematic", { guide_job_id: e.guideId }); }}>
             {t("generate")}
           </Button>
         </>}>
-        {estimate && <EstimateBody estimate={estimate.estimate} t={t} />}
+        {estimate && <EstimateBody estimate={estimate.estimate} warnings={estimate.warnings} holeMax={estimate.holeMax} t={t} />}
       </Modal>
     </div>
   );

@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { en } from "../src/i18n/en";
 import { ko } from "../src/i18n/ko";
 import {
-  canonicalGeometryJson, cinematicGuide, EXPORT_FORMATS, exportFormats, geometryHash, geometryWarnings, guideWarningCodes, isPreviousVersion, progressPercent,
+  canonicalGeometryJson, cinematicGuide, cinematicWarnings, EXPORT_FORMATS, exportFormats, geometryHash, geometryWarnings, guideWarningCodes, isPreviousVersion, progressPercent,
   pyFloatRepr, qaStatus, renderError, stageKey, targetTrajectory,
 } from "../src/model/results";
 
@@ -195,5 +195,19 @@ describe("geometry warnings (confirm before Render Geometry)", () => {
   it("maps guide result warnings to reason codes", () => {
     expect(guideWarningCodes(["hole_ratio_high", "target_visibility_low", "framing_clamped", 3])).toEqual(["holes_high", "visibility_low", "framing_clamped"]);
     expect(guideWarningCodes(null)).toEqual([]);
+  });
+});
+
+describe("cinematicWarnings (estimate dialog, spec §12)", () => {
+  it("lists the guide's warnings and re-derives holes / visibility from its stats", () => {
+    expect(cinematicWarnings({ warnings: ["hole_ratio_high"], hole_ratio_max: 0.115, target_visibility_min: 1 })).toEqual(["holes_high"]);
+    expect(cinematicWarnings({ warnings: [], hole_ratio_max: 0.2, target_visibility_min: 0.5 })).toEqual(["holes_high", "visibility_low"]);
+    expect(cinematicWarnings({ warnings: ["framing_clamped"], hole_ratio_max: 0.01, target_visibility_min: 1 })).toEqual(["framing_clamped"]);
+    expect(cinematicWarnings({ warnings: [], hole_ratio_max: 0.08, target_visibility_min: 0.9 })).toEqual([]);
+    expect(cinematicWarnings(null)).toEqual([]);
+  });
+  it("has en/ko text for the reduce-motion hint", () => {
+    expect(en).toHaveProperty("estimateWarnings");
+    expect(ko).toHaveProperty("estimateWarnings");
   });
 });

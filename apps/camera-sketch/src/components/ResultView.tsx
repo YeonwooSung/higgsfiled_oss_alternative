@@ -71,6 +71,7 @@ export function ResultView({ mobile = false }: { mobile?: boolean }) {
   const [overlay, setOverlay] = useState(false);
   const [pickedGuide, setPickedGuide] = useState<string | null>(null);
   const overlayId = useId();
+  const tabsId = useId();
   const pickId = useId();
   const caps = useQuery({ queryKey: ["caps"], queryFn: () => api.cameraCapabilities(), staleTime: 60_000 });
 
@@ -82,6 +83,8 @@ export function ResultView({ mobile = false }: { mobile?: boolean }) {
 
   const pathAsset = assetById(project, gres?.path_asset_id);
   const pathUrl = useAssetUrl(pathAsset);
+  // TODO(Task 17 README): with OC_STORAGE_BACKEND=s3 this fetch of the signed read URL (and share-page
+  // playback) is cross-origin, so the bucket needs a CORS rule allowing GET from the web origin.
   const artifact = useQuery({
     queryKey: ["path-artifact", pathAsset?.id],
     queryFn: async () => (await (await fetch(pathUrl!)).json()) as { user_config?: { scene_asset_id?: string; output?: { aspect?: "16:9" | "9:16" } } },
@@ -171,7 +174,15 @@ export function ResultView({ mobile = false }: { mobile?: boolean }) {
         {!mobile && (
           <div role="tablist" aria-label={t("results")} className="flex rounded-button border border-border bg-app p-0.5">
             {TABS.map((k) => (
-              <button key={k} role="tab" type="button" aria-selected={tab === k} disabled={k === "cinematic" && !hasCine} onClick={() => setTab(k)}
+              <button key={k} role="tab" type="button" id={`${tabsId}-tab-${k}`} aria-controls={`${tabsId}-panel`} aria-selected={tab === k}
+                tabIndex={tab === k ? 0 : -1} disabled={k === "cinematic" && !hasCine} onClick={() => setTab(k)}
+                onKeyDown={(e) => {
+                  if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+                  const enabled = TABS.filter((x) => x !== "cinematic" || hasCine);
+                  const next = enabled[(enabled.indexOf(tab) + (e.key === "ArrowRight" ? 1 : enabled.length - 1)) % enabled.length];
+                  setTab(next);
+                  document.getElementById(`${tabsId}-tab-${next}`)?.focus();
+                }}
                 className={cx("min-h-8 rounded-[6px] px-3 text-[13px] disabled:opacity-40", tab === k ? "bg-panel font-medium text-ink" : "text-muted hover:text-ink")}>
                 {t(TAB_KEY[k])}
               </button>
@@ -191,8 +202,10 @@ export function ResultView({ mobile = false }: { mobile?: boolean }) {
         </label>
       </div>
 
-      <SyncedPlayers sources={sources} visibleIds={visible} columns={!mobile && visible.length > 1 ? 2 : 1} aspect={aspect}
-        trajectory={trajectory} showOverlay={overlay} />
+      <div id={`${tabsId}-panel`} {...(mobile ? {} : { role: "tabpanel", "aria-labelledby": `${tabsId}-tab-${tab}` })}>
+        <SyncedPlayers sources={sources} visibleIds={visible} columns={!mobile && visible.length > 1 ? 2 : 1} aspect={aspect}
+          trajectory={trajectory} showOverlay={overlay} />
+      </div>
 
       {/* Downloads and share links */}
       <div className="grid gap-4 rounded-panel border border-border bg-panel p-3 md:grid-cols-2">

@@ -39,3 +39,24 @@ export function mirrorFollower(leader: MediaLike, f: MediaLike, tol = FRAME_S): 
   f.currentTime = target;
   return true;
 }
+
+/**
+ * Follower step with visibility: a hidden follower (another tab) is paused and not seeked, so it does
+ * not decode in the background; once visible again `mirrorFollower` re-syncs it (seek + play state).
+ */
+export function syncFollower(leader: MediaLike, f: MediaLike, visible: boolean, tol = FRAME_S): boolean {
+  if (!visible) {
+    if (!f.paused) f.pause();
+    return false;
+  }
+  return mirrorFollower(leader, f, tol);
+}
+
+/** UI time display / overlay refresh interval (~10 Hz); the sync itself runs every animation frame. */
+export const TIME_UI_MS = 100;
+
+/** Publish the leader time to React state only every `TIME_UI_MS`, or at once when paused (seeks). */
+export function shouldPublishTime(lastAtMs: number, nowMs: number, paused: boolean, changed: boolean): boolean {
+  if (!changed) return false;
+  return paused || nowMs - lastAtMs >= TIME_UI_MS;
+}
