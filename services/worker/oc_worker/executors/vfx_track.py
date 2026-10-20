@@ -42,6 +42,9 @@ from .vfx_common import (
 )
 
 SMOOTH_SIGMA_FRAMES = 1.0
+# Smoothing may move a point at most this far from the LK measurement (proxy px = 1 output px): it removes jitter
+# but must follow the displayed motion, which on CFR-resampled clips moves in uneven steps (test_vfx_coordinates).
+SMOOTH_MAX_SHIFT_PX = 0.5
 
 
 def _point_dict(p: TrackPoint) -> dict:
@@ -114,14 +117,16 @@ def vfx_track(run: JobRun) -> tuple[list[str], dict]:
                     pts = track_segment(frames, seg)
                 seg_points.append(pts)
                 cache[k] = [_point_dict(p) for p in pts]
-            points = smooth_track(assemble(segs, seg_points, n, (pw, ph)), SMOOTH_SIGMA_FRAMES)
+            points = smooth_track(assemble(segs, seg_points, n, (pw, ph)), SMOOTH_SIGMA_FRAMES,
+                                  SMOOTH_MAX_SHIFT_PX)
         doc = track_to_json(points, (pw, ph), (out_w, out_h))
         valid = sum(p.valid for p in points)
         peak = effect_window(cfg_json["effect"], cfg.trim.duration_ms).peak
         stats = {"track_key": key, "invalid_intervals": doc["invalid_intervals"],
                  "valid_fraction": round(valid / n, 4), "peak_valid": bool(points[peak].valid), "peak_frame": peak,
                  "segments_total": len(segs), "segments_reused": reused, "follow": bool(anchor["follow"])}
-        doc.update(track_key=key, revision=run.job.input_revision, smoothing_sigma_frames=SMOOTH_SIGMA_FRAMES)
+        doc.update(track_key=key, revision=run.job.input_revision,
+                   smoothing={"sigma_frames": SMOOTH_SIGMA_FRAMES, "max_shift_proxy_px": SMOOTH_MAX_SHIFT_PX})
         track_id = store_json(run, "track_json", doc, source_asset_id=proxy.id,
                               meta={**stats, "revision": run.job.input_revision})
         side_id = store_json(run, "track_segments", {"schema_version": 1, "frames_sha": proxy.sha256,

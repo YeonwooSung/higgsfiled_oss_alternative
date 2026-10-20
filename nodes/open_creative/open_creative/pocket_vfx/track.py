@@ -266,9 +266,15 @@ def track_with_corrections(frames: Sequence[np.ndarray], anchor: dict, correctio
 # ------------------------------------------------------------------------------------------ post-processing
 
 
-def smooth_track(points: Sequence[TrackPoint], sigma_frames: float = 1.0) -> list[TrackPoint]:
+def smooth_track(points: Sequence[TrackPoint], sigma_frames: float = 1.0,
+                 max_shift: float | None = None) -> list[TrackPoint]:
     """Zero-phase (non-causal) Gaussian per contiguous valid run; keyframes keep their exact position and
-    invalid frames are never filled. At run ends the kernel is truncated and renormalized."""
+    invalid frames are never filled. At run ends the kernel is truncated and renormalized.
+
+    ``max_shift`` (proxy px, per axis) bounds how far smoothing may move a point from its measurement, so it removes
+    sub-pixel jitter without smearing real motion: CFR-resampled clips (duplicated frames of a 15 fps source,
+    uneven 30 -> 24 fps steps) and fast hands move in steps of tens of px between frames, which a plain Gaussian
+    spreads over the neighbours (and a truncated kernel biases at run ends)."""
     out = list(points)
     if sigma_frames <= 0:
         return out
@@ -290,6 +296,9 @@ def smooth_track(points: Sequence[TrackPoint], sigma_frames: float = 1.0) -> lis
 
         norm = conv(np.ones(m_len))
         sx, sy = conv(xy[:, 0]) / norm, conv(xy[:, 1]) / norm
+        if max_shift is not None:
+            sx = xy[:, 0] + np.clip(sx - xy[:, 0], -max_shift, max_shift)
+            sy = xy[:, 1] + np.clip(sy - xy[:, 1], -max_shift, max_shift)
         for m, p in enumerate(points[i:j]):
             if p.source != "keyframe":
                 out[i + m] = replace(p, x=float(sx[m]), y=float(sy[m]))

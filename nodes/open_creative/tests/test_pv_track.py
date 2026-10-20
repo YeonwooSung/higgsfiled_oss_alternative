@@ -202,6 +202,19 @@ def test_smoothing_reduces_jitter_without_lag():
     assert abs(np.mean(ys[3:-3] - clean[3:-3])) < 0.3  # zero-phase: no systematic lag on a ramp
 
 
+def test_smoothing_max_shift_bounds_the_correction():
+    # a staircase (duplicated CFR frames of a 15 fps source): plain smoothing smears each jump over its neighbours
+    ys = [0.0, 0.0, 30.0, 30.0, 60.0, 60.0, 90.0, 90.0]
+    plain = smooth_track(_pts(ys), sigma_frames=1.0)
+    assert max(abs(p.y - y) for p, y in zip(plain, ys, strict=True)) > 5.0
+    bounded = smooth_track(_pts(ys), sigma_frames=1.0, max_shift=0.5)
+    assert max(abs(p.y - y) for p, y in zip(bounded, ys, strict=True)) == pytest.approx(0.5)
+    # jitter below the bound is still smoothed exactly as without it
+    jitter = [10.0, 10.2, 9.9, 10.1, 10.0]
+    assert [p.y for p in smooth_track(_pts(jitter), 1.0, max_shift=0.5)] == \
+        [p.y for p in smooth_track(_pts(jitter), 1.0)]
+
+
 def test_static_track_and_json():
     pts = static_track((320.0, 90.0), 4)
     assert all(p.valid and p.confidence == 1.0 and p.source == "static" for p in pts)
