@@ -18,7 +18,8 @@ from ..models import Asset, Project, Share
 from ..models import Session as SessionRow
 
 router = APIRouter()
-SHAREABLE_ROLES = ("render", "cover")
+# Finished outputs only (Product Lock ad + cover, Camera Sketch Geometry / Cinematic videos); originals never.
+SHAREABLE_ROLES = ("render", "cover", "geometry_video", "cinematic_video")
 
 
 class ShareCreate(BaseModel):
@@ -36,7 +37,7 @@ def create_share(project_id: str, body: ShareCreate, db: DbSession = Depends(get
     project = owned_project(project_id, db, session)
     asset = db.get(Asset, body.output_asset_id)
     if asset is None or asset.project_id != project.id or asset.role not in SHAREABLE_ROLES or asset.state != "ready":
-        raise ApiError(422, "not_shareable", "Only finished ads and covers can be shared; originals never are.",
+        raise ApiError(422, "not_shareable", "Only finished results can be shared; originals never are.",
                        field="output_asset_id")
     token = secrets.token_urlsafe(32)
     share = Share(project_id=project.id, output_asset_id=asset.id, token_hash=_hash(token),
@@ -80,5 +81,8 @@ def open_share(token: str, request: Request, db: DbSession = Depends(get_db)):
 @router.get("/public/shares/{token}/meta")
 def share_meta(token: str, db: DbSession = Depends(get_db)):
     share, asset = resolve_share(db, token)
+    meta = asset.meta_json or {}
     return {"mime": asset.mime, "width": asset.width, "height": asset.height, "role": asset.role,
+            "mode": meta.get("mode"), "mock": bool(meta.get("mock")),
+            "exact_camera_control": False if meta.get("mode") == "cinematic" else None,
             "expires_at": share.expires_at.isoformat()}

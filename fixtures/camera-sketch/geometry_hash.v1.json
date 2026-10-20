@@ -1,0 +1,156 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "default",
+      "config": {
+        "schema_version": 1,
+        "scene_asset_id": null,
+        "depth_asset_id": null,
+        "target": {
+          "u": 0.5,
+          "v": 0.5,
+          "depth_scale": 1.0
+        },
+        "camera": {
+          "focal_length_mm_equiv": 50.0,
+          "sensor_width_mm_assumed": 36,
+          "roll_deg": 0
+        },
+        "path": {
+          "preset": "slide",
+          "sketch_space": "target_screen_position",
+          "sketch_points": [],
+          "lateral_ratio": 0.0,
+          "push_ratio": 0.0,
+          "arc_deg": 0.0,
+          "easing": "ease_in_out"
+        },
+        "mode": "geometry",
+        "generation": {
+          "seed": 12345,
+          "control_preset": "medium",
+          "extra_prompt": ""
+        },
+        "output": {
+          "aspect": "16:9",
+          "duration_ms": 5000,
+          "fps": 24
+        },
+        "scene": {
+          "depth_contrast": 1.0,
+          "edge_protection": 0.5,
+          "show_holes": false
+        },
+        "model_profile": "mock_v1"
+      },
+      "geometry_hash": "d3e5ba382765baebe2d57f2d50a2357da4e394a9dce7e5c345a591b7a8768d92"
+    },
+    {
+      "name": "sketch_small_values",
+      "config": {
+        "schema_version": 1,
+        "scene_asset_id": "0b6f5d2e-3c1a-4f7e-9d2b-1a2b3c4d5e6f",
+        "depth_asset_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+        "target": {
+          "u": 0.3,
+          "v": 0.30000000000000004,
+          "depth_scale": 1.25
+        },
+        "camera": {
+          "focal_length_mm_equiv": 35.0,
+          "sensor_width_mm_assumed": 36,
+          "roll_deg": 0
+        },
+        "path": {
+          "preset": "slide",
+          "sketch_space": "target_screen_position",
+          "sketch_points": [
+            {
+              "t": 0.0,
+              "u": 0.5,
+              "v": 0.5
+            },
+            {
+              "t": 0.4,
+              "u": 0.55,
+              "v": 0.123456789012345
+            },
+            {
+              "t": 1.0,
+              "u": 0.6,
+              "v": 0.5
+            }
+          ],
+          "lateral_ratio": -1e-05,
+          "push_ratio": 0.0,
+          "arc_deg": 0.0,
+          "easing": "linear"
+        },
+        "mode": "geometry",
+        "generation": {
+          "seed": 7,
+          "control_preset": "high",
+          "extra_prompt": "ignored ✓"
+        },
+        "output": {
+          "aspect": "16:9",
+          "duration_ms": 5000,
+          "fps": 24
+        },
+        "scene": {
+          "depth_contrast": 1.5,
+          "edge_protection": 0.05,
+          "show_holes": true
+        },
+        "model_profile": "mock_v1"
+      },
+      "geometry_hash": "13498a7c47d6bb1f62fb943cf27a1c3d6a070d6a5eef0b0956fc2d6005761b35"
+    },
+    {
+      "name": "portrait_arc_negzero",
+      "config": {
+        "schema_version": 1,
+        "scene_asset_id": "0b6f5d2e-3c1a-4f7e-9d2b-1a2b3c4d5e6f",
+        "depth_asset_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+        "target": {
+          "u": 0.3,
+          "v": 0.30000000000000004,
+          "depth_scale": 0.5
+        },
+        "camera": {
+          "focal_length_mm_equiv": 69.99999999999999,
+          "sensor_width_mm_assumed": 36,
+          "roll_deg": 0
+        },
+        "path": {
+          "preset": "small_arc",
+          "sketch_space": "target_screen_position",
+          "sketch_points": [],
+          "lateral_ratio": -0.0,
+          "push_ratio": 0.0,
+          "arc_deg": -6.0,
+          "easing": "linear"
+        },
+        "mode": "geometry",
+        "generation": {
+          "seed": 7,
+          "control_preset": "high",
+          "extra_prompt": "ignored ✓"
+        },
+        "output": {
+          "aspect": "9:16",
+          "duration_ms": 5000,
+          "fps": 24
+        },
+        "scene": {
+          "depth_contrast": 1.5,
+          "edge_protection": 0.05,
+          "show_holes": true
+        },
+        "model_profile": "mock_v1"
+      },
+      "geometry_hash": "2b30d7efcb99c3cf35eed6387ae1665ff563db43075cd70b7af72927c105347d"
+    }
+  ]
+}

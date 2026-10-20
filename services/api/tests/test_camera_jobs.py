@@ -226,3 +226,51 @@ def test_geometry_hash_properties():
     c = a.model_copy(deep=True)
     c.scene.edge_protection = 0.9
     assert camera_jobs.geometry_hash(c) != h
+
+
+def test_geometry_hash_fixture_is_current():
+    """``fixtures/camera-sketch/geometry_hash.v1.json`` (TS parity, Task 16) equals a fresh build."""
+    import importlib.util
+    import json
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[3] / "fixtures" / "camera-sketch" / "make_geometry_hash.py"
+    spec = importlib.util.spec_from_file_location("make_geometry_hash", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    committed = json.loads(mod.OUT.read_text())
+    assert committed == mod.build()
+    assert len({c["geometry_hash"] for c in committed["cases"]}) == len(committed["cases"])
+
+
+def test_camera_result_videos_are_shareable_with_mode_meta(app, session_client, cproject):  # noqa: F811
+    from helpers import put_asset
+
+    pid = cproject["id"]
+    cine = put_asset(app, pid, "cinematic_video", b"mp4", "video/mp4", 1280, 720,
+                     meta={"mode": "cinematic", "mock": True, "exact_camera_control": False})
+    geo = put_asset(app, pid, "geometry_video", b"mp4", "video/mp4", 1280, 720, meta={"mode": "geometry"})
+    scene = put_asset(app, pid, "scene", b"png", "image/png", 10, 10)
+    assert session_client.post(f"/api/v1/projects/{pid}/shares", json={"output_asset_id": scene}).status_code == 422
+    for aid, mode, mock in ((cine, "cinematic", True), (geo, "geometry", False)):
+        r = session_client.post(f"/api/v1/projects/{pid}/shares", json={"output_asset_id": aid})
+        assert r.status_code == 201, r.text
+        token = r.json()["url"].rsplit("/", 1)[1]
+        meta = session_client.get(f"/api/v1/public/shares/{token}/meta").json()
+        assert (meta["role"], meta["mode"], meta["mock"]) == (f"{mode}_video", mode, mock)
+        assert meta["exact_camera_control"] is (False if mode == "cinematic" else None)
+
+
+def test_project_keeps_render_jobs_after_many_exports(app, session_client, ready):
+    p, rev, *_ = ready
+    gid = make_guide(app, p, rev)
+    with app.state.db() as db:
+        from oc_api.models import Project
+        row = db.get(Project, uuid.UUID(p["id"]))
+        for _ in range(12):
+            db.add(Job(project_id=row.id, session_id=row.session_id, input_revision=rev, kind="camera.export",
+                       options_json={}, model_profile="mock_v1", state="succeeded"))
+        db.commit()
+    jobs = session_client.get(f"/api/v1/projects/{p['id']}").json()["recent_jobs"]
+    assert gid in {j["id"] for j in jobs}
+    assert [j["created_at"] for j in jobs] == sorted((j["created_at"] for j in jobs), reverse=True)

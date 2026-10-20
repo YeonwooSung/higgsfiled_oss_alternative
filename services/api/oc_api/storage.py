@@ -62,6 +62,10 @@ class LocalStorage:
             raise ValueError("invalid object key")
         return p
 
+    def local_path(self, key: str) -> Path:
+        """Filesystem path of an object (the read route serves it with HTTP Range support)."""
+        return self._path(key)
+
     # -- signed tokens ------------------------------------------------------
     def sign(self, claims: dict) -> str:
         body = _b64(json.dumps(claims, separators=(",", ":"), sort_keys=True).encode())

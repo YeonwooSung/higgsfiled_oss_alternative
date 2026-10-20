@@ -29,3 +29,19 @@ def test_s3_presigned_urls_are_short_lived():
     assert "X-Amz-Expires=600" in url and "/b/s/p/a/product.png" in url
     assert headers == {"Content-Type": "image/png"}
     assert "X-Amz-Expires=300" in s.read_url("s/p/a/product.png", 300)
+
+
+def test_local_read_url_supports_range_requests(app):
+    """Result videos must be seekable in the browser: the local read route answers Range with 206."""
+    from fastapi.testclient import TestClient
+
+    storage = app.state.storage
+    storage.put_bytes("s/p/a/geometry.mp4", bytes(range(100)), "video/mp4")
+    url = storage.read_url("s/p/a/geometry.mp4", 60, mime="video/mp4", filename="camera-sketch_geometry.mp4")
+    c = TestClient(app)
+    full = c.get(url)
+    assert full.status_code == 200 and full.headers["accept-ranges"] == "bytes" and len(full.content) == 100
+    assert full.headers["content-disposition"] == 'attachment; filename="camera-sketch_geometry.mp4"'
+    part = c.get(url, headers={"Range": "bytes=10-19"})
+    assert part.status_code == 206 and part.content == bytes(range(10, 20))
+    assert part.headers["content-range"] == "bytes 10-19/100"

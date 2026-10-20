@@ -62,7 +62,13 @@ def current_config(db: DbSession, project: Project) -> dict:
 
 def project_out(db: DbSession, project: Project, request: Request) -> dict:
     assets = db.scalars(select(Asset).where(Asset.project_id == project.id).order_by(Asset.created_at)).all()
-    jobs = db.scalars(select(Job).where(Job.project_id == project.id).order_by(Job.created_at.desc()).limit(10)).all()
+    jobs = list(db.scalars(select(Job).where(Job.project_id == project.id).order_by(Job.created_at.desc()).limit(10)).all())
+    # Results must survive a reload even after many export/inspect jobs: also the 10 newest render jobs.
+    render_kinds = get_app(project.app_slug).render_kinds
+    seen = {j.id for j in jobs}
+    jobs += [j for j in db.scalars(select(Job).where(Job.project_id == project.id, Job.kind.in_(render_kinds))
+                                   .order_by(Job.created_at.desc()).limit(10)).all() if j.id not in seen]
+    jobs.sort(key=lambda j: j.created_at, reverse=True)
     return {
         "id": str(project.id),
         "app_slug": project.app_slug,

@@ -1,6 +1,7 @@
 """Signed-URL endpoints for LocalStorage (dev / single-host deployments)."""
 
 from fastapi import APIRouter, Request, Response
+from fastapi.responses import FileResponse
 
 from ..errors import ApiError
 from ..storage import LocalStorage, TokenError
@@ -46,5 +47,6 @@ def get_object(token: str, request: Request):
     headers = {"Cache-Control": "private, max-age=60", "X-Content-Type-Options": "nosniff"}
     if claims.get("fn"):  # server-generated names only
         headers["Content-Disposition"] = f'attachment; filename="{claims["fn"]}"'
-    return Response(storage.get_bytes(claims["k"]), media_type=claims.get("mime") or "application/octet-stream",
-                    headers=headers)
+    # FileResponse answers Range requests (206) and advertises Accept-Ranges, so result videos are seekable.
+    return FileResponse(storage.local_path(claims["k"]), media_type=claims.get("mime") or "application/octet-stream",
+                        headers=headers)

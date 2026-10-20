@@ -1,7 +1,7 @@
 "use client";
 
 import type { CameraAnalyzeResult } from "@oc/contracts";
-import { cx } from "@oc/ui";
+import { cx, Segmented } from "@oc/ui";
 import { useQuery } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
@@ -20,6 +20,8 @@ import { CameraGizmo } from "./CameraGizmo";
 import { Inspector, MobileEdit } from "./Inspector";
 import { LeftPanel, ToolPicker } from "./LeftPanel";
 import { PreviewStage } from "./PreviewStage";
+import { RenderBar } from "./RenderBar";
+import { ResultView } from "./ResultView";
 import { AnalyzePanel, JobStatusList } from "./ScenePanel";
 import { Timeline, usePlayback } from "./Timeline";
 import { TopBar } from "./TopBar";
@@ -137,6 +139,8 @@ export function ProjectView({ projectId }: { projectId: string }) {
   const config = useEditor((s) => s.config);
   const jobs = useEditor((s) => s.jobs);
   const [mobileTab, setMobileTab] = useState<MobileTab>("upload");
+  // Desktop center column: the editor stage or the result screen (a finished render switches to results).
+  const [view, setView] = useState<"edit" | "results">("edit");
   // Mobile: freehand sketch is off by default (preset + strength slider + keyframe numbers instead).
   const [mobileFreehand, setMobileFreehand] = useState(false);
   const desktop = useIsDesktop();
@@ -214,15 +218,26 @@ export function ProjectView({ projectId }: { projectId: string }) {
         <aside data-region="left" aria-label={t("panelLeft")} className="scroll-panel hidden border-r border-border bg-panel md:col-start-1 md:row-span-2 md:row-start-1 md:block">
           {desktop ? <LeftPanel /> : null}
         </aside>
-        <main className="flex min-h-0 min-w-0 flex-col md:col-start-2 md:row-start-1">
-          {hasDepth ? <CameraStage cam={cam} freehand={freehand} /> : <SceneStage />}
+        <main className={cx("flex min-h-0 min-w-0 flex-col md:col-start-2 md:row-start-1", desktop && view === "results" && "md:row-span-2")}>
+          {desktop && (
+            <div className="flex flex-wrap items-center gap-3 border-b border-border bg-panel px-3 py-2" data-region="render-strip">
+              <div className="w-44 shrink-0">
+                <Segmented label={t("results")} value={view} onChange={setView}
+                  options={[{ value: "edit", label: t("editView") }, { value: "results", label: t("results") }]} />
+              </div>
+              <div className="min-w-0 flex-1"><RenderBar cam={cam} onDone={() => setView("results")} /></div>
+            </div>
+          )}
+          {desktop && view === "results"
+            ? <div className="scroll-panel min-h-0 flex-1 bg-stage p-3"><ResultView /></div>
+            : hasDepth ? <CameraStage cam={cam} freehand={freehand} /> : <SceneStage />}
         </main>
         <aside data-region="right" aria-label={t("panelInspector")} className="scroll-panel hidden flex-col gap-3 border-l border-border bg-panel p-3 md:col-start-3 md:row-span-2 md:row-start-1 md:flex">
           <CameraViews cam={cam} />
           {/* desktop only: the mobile Edit sheet hosts its own controls (no duplicate, hidden inputs) */}
           {desktop && (hasDepth && cam.path ? <Inspector cam={cam} /> : <p className="text-xs text-muted">{t("noDepth")}</p>)}
         </aside>
-        <div className="hidden md:col-start-2 md:row-start-2 md:block">
+        <div className={cx("hidden md:col-start-2 md:row-start-2", view === "results" ? "md:hidden" : "md:block")}>
           {desktop && hasDepth && cam.path ? <Timeline cam={cam} /> : <div className="h-[140px] border-t border-border bg-panel" />}
         </div>
         {!desktop && hasDepth && cam.path && <Timeline cam={cam} compact />}
@@ -255,7 +270,12 @@ export function ProjectView({ projectId }: { projectId: string }) {
               ) : <p className="text-xs text-muted">{t("noDepth")}</p>}
             </div>
           )}
-          {mobileTab === "result" && <p className="p-3 text-xs text-muted" data-region="result-mobile">{t("resultLater")}</p>}
+          {mobileTab === "result" && (
+            <div className="space-y-4 p-3" data-region="result-mobile">
+              {!desktop && <RenderBar cam={cam} compact onDone={() => setMobileTab("result")} />}
+              {!desktop && <ResultView mobile />}
+            </div>
+          )}
         </div>
       </nav>
     </div>
