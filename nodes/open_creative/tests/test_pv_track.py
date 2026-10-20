@@ -107,10 +107,23 @@ def test_track_window_limits_tracked_frames(stomp, gt):
     assert [p.frame for p in pts if p.valid] == list(range(33, 54))
 
 
-def test_keyframes_beyond_the_window_do_not_start_runs(stomp, gt):
-    pts = track_with_corrections(stomp, _kf(gt, 43), [_kf(gt, 5), _kf(gt, 100)], window=10)
-    assert [p.frame for p in pts if p.valid] == [5, *range(33, 54), 100]
-    assert pts[5].source == pts[100].source == "keyframe"
+def test_keyframes_beyond_the_window_are_invalid(stomp, gt):
+    corrs = [_kf(gt, 5), _kf(gt, 38), _kf(gt, 100)]
+    pts = track_with_corrections(stomp, _kf(gt, 43), corrs, window=10)
+    assert [p.frame for p in pts if p.valid] == list(range(33, 54))
+    assert not pts[5].valid and not pts[100].valid and math.isnan(pts[5].x)
+    assert pts[38].source == "keyframe" and (pts[38].x, pts[38].y) == (corrs[1]["x"] * PW, corrs[1]["y"] * PH)
+
+
+def test_keyframes_outside_the_clip_are_ignored_not_crashing():
+    tex = cv2.GaussianBlur(np.random.default_rng(2).integers(0, 256, (PH, PW), np.uint8), (0, 0), 1.5)
+    frames = [tex] * 5
+    anchor = {"frame": 1, "x": 0.5, "y": 0.5}
+    pts = track_with_corrections(frames, anchor, [{"frame": 5, "x": 0.1, "y": 0.1}, {"frame": -1, "x": 0, "y": 0}])
+    assert len(pts) == 5 and all(p.valid for p in pts) and pts[4].source == "tracked"
+    pts = track_with_corrections(frames, anchor, [{"frame": 4, "x": 0.5, "y": 0.5}])
+    assert pts[4].source == "keyframe" and all(p.valid for p in pts)
+    assert not any(p.valid for p in track_with_corrections(frames, {"frame": 7, "x": 0.5, "y": 0.5}, []))
 
 
 def test_track_point_frame_range(stomp, gt):
@@ -131,7 +144,7 @@ def test_segment_keys_and_cached_assembly(stomp, gt):
     assert [a == b for a, b in zip(keys, keys2)] == [False, False, True, True]
     assert set(segment_keys("sha-b", anchor, corrs, None, {}, n_frames=120)).isdisjoint(keys)
     assert segment_keys("sha-a", anchor, corrs, None, {"fb_max": 2.0}, n_frames=120)[3] != keys[3]
-    pts = assemble(segs, [track_segment(stomp, s) for s in segs], anchor, corrs, 120, (PW, PH))
+    pts = assemble(segs, [track_segment(stomp, s) for s in segs], 120, (PW, PH))
     assert pts == track_with_corrections(stomp, anchor, corrs)
 
 
@@ -168,6 +181,16 @@ def test_smoothing_pins_keyframes_and_never_bridges_gaps():
     assert all(not p.valid and math.isnan(p.y) for p in out[6:9])
     assert out[12].y == 130.0 and out[12].source == "keyframe"
     assert all(100.0 <= p.y < 130.0 for p in out[9:12] + out[13:])
+
+
+def test_smoothing_runs_shorter_than_the_kernel_stay_aligned():
+    # sigma 1 -> 7-tap kernel; a 3-frame run is smoothed in place with the truncated kernel renormalized
+    w1, w2 = math.exp(-0.5), math.exp(-2.0)
+    edge = (10 * w1 + 20 * w2) / (1 + w1 + w2)
+    out = smooth_track(_pts([0.0, 10.0, 20.0]), sigma_frames=1.0)
+    assert [p.y for p in out] == pytest.approx([edge, 10.0, 20.0 - edge])
+    pinned = smooth_track(_pts([0.0, 10.0, 20.0], sources=["keyframe", "tracked", "tracked"]), sigma_frames=1.0)
+    assert pinned[0].y == 0.0 and pinned[1].y == pytest.approx(10.0) and pinned[2].y == pytest.approx(20.0 - edge)
 
 
 def test_smoothing_reduces_jitter_without_lag():

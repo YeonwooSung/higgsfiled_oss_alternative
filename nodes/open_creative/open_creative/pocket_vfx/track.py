@@ -15,7 +15,7 @@ Corrections and segment reuse:
     segs = plan_segments(anchor, corrections, n_frames, window)   # ordered list[Segment]
     keys = segment_keys(frames_sha, anchor, corrections, window, params, n_frames=n_frames)
     pts  = track_segment(frames, segs[i], **params)               # the points of segs[i].lo..hi
-    track = assemble(segs, [pts...], anchor, corrections, n_frames, proxy_wh)
+    track = assemble(segs, [pts...], n_frames, proxy_wh)
 ``track_with_corrections`` is exactly that without a cache. ``keys[i]`` identifies ``segs[i]``: it
 hashes the segment's bounding keyframe(s), its frame range, the track params and ``frames_sha`` (an
 id of the proxy clip chosen by the caller), so an edit to one correction only changes the keys of
@@ -147,14 +147,6 @@ def track_point(frames: Sequence[np.ndarray], anchor_frame: int, anchor_xy, *, p
 # ------------------------------------------------------------------------------------------ corrections
 
 
-def _keyframes(anchor: dict, corrections) -> list[tuple[int, float, float]]:
-    """Anchor ∪ corrections as sorted ``(frame, u, v)``, unique per frame; a correction wins over the anchor."""
-    kf = {int(anchor["frame"]): (float(anchor["x"]), float(anchor["y"]))}
-    for c in corrections or []:
-        kf[int(c["frame"])] = (float(c["x"]), float(c["y"]))
-    return [(f, u, v) for f, (u, v) in sorted(kf.items())]
-
-
 def _window_range(anchor: dict, n_frames: int, window) -> tuple[int, int]:
     if window is None:
         return 0, n_frames - 1
@@ -162,12 +154,25 @@ def _window_range(anchor: dict, n_frames: int, window) -> tuple[int, int]:
     return max(0, a - int(window)), min(n_frames - 1, a + int(window))
 
 
+def _keyframes(anchor: dict, corrections, lo: int, hi: int) -> list[tuple[int, float, float]]:
+    """Anchor ∪ corrections as sorted ``(frame, u, v)``, unique per frame (a correction wins over the
+    anchor), keeping only frames in ``lo..hi``: keyframes outside the clip or the track window are dropped,
+    so those frames stay invalid and never start a run."""
+    kf = {int(anchor["frame"]): (float(anchor["x"]), float(anchor["y"]))}
+    for c in corrections or []:
+        kf[int(c["frame"])] = (float(c["x"]), float(c["y"]))
+    return [(f, u, v) for f, (u, v) in sorted(kf.items()) if lo <= f <= hi]
+
+
 def plan_segments(anchor: dict, corrections, n_frames: int, window=None) -> list[Segment]:
     """Segments in time order: the backward run before the first keyframe, one segment between each
     pair of adjacent keyframes, the forward run after the last. Frames are clipped to ±``window``
-    around the anchor frame (``track_window_frames``); keyframes themselves are never in a segment."""
-    kfs = _keyframes(anchor, corrections)
+    around the anchor frame (``track_window_frames``); keyframes themselves are never in a segment.
+    Keyframes outside the clip or the window are ignored; with none left there are no segments."""
     lo, hi = _window_range(anchor, n_frames, window)
+    kfs = _keyframes(anchor, corrections, lo, hi)
+    if not kfs:
+        return []
     segs = [Segment(None, kfs[0], lo, min(hi, kfs[0][0] - 1))]
     segs += [Segment(a, b, max(lo, a[0] + 1), min(hi, b[0] - 1)) for a, b in itertools.pairwise(kfs)]
     segs.append(Segment(kfs[-1], None, max(lo, kfs[-1][0] + 1), hi))
@@ -232,17 +237,20 @@ def track_segment(frames: Sequence[np.ndarray], seg: Segment, **params) -> list[
     return [_blend(f, seg.left[0], seg.right[0], a, b) for f, a, b in zip(range(seg.lo, seg.hi + 1), *runs)]
 
 
-def assemble(segments: Sequence[Segment], seg_points: Sequence[list[TrackPoint]], anchor: dict, corrections,
-             n_frames: int, proxy_wh) -> list[TrackPoint]:
-    """Full-length track from per-segment points; keyframe frames are exact, uncovered frames invalid."""
+def assemble(segments: Sequence[Segment], seg_points: Sequence[list[TrackPoint]], n_frames: int,
+             proxy_wh) -> list[TrackPoint]:
+    """Full-length track from per-segment points. The segments' bounding keyframes are exact; frames no
+    segment covers (outside the track window, dropped keyframes) are invalid."""
     pw, ph = proxy_wh
     pts = [_invalid(f) for f in range(n_frames)]
     for seg_pts in seg_points:
         for q in seg_pts:
             pts[q.frame] = q
-    for f, u, v in _keyframes(anchor, corrections):
-        if 0 <= f < n_frames:
-            pts[f] = TrackPoint(f, u * pw, v * ph, True, 1.0, 0.0, 0, "keyframe")
+    for seg in segments:
+        for kf in (seg.left, seg.right):
+            if kf is not None:
+                f, u, v = kf
+                pts[f] = TrackPoint(f, u * pw, v * ph, True, 1.0, 0.0, 0, "keyframe")
     return pts
 
 
@@ -252,7 +260,7 @@ def track_with_corrections(frames: Sequence[np.ndarray], anchor: dict, correctio
     n = len(frames)
     h, w = frames[0].shape[:2]
     segs = plan_segments(anchor, corrections, n, window)
-    return assemble(segs, [track_segment(frames, s, **params) for s in segs], anchor, corrections, n, (w, h))
+    return assemble(segs, [track_segment(frames, s, **params) for s in segs], n, (w, h))
 
 
 # ------------------------------------------------------------------------------------------ post-processing
@@ -275,10 +283,13 @@ def smooth_track(points: Sequence[TrackPoint], sigma_frames: float = 1.0) -> lis
         while j < n and points[j].valid:
             j += 1
         xy = np.array([[p.x, p.y] for p in points[i:j]], np.float64)
-        ones = np.ones(len(xy))
-        norm = np.convolve(ones, k, mode="same")
-        sx = np.convolve(xy[:, 0], k, mode="same") / norm
-        sy = np.convolve(xy[:, 1], k, mode="same") / norm
+        m_len = len(xy)
+
+        def conv(a, m_len=m_len):  # centered on every sample, also for runs shorter than the kernel
+            return np.convolve(a, k, mode="full")[rad : rad + m_len]
+
+        norm = conv(np.ones(m_len))
+        sx, sy = conv(xy[:, 0]) / norm, conv(xy[:, 1]) / norm
         for m, p in enumerate(points[i:j]):
             if p.source != "keyframe":
                 out[i + m] = replace(p, x=float(sx[m]), y=float(sy[m]))
