@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import bisect
 import json
-import math
 import subprocess
 import tempfile
 from collections.abc import Iterator
@@ -26,6 +25,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
+from ..pocket_vfx.timeline import frame_index
 from .image import MediaError
 from .video import FFMPEG, FFPROBE, Mp4Writer, cover_fit, decode_frames, probe
 
@@ -36,11 +36,6 @@ AUDIO_RATE = 48_000
 WORK_CRF = 16
 PROXY_CRF = 20
 _PTS_EPS_MS = 1e-3
-
-
-def _frame_index(t_ms: float) -> int:
-    # Same rule as open_creative.pocket_vfx.timeline.frame_index (keep the formula identical).
-    return math.floor(t_ms * FPS / 1000 + 0.5)
 
 
 @dataclass(frozen=True)
@@ -189,7 +184,7 @@ def normalize_clip(
     Streams decode -> select -> fit -> encode; at most one source frame is held at a time."""
     if source_start_ms < 0 or duration_ms <= 0:
         raise ValueError("invalid trim")
-    n = _frame_index(duration_ms)
+    n = frame_index(duration_ms)
     pts = _frame_pts_ms(src)
     if not pts:
         raise MediaError("unsupported_codec", "no decodable video frames")

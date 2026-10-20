@@ -1,0 +1,238 @@
+{
+  "schema_version": 1,
+  "palette_space": "linear_rgb",
+  "palettes": {
+    "violet": {
+      "core": [
+        0.9047,
+        0.8308,
+        1.0
+      ],
+      "mid": [
+        0.7231,
+        0.2582,
+        1.0
+      ],
+      "edge": [
+        0.0423,
+        0.0048,
+        0.1946
+      ]
+    },
+    "amber": {
+      "core": [
+        1.0,
+        0.9047,
+        0.7157
+      ],
+      "mid": [
+        1.0,
+        0.4508,
+        0.063
+      ],
+      "edge": [
+        0.1946,
+        0.0232,
+        0.0018
+      ]
+    },
+    "cyan": {
+      "core": [
+        0.7913,
+        0.9823,
+        1.0
+      ],
+      "mid": [
+        0.1144,
+        0.7682,
+        1.0
+      ],
+      "edge": [
+        0.0018,
+        0.0513,
+        0.1946
+      ]
+    }
+  },
+  "presets": [
+    {
+      "id": "impact_wave_v1",
+      "version": 1,
+      "label_en": "Impact Wave",
+      "label_ko": "임팩트 웨이브",
+      "input_requirements": {
+        "subject_mask": true,
+        "clean_plate": false,
+        "fixed_camera": true
+      },
+      "plate_modes": [
+        "bundled",
+        "generated"
+      ],
+      "bundled_plates": [
+        {
+          "id": "dust_burst_v1",
+          "file": "plates/dust_burst_v1.mp4",
+          "file_portrait": "plates/dust_burst_v1_portrait.mp4",
+          "frames": 49,
+          "loopable": true
+        }
+      ],
+      "plate_prompt": "isolated bright {palette} warm dust burst and sparks on an untextured black background, fixed camera, no people, no text",
+      "prompt_palette_placeholder": "{palette}",
+      "plate_negative": "people, faces, text, logo, watermark, textured background, camera shake, fog",
+      "plate_frames": 49,
+      "defaults": {
+        "scale": 1.0,
+        "intensity": 0.8,
+        "palette": "amber",
+        "rotation_deg": 0,
+        "layer_order": "behind_subject",
+        "durations_ms": {
+          "pre_peak": 400,
+          "post_peak": 1600
+        },
+        "squash": 0.5
+      },
+      "controls": {
+        "scale": [
+          0.25,
+          2.0
+        ],
+        "intensity": [
+          0.0,
+          1.0
+        ],
+        "rotation_deg": [
+          -180,
+          180
+        ],
+        "squash": [
+          0.2,
+          1.0
+        ]
+      },
+      "invalid_policy": "hide",
+      "sfx": {
+        "file": "sfx/impact_v1.wav",
+        "peak_offset_ms": 0
+      }
+    },
+    {
+      "id": "energy_aura_v1",
+      "version": 1,
+      "label_en": "Energy Aura",
+      "label_ko": "에너지 오라",
+      "input_requirements": {
+        "subject_mask": true,
+        "clean_plate": false,
+        "fixed_camera": false
+      },
+      "plate_modes": [
+        "bundled",
+        "generated"
+      ],
+      "bundled_plates": [
+        {
+          "id": "energy_wisps_v1",
+          "file": "plates/energy_wisps_v1.mp4",
+          "file_portrait": "plates/energy_wisps_v1_portrait.mp4",
+          "frames": 49,
+          "loopable": true
+        }
+      ],
+      "plate_prompt": "isolated bright {palette} electrical energy wisps on an untextured black background, fixed camera, no people, no text",
+      "prompt_palette_placeholder": "{palette}",
+      "plate_negative": "people, faces, text, logo, watermark, textured background, camera shake, fog",
+      "plate_frames": 49,
+      "defaults": {
+        "scale": 1.0,
+        "intensity": 0.8,
+        "palette": "violet",
+        "rotation_deg": 0,
+        "layer_order": "behind_subject",
+        "durations_ms": {
+          "pre_peak": 300,
+          "post_peak": 2000
+        }
+      },
+      "controls": {
+        "scale": [
+          0.25,
+          2.0
+        ],
+        "intensity": [
+          0.0,
+          1.0
+        ],
+        "rotation_deg": [
+          -180,
+          180
+        ]
+      },
+      "invalid_policy": "hide",
+      "sfx": {
+        "file": "sfx/aura_v1.wav",
+        "peak_offset_ms": 0
+      }
+    },
+    {
+      "id": "blink_out_v1",
+      "version": 1,
+      "label_en": "Blink Out",
+      "label_ko": "블링크 아웃",
+      "input_requirements": {
+        "subject_mask": true,
+        "clean_plate": true,
+        "fixed_camera": true
+      },
+      "plate_modes": [
+        "bundled",
+        "generated"
+      ],
+      "bundled_plates": [
+        {
+          "id": "particles_v1",
+          "file": "plates/particles_v1.mp4",
+          "file_portrait": "plates/particles_v1_portrait.mp4",
+          "frames": 49,
+          "loopable": true
+        }
+      ],
+      "plate_prompt": "isolated bright {palette} glowing particles drifting and fading on an untextured black background, fixed camera, no people, no text",
+      "prompt_palette_placeholder": "{palette}",
+      "plate_negative": "people, faces, text, logo, watermark, textured background, camera shake, fog",
+      "plate_frames": 49,
+      "defaults": {
+        "scale": 1.0,
+        "intensity": 0.8,
+        "palette": "cyan",
+        "rotation_deg": 0,
+        "layer_order": "behind_subject",
+        "durations_ms": {
+          "pre_peak": 200,
+          "post_peak": 1200
+        }
+      },
+      "controls": {
+        "scale": [
+          0.25,
+          2.0
+        ],
+        "intensity": [
+          0.0,
+          1.0
+        ],
+        "rotation_deg": [
+          -180,
+          180
+        ]
+      },
+      "invalid_policy": "hide",
+      "sfx": {
+        "file": "sfx/blink_v1.wav",
+        "peak_offset_ms": 0
+      }
+    }
+  ]
+}

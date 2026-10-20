@@ -12,7 +12,6 @@ from open_creative.media.image import MediaError
 from open_creative.media.video import decode_frames, probe
 from open_creative.media.video_ingest import (
     PtsMap,
-    _frame_index,
     cover_transform,
     extract_audio,
     filmstrip,
@@ -22,6 +21,7 @@ from open_creative.media.video_ingest import (
     probe_source,
     proxy_size,
 )
+from open_creative.pocket_vfx.timeline import frame_index
 from PIL import Image
 
 FIX = Path(__file__).resolve().parents[3] / "fixtures" / "pocket-vfx"
@@ -62,8 +62,8 @@ def test_fixture_manifest_hashes_match():
 
 
 def test_frame_index_rule():
-    assert _frame_index(3200) == 77 and _frame_index(5000) == 120 and _frame_index(1000) == 24
-    assert _frame_index(20.8) == 0 and _frame_index(20.9) == 1
+    assert frame_index(3200) == 77 and frame_index(5000) == 120 and frame_index(1000) == 24
+    assert frame_index(20.8) == 0 and frame_index(20.9) == 1
 
 
 def test_landscape_probe_is_cfr_without_audio():
@@ -84,7 +84,7 @@ def test_rotated_fixture_normalizes_to_portrait(tmp_path):
     pts = normalize_clip(src, work, info, 0, 3000, 720, 1280)
     p = probe(work)
     assert (p["width"], p["height"]) == (720, 1280)
-    assert p["frame_count"] == _frame_index(3000) == len(pts.source_pts_ms)
+    assert p["frame_count"] == frame_index(3000) == len(pts.source_pts_ms)
     # display-space hand position matches the GT trajectory (rotation direction is right)
     gt = {round(r["pts_ms"], 3): r for r in MANIFEST["rotated_portrait"]["hand_display_px"]}
     color = MANIFEST["hand_color_rgb"]
@@ -143,7 +143,7 @@ def test_frame_numbered_fixture_maps_nearest_previous_pts(tmp_path):
         frame_dur = src_pts[k + 1] - src_pts[k]
         assert -1e-3 <= target - pts.source_pts_ms[i] < frame_dur + 1e-3
         seen += 1
-    assert seen == _frame_index(dur)
+    assert seen == frame_index(dur)
 
 
 def _onset_ms(pcm, thresh=0.05):
