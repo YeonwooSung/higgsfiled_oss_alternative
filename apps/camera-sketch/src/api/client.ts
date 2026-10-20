@@ -1,4 +1,4 @@
-import type { CameraCapabilities, CameraPreset, CameraSketchConfig, CameraSketchProject } from "@oc/contracts";
+import type { CameraCapabilities, CameraPreset, CameraSketchConfig, CameraSketchProject, CompileRequest, CompileResponse } from "@oc/contracts";
 import { ApiClient } from "@oc/web-core";
 
 export { ApiError, sha256Hex } from "@oc/web-core";
@@ -13,6 +13,10 @@ export class CameraSketchClient extends ApiClient<CameraSketchConfig, CameraSket
   }
   presets() {
     return this.request<{ presets: CameraPreset[] }>("GET", "/camera-sketch/presets");
+  }
+  /** Authoritative path for a saved revision (`POST /projects/{id}/camera-path/compile`). */
+  compilePath(projectId: string, body: CompileRequest) {
+    return this.request<CompileResponse>("POST", `/projects/${projectId}/camera-path/compile`, body);
   }
 }
 

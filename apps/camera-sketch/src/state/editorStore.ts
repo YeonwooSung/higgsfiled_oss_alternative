@@ -4,8 +4,16 @@ import type { CameraSketchConfig, CameraSketchProject, CompileResponse, Job } fr
 import { Autosaver, History } from "@oc/web-core";
 import { create } from "zustand";
 import { api } from "../api/client";
+import { PARAMS, type ParamName } from "../model/path";
+import { lateralProposal, sketchFromStroke } from "../model/sketch";
 
 export type SaveState = "saved" | "saving" | "error" | "conflict";
+export type Tool = "none" | "target" | "sketch" | "keyframe";
+
+/** Debounce between a saved revision and its `POST camera-path/compile` (after the 600 ms autosave). */
+export const COMPILE_DEBOUNCE_MS = 300;
+/** Compiler reasons that never block rendering (they are warnings). */
+const NON_BLOCKING = new Set(["unsupported_sketch", "framing_clamped"]);
 
 interface EditorState {
   project: CameraSketchProject | null;
@@ -20,7 +28,11 @@ interface EditorState {
   jobs: Record<string, Job>;
   load: (project: CameraSketchProject) => void;
   refresh: () => Promise<void>;
-  update: (mutate: (draft: CameraSketchConfig) => void) => void;
+  /**
+   * User edit: one undo step. Edits with the same `coalesce` key within 1 s (a slider drag, typing
+   * in a number field) replace the last step instead of adding one.
+   */
+  update: (mutate: (draft: CameraSketchConfig) => void, coalesce?: string) => void;
   /** Automatic link (not a user edit): saved, but never an undo step and never undone. */
   link: (mutate: (draft: CameraSketchConfig) => void) => void;
   undo: () => void;
@@ -30,20 +42,62 @@ interface EditorState {
   /** Latest server compile response and the revision it was computed for (the compile loop sets it). */
   serverCompile: { revision: number; response: CompileResponse } | null;
   setServerCompile: (c: { revision: number; response: CompileResponse } | null) => void;
+  /** API error code of the last failed compile for the current revision (cleared by the next save). */
+  compileError: string | null;
   /** Timeline playhead, 0..duration ms (the timeline UI drives it). */
   playheadMs: number;
   setPlayheadMs: (t: number) => void;
+  playing: boolean;
+  setPlaying: (on: boolean) => void;
+  tool: Tool;
+  setTool: (tool: Tool) => void;
+  /** Proposed `lateral_ratio` after a slide sketch whose direction disagrees with its sign (never auto-applied). */
+  lateralProposal: number | null;
+  applyLateralProposal: () => void;
+  dismissLateralProposal: () => void;
+  /** Pointer stroke (OUTPUT uv01, drawing order) -> sketch control points (one undo step). */
+  commitSketch: (stroke: readonly (readonly number[])[]) => void;
+  /** Clear the sketch, keep preset and params ("Restore preset"). */
+  restorePreset: () => void;
+  /** "Apply reduced motion": write the compiler's `suggested_params` as a normal (undoable) edit. */
+  applySuggestedParams: (params: Record<string, number>) => void;
 }
 
 let history: History<CameraSketchConfig> | null = null;
 let saver: Autosaver<CameraSketchConfig> | null = null;
+let compileTimer: ReturnType<typeof setTimeout> | null = null;
+let lastEdit: { key: string; at: number } | null = null;
+const COALESCE_MS = 1000;
 
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
 
 export const useEditor = create<EditorState>((set, get) => {
   const applyLocal = (cfg: CameraSketchConfig) => {
-    set({ config: cfg, canUndo: history!.canUndo, canRedo: history!.canRedo, saveState: "saving" });
+    set({ config: cfg, canUndo: history!.canUndo, canRedo: history!.canRedo, saveState: "saving", lateralProposal: null });
     saver!.schedule(cfg);
+  };
+
+  /**
+   * Authoritative compile of a SAVED revision, 300 ms after it was saved. A response is applied only
+   * while its revision is still the latest saved one (late responses for older revisions are dropped).
+   */
+  const scheduleCompile = (projectId: string, revision: number, cfg: CameraSketchConfig) => {
+    if (compileTimer) clearTimeout(compileTimer);
+    compileTimer = null;
+    if (!cfg.scene_asset_id || !cfg.depth_asset_id) return;
+    compileTimer = setTimeout(() => {
+      compileTimer = null;
+      const live = () => get().project?.id === projectId && get().revision === revision;
+      if (!live()) return;
+      const p = cfg.path;
+      api.compilePath(projectId, {
+        revision, preset: p.preset, sketch: p.sketch_points,
+        parameters: { lateral_ratio: p.lateral_ratio, push_ratio: p.push_ratio, arc_deg: p.arc_deg, easing: p.easing },
+      }).then(
+        (response) => { if (live()) set({ serverCompile: { revision, response }, compileError: null }); },
+        (e) => { if (live()) set({ compileError: (e as { code?: string }).code ?? "compile_failed" }); },
+      );
+    }, COMPILE_DEBOUNCE_MS);
   };
 
   return {
@@ -58,19 +112,31 @@ export const useEditor = create<EditorState>((set, get) => {
     jobs: {},
     serverCompile: null,
     setServerCompile: (c) => set({ serverCompile: c }),
+    compileError: null,
     playheadMs: 0,
     setPlayheadMs: (t) => set({ playheadMs: Number.isFinite(t) ? Math.max(0, t) : 0 }),
+    playing: false,
+    setPlaying: (on) => set({ playing: on }),
+    tool: "none",
+    setTool: (tool) => set({ tool }),
+    lateralProposal: null,
 
     load: (project) => {
       saver?.cancel();
+      if (compileTimer) clearTimeout(compileTimer);
+      compileTimer = null;
       history = new History(clone(project.config));
+      lastEdit = null;
       saver = new Autosaver<CameraSketchConfig>({
         revision: project.current_revision,
         save: async (rev, cfg) => {
           const p = await api.patchProject(project.id, rev, cfg);
           return { revision: p.current_revision, config: p.config };
         },
-        onSaved: (rev) => set({ revision: rev, saveCode: null, saveState: saver?.dirty ? "saving" : "saved" }),
+        onSaved: (rev, cfg) => {
+          set({ revision: rev, saveCode: null, compileError: null, saveState: saver?.dirty ? "saving" : "saved" });
+          scheduleCompile(project.id, rev, cfg);
+        },
         onConflict: async () => {
           const fresh = await api.getProject(project.id);
           get().load(fresh);
@@ -80,8 +146,9 @@ export const useEditor = create<EditorState>((set, get) => {
       });
       const jobs = Object.fromEntries(project.recent_jobs.map((j) => [j.id, j]));
       set({ project, config: clone(project.config), revision: project.current_revision, canUndo: false, canRedo: false,
-        saveState: "saved", jobs: { ...get().jobs, ...jobs }, serverCompile: null,
-        playheadMs: get().project?.id === project.id ? get().playheadMs : 0 });
+        saveState: "saved", jobs: { ...get().jobs, ...jobs }, serverCompile: null, compileError: null, lateralProposal: null,
+        playing: false, playheadMs: get().project?.id === project.id ? get().playheadMs : 0 });
+      scheduleCompile(project.id, project.current_revision, project.config);
     },
 
     refresh: async () => {
@@ -93,12 +160,16 @@ export const useEditor = create<EditorState>((set, get) => {
         jobs: { ...get().jobs, ...Object.fromEntries(fresh.recent_jobs.map((j) => [j.id, j])) } });
     },
 
-    update: (mutate) => {
+    update: (mutate, coalesce) => {
       const cur = get().config;
       if (!cur || !history) return;
       const next = clone(cur);
       mutate(next);
-      history.push(next);
+      if (JSON.stringify(next) === JSON.stringify(cur)) return;
+      const now = Date.now();
+      if (coalesce && lastEdit?.key === coalesce && now - lastEdit.at < COALESCE_MS && history.canUndo) history.reset(next);
+      else history.push(next);
+      lastEdit = coalesce ? { key: coalesce, at: now } : null;
       applyLocal(clone(history.current));
     },
     link: (mutate) => {
@@ -112,8 +183,28 @@ export const useEditor = create<EditorState>((set, get) => {
       set({ config: clone(history.current), saveState: "saving" });
       saver!.schedule(clone(history.current));
     },
-    undo: () => history && history.canUndo && applyLocal(clone(history.undo())),
-    redo: () => history && history.canRedo && applyLocal(clone(history.redo())),
+    undo: () => { lastEdit = null; if (history?.canUndo) applyLocal(clone(history.undo())); },
+    redo: () => { lastEdit = null; if (history?.canRedo) applyLocal(clone(history.redo())); },
+
+    commitSketch: (stroke) => {
+      const { points } = sketchFromStroke(stroke);
+      if (!points.length) return;
+      get().update((c) => { c.path.sketch_points = points; });
+      const p = get().config?.path;
+      set({ lateralProposal: p ? lateralProposal(p.preset, p.lateral_ratio, points) : null });
+    },
+    applyLateralProposal: () => {
+      const v = get().lateralProposal;
+      if (v === null) return;
+      get().update((c) => { c.path.lateral_ratio = v; });
+    },
+    dismissLateralProposal: () => set({ lateralProposal: null }),
+    restorePreset: () => get().update((c) => { c.path.sketch_points = []; }),
+    applySuggestedParams: (params) => {
+      const valid = PARAMS.filter((k) => typeof params[k] === "number" && Number.isFinite(params[k]));
+      if (!valid.length) return;
+      get().update((c) => { for (const k of valid) c.path[k as ParamName] = params[k]; });
+    },
 
     flush: async () => {
       await saver?.flush();
@@ -127,6 +218,30 @@ export const useEditor = create<EditorState>((set, get) => {
 export function currentServerPath(s: Pick<EditorState, "serverCompile" | "revision" | "saveState">) {
   const c = s.serverCompile;
   return c && c.revision === s.revision && s.saveState === "saved" ? c.response.path : null;
+}
+
+export interface RenderGate {
+  canRender: boolean;
+  /** Reason codes (compiler codes or editor codes); map with `reasonKey` for text. */
+  blockReasons: string[];
+}
+
+/**
+ * Render buttons gate: only the server compile of the current saved revision can approve a path.
+ * `invalid` blocks with its blocking reasons; `ok` and `warning` allow rendering.
+ */
+export function renderGate(
+  s: Pick<EditorState, "serverCompile" | "revision" | "saveState" | "config"> & { compileError?: string | null },
+): RenderGate {
+  if (!s.config?.scene_asset_id || !s.config.depth_asset_id) return { canRender: false, blockReasons: ["depth_missing"] };
+  if (s.compileError) return { canRender: false, blockReasons: [s.compileError === "depth_missing" ? "depth_missing" : "compile_failed"] };
+  const path = currentServerPath(s);
+  if (!path) return { canRender: false, blockReasons: ["compile_pending"] };
+  if (path.status === "invalid") {
+    const r = path.reasons.filter((x) => !NON_BLOCKING.has(x));
+    return { canRender: false, blockReasons: r.length ? r : ["unknown"] };
+  }
+  return { canRender: true, blockReasons: [] };
 }
 
 export function assetById(project: CameraSketchProject | null, id: string | null | undefined) {
