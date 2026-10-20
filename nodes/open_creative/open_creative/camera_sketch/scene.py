@@ -180,6 +180,28 @@ def encode_depth_png16(d: np.ndarray) -> tuple[bytes, dict]:
     return buf.tobytes(), {"min": lo, "max": hi}
 
 
+# Long side of the low-resolution depth (``depth_lowres`` asset) used for estimate-only paths (hole preview).
+LOWRES_DEPTH_MAX_SIDE = 320
+
+
+def lowres_depth_size(w: int, h: int, max_side: int = LOWRES_DEPTH_MAX_SIDE) -> tuple[int, int]:
+    """(width, height) of a depth downsampled to ``max_side`` long side; unchanged when already small enough."""
+    if max(w, h) <= max_side:
+        return w, h
+    f = max_side / max(w, h)
+    return max(1, round(w * f)), max(1, round(h * f))
+
+
+def downsample_depth(d: np.ndarray, max_side: int = LOWRES_DEPTH_MAX_SIDE) -> np.ndarray:
+    """Area downsample of a (provider) depth map to ``max_side`` long side (float32)."""
+    d = np.asarray(d, dtype=np.float32)
+    h, w = d.shape
+    nw, nh = lowres_depth_size(w, h, max_side)
+    if (nw, nh) == (w, h):
+        return d.copy()
+    return cv2.resize(d, (nw, nh), interpolation=cv2.INTER_AREA)
+
+
 def decode_depth_png16(data: bytes, meta: dict) -> np.ndarray:
     q = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_UNCHANGED)
     if q is None or q.dtype != np.uint16 or q.ndim != 2:

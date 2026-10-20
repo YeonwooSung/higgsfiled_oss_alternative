@@ -49,7 +49,9 @@ STRETCH_VALID = 1.5  # edge-face pixels are valid while A/A_ref is in (0, STRETC
 
 @dataclass
 class Frame:
-    rgb: np.ndarray  # HxWx3 uint8 (0 where invalid)
+    # HxWx3 uint8. Edge-layer rule (module docstring): a pixel won by a stretched/flipped edge face keeps its
+    # texture colour but is invalid; a pixel no face covers (uncovered) is black (0) and invalid.
+    rgb: np.ndarray
     z: np.ndarray  # HxW float32 camera-space depth, inf where invalid
     valid: np.ndarray  # HxW bool
 

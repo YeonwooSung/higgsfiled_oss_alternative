@@ -92,8 +92,21 @@ def target_px_out(artifact: dict) -> tuple[float, float]:
     return float(h[0] / h[2]), float(h[1] / h[2])
 
 
+CANCEL_CHECK_FRAMES = 12  # a cancel request interrupts a frame loop within this many frames
+
+
+def frame_checkpoint(run: JobRun, i: int, beat_every: int = 10) -> None:
+    """Per-frame bookkeeping of a long loop: heartbeat every ``beat_every`` frames and honour a cancel request
+    every ``CANCEL_CHECK_FRAMES`` frames (raises ``Cancelled``; no output asset of the stage is stored then, and
+    the job's work dir with the partial files is removed when the job finishes as ``cancelled``)."""
+    if i % beat_every == 0:
+        run.heartbeat()
+    if i % CANCEL_CHECK_FRAMES == 0:
+        run.check_cancel()
+
+
 def with_heartbeat(run: JobRun, frames, every: int = 10):
+    """Yield ``frames`` with ``frame_checkpoint`` (heartbeat + cancel check) before each frame."""
     for i, f in enumerate(frames):
-        if i % every == 0:
-            run.heartbeat()
+        frame_checkpoint(run, i, every)
         yield f

@@ -125,3 +125,35 @@ def test_mock_cinematic_missing_binding_rejected(tmp_path):
     b.pop("control_strength")
     with pytest.raises(ProviderRejected):
         MockRunner(tmp_path / "m").submit("camera_cinematic_v1", b, "k")
+
+
+def test_mock_cinematic_streams_guide_and_holds_last_frame():
+    from oc_worker.comfy.mock import _held_frames
+    from oc_worker.comfy.runner import ProviderRejected
+
+    pulled = []
+
+    def stream(k):
+        for i in range(k):
+            pulled.append(i)
+            yield np.full((2, 2, 3), i, np.uint8)
+
+    out = _held_frames(stream(3), 5)
+    first = next(out)
+    assert first[0, 0, 0] == 0 and pulled == [0]  # lazy: one frame decoded per frame emitted
+    assert [int(f[0, 0, 0]) for f in out] == [1, 2, 2, 2]  # last guide frame held
+    pulled.clear()
+    assert [int(f[0, 0, 0]) for f in _held_frames(stream(10), 4)] == [0, 1, 2, 3]  # trimmed
+    assert len(pulled) == 4
+    with pytest.raises(ProviderRejected):
+        list(_held_frames(stream(0), 3))
+
+
+def test_mock_cinematic_empty_guide_is_a_provider_failure(tmp_path):
+    b, _ = cin_bindings(tmp_path)
+    d = tmp_path / "empty"
+    d.mkdir()
+    r = MockRunner(tmp_path / "m")
+    jid = r.submit("camera_cinematic_v1", {**b, "guide_rgb": str(d)}, "k")
+    st = r.inspect(jid)
+    assert st["state"] == "failed" and "no frames" in st["error"]

@@ -1,6 +1,7 @@
 """Camera Sketch worker executors: analyze -> guide -> cinematic -> export (mock profile, SQLite, temp storage)."""
 
 import hashlib
+import importlib
 import io
 import json
 import time
@@ -140,6 +141,19 @@ def test_analyze_stores_depth_preview_and_never_patches_config(ctx, db_factory, 
     d = decode_depth_png16(data, m)
     near, far = np.unravel_index(np.argmax(d), d.shape), np.unravel_index(np.argmin(d), d.shape)
     assert p8[near] > p8[far]  # near (larger inverse depth) is bright
+
+    # low-res copy for the compile endpoint's hole estimate (long side <= 320, area downsample, own min/max)
+    low = load(db_factory, Asset, r["depth_lowres_asset_id"])
+    assert low.role == "depth_lowres" and low.state == "ready" and (low.width, low.height) == (320, 180)
+    assert low.source_asset_id == depth.id and m["lowres_asset_id"] == str(low.id)
+    lm = low.meta_json
+    assert lm["source_asset_id"] == str(aid) and lm["source_depth_asset_id"] == str(depth.id)
+    assert lm["convention"] == m["convention"] and lm["model"] == m["model"]
+    dl = decode_depth_png16(asset_bytes(db_factory, storage, low.id), lm)
+    assert (lm["min"], lm["max"]) == pytest.approx((float(dl.min()), float(dl.max())), rel=1e-6)
+    expect = cv2.resize(d, (320, 180), interpolation=cv2.INTER_AREA)
+    assert np.abs(dl - expect).max() <= (lm["max"] - lm["min"]) / 65535 + 1e-6
+    assert set(job.output_asset_ids) == {str(depth.id), str(prev.id), str(low.id)}
 
     K = np.array(r["intrinsics_suggestion"]["K"])
     assert r["intrinsics_suggestion"]["focal_length_mm_equiv"] == 50
@@ -387,3 +401,64 @@ def test_room_slide_end_to_end(ctx, db_factory, storage, cam_project):
     print("timings", TIMINGS, "guide", {k: r[k] for k in ("hole_ratio_max", "target_visibility_min",
                                                            "framing_rms_rel", "warnings")},
           "qa", cin.result_json["qa"])
+
+
+# ---- cancellation inside long frame loops -----------------------------------------------------------------
+
+
+def _request_cancel(db_factory, kind):
+    with db_factory() as db:
+        job = db.scalar(select(Job).where(Job.kind == kind, Job.state.not_in(("succeeded", "failed"))))
+        job.cancellation_requested_at = utcnow()
+        job.state = "cancel_requested"
+        db.commit()
+
+
+def test_cancel_interrupts_guide_render_loop(monkeypatch, ctx, db_factory, storage, cam_project):
+    guide_mod = importlib.import_module("oc_worker.executors.camera_guide")
+
+    prepared(ctx, db_factory, storage, cam_project, smooth_scene_png())
+    rendered = []
+    orig = guide_mod.render_sequence
+
+    def spy(*a, **k):
+        for i, f in enumerate(orig(*a, **k)):
+            rendered.append(i)
+            if i == 30:
+                _request_cancel(db_factory, "camera.guide")
+            yield f
+    monkeypatch.setattr(guide_mod, "render_sequence", spy)
+    job = run_kind(ctx, db_factory, cam_project, "camera.guide", {}, 2, uses_gpu=False, expect="cancelled")
+    assert len(rendered) <= 30 + 12 + 1 < 120  # stopped at the next cancel check, not after all 120 frames
+    with db_factory() as db:
+        roles = {a.role for a in db.scalars(select(Asset).where(Asset.job_id == job.id))}
+    assert "geometry_video" not in roles and "guide_depth_video" not in roles and "guide_validity" not in roles
+    assert not (ctx.work_dir / str(job.id)).exists()  # partial MP4/zip files removed
+
+
+def test_cancel_interrupts_cinematic_guide_preparation(monkeypatch, settings, db_factory, storage, mock_root,
+                                                       cam_project):
+    cine_mod = importlib.import_module("oc_worker.executors.camera_cinematic")
+
+    runner = MockRunner(mock_root)
+    ctx = make_ctx(settings, db_factory, storage, runner)
+    prepared(ctx, db_factory, storage, cam_project, smooth_scene_png())
+    guide = run_kind(ctx, db_factory, cam_project, "camera.guide", {}, 2, uses_gpu=False)
+    submits_before = runner.submit_count  # the analyze job's depth submission
+    prepared_frames = []
+    orig = cine_mod.guide_rgb_frames
+
+    def spy(*a, **k):
+        for i, f in enumerate(orig(*a, **k)):
+            prepared_frames.append(i)
+            if i == 20:
+                _request_cancel(db_factory, "camera.cinematic")
+            yield f
+    monkeypatch.setattr(cine_mod, "guide_rgb_frames", spy)
+    job = run_kind(ctx, db_factory, cam_project, "camera.cinematic", {"guide_job_id": str(guide.id)}, 2,
+                   expect="cancelled")
+    assert len(prepared_frames) <= 20 + 12 + 1 < 120
+    assert runner.submit_count == submits_before  # cancelled before anything was sent to the provider
+    with db_factory() as db:
+        assert db.scalar(select(Asset).where(Asset.job_id == job.id)) is None
+    assert not (ctx.work_dir / str(job.id)).exists()

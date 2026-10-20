@@ -1,7 +1,10 @@
+import uuid
+
 import pytest
 
 from helpers import configure
 from oc_api.camera_sketch import routes as camera_routes
+from oc_api.models import Asset
 from test_camera_config import cproject, make_scene_and_depth  # noqa: F401
 from conftest import new_client
 
@@ -141,7 +144,7 @@ def test_depth_not_decoded_when_deferred(monkeypatch, session_client, ready):
 
     def boom(*a, **k):
         raise AssertionError("depth decoded")
-    monkeypatch.setattr(camera_routes, "load_scene_info", boom)
+    monkeypatch.setattr(camera_routes, "load_estimate_extras", boom)
     pid, rev = ready
     assert compile_(session_client, pid, rev, []).json()["deferred"] is True
 
@@ -167,3 +170,88 @@ def test_misordered_control_points_are_invalid_input(session_client, ready):
            {"t": 1, "u": 0.56, "v": 0.5}]
     b = compile_(session_client, pid, rev, pts).json()
     assert b["status"] == "invalid" and b["warnings"] == ["invalid_input"]
+
+
+# ---- low-res depth for the hole estimate ------------------------------------------------------------------
+
+
+@pytest.fixture
+def ready_lowres(app, session_client, cproject):  # noqa: F811
+    pid = cproject["id"]
+    scene, depth = make_scene_and_depth(app, pid, w=640, h=360, lowres=True)
+    proj = configure(session_client, cproject, scene_asset_id=scene, depth_asset_id=depth)
+    return pid, proj["current_revision"], depth
+
+
+def _keys(app, *ids):
+    with app.state.db() as db:
+        return [db.get(Asset, uuid.UUID(i)).object_key for i in ids]
+
+
+def _spy_reads(monkeypatch, app):
+    reads: list[str] = []
+    storage = app.state.storage
+    orig = storage.get_bytes
+
+    def spy(key):
+        reads.append(key)
+        return orig(key)
+    monkeypatch.setattr(storage, "get_bytes", spy)
+    return reads
+
+
+def test_compile_reads_only_lowres_depth(monkeypatch, app, session_client, ready_lowres):
+    pid, rev, depth = ready_lowres
+    reads = _spy_reads(monkeypatch, app)
+    b = compile_(session_client, pid, rev, [{"t": 0, "u": 0.5, "v": 0.5}]).json()
+    assert b["deferred"] is False and 0.0 <= b["hole_ratio"] <= 1.0
+    with app.state.db() as db:
+        lowres_id = db.get(Asset, uuid.UUID(depth)).meta_json["lowres_asset_id"]
+    full_key, low_key = _keys(app, depth, lowres_id)
+    assert full_key not in reads and reads == [low_key]
+
+
+def test_compile_lowres_cache_hit_skips_second_load(monkeypatch, app, session_client, ready_lowres):
+    pid, rev, _ = ready_lowres
+    reads = _spy_reads(monkeypatch, app)
+    a = compile_(session_client, pid, rev, [{"t": 0, "u": 0.5, "v": 0.5}]).json()
+    b = compile_(session_client, pid, rev, [{"t": 0, "u": 0.5, "v": 0.5}],
+                 parameters={"lateral_ratio": 0.02}).json()
+    assert len(reads) == 1  # the second compile reuses the prepared low-res z
+    assert a["hole_ratio"] is not None and b["hole_ratio"] is not None
+
+
+def test_compile_lowres_matches_fullres_fallback(monkeypatch, app, session_client, cproject):  # noqa: F811
+    """Older depth assets without ``depth_lowres`` decode the full depth; both estimates agree."""
+    pid = cproject["id"]
+    out = {}
+    for lowres in (False, True):
+        scene, depth = make_scene_and_depth(app, pid, w=640, h=360, lowres=lowres)
+        proj = configure(session_client, cproject, scene_asset_id=scene, depth_asset_id=depth)
+        reads = _spy_reads(monkeypatch, app)
+        out[lowres] = compile_(session_client, pid, proj["current_revision"], [{"t": 0, "u": 0.5, "v": 0.5}],
+                               parameters={"lateral_ratio": 0.03}).json()["hole_ratio"]
+        if not lowres:
+            assert _keys(app, depth)[0] in reads
+        monkeypatch.undo()
+    assert out[True] == pytest.approx(out[False], abs=0.02)
+
+
+def test_slow_depth_load_defers_estimate(monkeypatch, app, session_client, ready_lowres):
+    """The budget is re-checked after the load: a slow load skips the estimate and reports deferred."""
+    pid, rev, _ = ready_lowres
+    now = [0.0]
+    monkeypatch.setattr(camera_routes, "_clock", lambda: now[0])
+    orig = camera_routes.load_estimate_extras
+
+    def slow(*a, **k):
+        res = orig(*a, **k)
+        now[0] += camera_routes.COMPILE_BUDGET_S  # the load used up the whole budget
+        return res
+    monkeypatch.setattr(camera_routes, "load_estimate_extras", slow)
+
+    def no_estimate(*a, **k):
+        raise AssertionError("estimate ran after the budget was exceeded")
+    monkeypatch.setattr(camera_routes, "_hole_estimate", no_estimate)
+    b = compile_(session_client, pid, rev, [{"t": 0, "u": 0.5, "v": 0.5}]).json()
+    assert b["deferred"] is True and b["hole_ratio"] is None and b["status"] in ("ok", "warning")

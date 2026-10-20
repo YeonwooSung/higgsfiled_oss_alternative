@@ -32,10 +32,12 @@ GPU_SECONDS_CAP = {
 
 
 # ControlNet-style guide strengths of the camera cinematic stage (camera_cinematic_v1.control_strength).
-# Filled from the first real smoke on the Comfy deployment; never invented. While any is None the camera
-# open_weights profile is unavailable.
+# Filled from the first real smoke on the Comfy deployment; never invented. While any is None the open_weights
+# profile is unavailable for the workflows that take a control strength (camera.cinematic); camera.analyze
+# (camera_depth_v1 only) does not depend on them.
 CONTROL_PRESETS: dict[str, float | None] = {"low": None, "medium": None, "high": None}
 CAMERA_WORKFLOWS = ("camera_depth_v1", "camera_cinematic_v1")
+CONTROL_PRESET_WORKFLOWS = ("camera_cinematic_v1",)
 
 
 @dataclass(frozen=True)
@@ -81,7 +83,8 @@ def app_workflows_dir(workflows_root: Path, workflow: str) -> Path:
 
 def profile_status(profile_id: str, workflows_dir: Path, comfy_base_url: str | None,
                    workflows: tuple[str, ...] | None = None) -> ProfileStatus:
-    """`workflows_dir` is the app's export directory; only the app's `workflows` are checked."""
+    """`workflows_dir` is the app's export directory; only `workflows` are checked (the job kind's workflows when
+    a kind is known, else the app's). Workflows in ``CONTROL_PRESET_WORKFLOWS`` also need calibrated presets."""
     p = get_profile(profile_id)
 
     def status(ok: bool, reason: str | None = None) -> ProfileStatus:
@@ -91,7 +94,7 @@ def profile_status(profile_id: str, workflows_dir: Path, comfy_base_url: str | N
         return status(True)
     selected = workflows if workflows is not None else tuple(
         n for n in REQUIRED_BINDINGS if WORKFLOW_APP.get(n) == "product-lock")
-    if any(n in CAMERA_WORKFLOWS for n in selected) and any(v is None for v in CONTROL_PRESETS.values()):
+    if any(n in CONTROL_PRESET_WORKFLOWS for n in selected) and any(v is None for v in CONTROL_PRESETS.values()):
         return status(False, "control presets not calibrated")
     if not comfy_base_url:
         return status(False, "COMFY_BASE_URL is not configured")

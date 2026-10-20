@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session as DbSession
 
 from open_creative.comfy.profiles import PROFILES, profile_status
 from open_creative.product_lock.prompts import load_presets
-from ..apps import get_app
+from ..apps import get_app, kind_workflows
 from ..apps_registry import validate_config
 from ..db import utcnow
 from ..deps import current_session, get_db, owned_project, parse_uuid
@@ -40,11 +40,13 @@ class EstimateRequest(BaseModel):
     options: dict = Field(default_factory=dict)
 
 
-def _status(request: Request, profile_id: str, app_slug: str):
+def _status(request: Request, profile_id: str, app_slug: str, kind: str | None = None):
+    """Profile availability for ``kind`` (only the workflows that kind needs; the app's set without a kind)."""
     s = request.app.state.settings
     if profile_id not in PROFILES:
         raise ApiError(422, "unknown_profile", f"unknown profile {profile_id!r}", field="config.model_profile")
-    return profile_status(profile_id, s.workflows_dir / app_slug, s.comfy_base_url, get_app(app_slug).workflows)
+    return profile_status(profile_id, s.workflows_dir / app_slug, s.comfy_base_url,
+                          kind_workflows(get_app(app_slug), kind))
 
 
 def _profile_out(st) -> dict:
@@ -125,7 +127,7 @@ def create_job(project_id: str, body: JobCreate, request: Request, db: DbSession
     cfg = _pinned_config(db, project, body.revision)
     plan = app.plan_job(db, request.app.state.storage, project, cfg, body.kind, body.options)
     if plan.uses_gpu:
-        st = _status(request, cfg.model_profile, project.app_slug)
+        st = _status(request, cfg.model_profile, project.app_slug, body.kind)
         if not st.available:
             raise ApiError(503, "profile_unavailable", f"{st.label} profile is not available: {st.reason}",
                            retryable=True)
@@ -162,7 +164,7 @@ def estimate(project_id: str, body: EstimateRequest, request: Request, db: DbSes
     cfg = _pinned_config(db, project, body.revision)
     options = body.options or app.default_estimate_options(body.kind, cfg)
     plan = app.plan_job(db, request.app.state.storage, project, cfg, body.kind, options, validate_assets=False)
-    st = _status(request, cfg.model_profile, project.app_slug)
+    st = _status(request, cfg.model_profile, project.app_slug, body.kind)
     return {"kind": body.kind, "stages": plan.stages, "uses_gpu": plan.uses_gpu,
             "reserved_units": plan.reserved_units, "unit": plan.unit, "price": None, "price_status": "unknown",
             "profile": _profile_out(st), "notes": plan.notes, "creates_new_job": True}
@@ -241,12 +243,18 @@ def job_integrity(job_id: str, db: DbSession = Depends(get_db), session: Session
 def capabilities(request: Request, app_slug: str = "product-lock"):
     app = get_app(app_slug)
     s = request.app.state.settings
-    profiles = [_profile_out(profile_status(pid, s.workflows_dir / app_slug, s.comfy_base_url, app.workflows))
+
+    def statuses(workflows: tuple[str, ...]) -> list[dict]:
+        return [_profile_out(profile_status(pid, s.workflows_dir / app_slug, s.comfy_base_url, workflows))
                 for pid in PROFILES]
+
     return {
         "app_slug": app_slug,
         "default_profile": s.default_profile,
-        "profiles": profiles,
+        "profiles": statuses(app.workflows),
+        # per-kind availability (e.g. camera.analyze does not need calibrated control presets)
+        **({"kind_profiles": {kind: statuses(wf) for kind, wf in app.kind_workflows.items()}}
+           if app.kind_workflows else {}),
         "kinds": list(app.kinds),
         **app.capabilities_extra(),
     }

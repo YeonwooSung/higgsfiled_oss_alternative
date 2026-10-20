@@ -21,14 +21,14 @@ from ..models import Asset, ProjectRevision
 from ..models import Session as SessionRow
 from .config import OUTPUT_SIZES, SketchPoint
 from .jobs import build_path_cfg
-from .scene_load import load_scene_info, scene_info_from_meta
+from .scene_load import load_estimate_extras, lowres_depth_asset, scene_info_from_meta
 
 router = APIRouter()
 
 COMPILE_BUDGET_S = 2.0
 HOLE_RESERVE_S = 0.5  # UNMEASURED assumption (not profiled); time the 160x90 estimate is assumed to need
 HOLE_W, HOLE_H, HOLE_FRAMES = 160, 90, 6
-HOLE_DEPTH_MAX_SIDE = 320
+_clock = time.monotonic  # module-level so tests can simulate a slow depth load
 
 
 class Parameters(BaseModel):
@@ -72,7 +72,7 @@ def _hole_estimate(extras, compiled, out_w: int, out_h: int) -> float:
 @router.post("/projects/{project_id}/camera-path/compile")
 def compile_camera_path(project_id: str, body: CompileRequest, request: Request,
                         db: DbSession = Depends(get_db), session: SessionRow = Depends(current_session)):
-    t0 = time.monotonic()
+    t0 = _clock()
     project = owned_project(project_id, db, session)
     if project.app_slug != "camera-sketch":
         raise ApiError(422, "invalid_app", "This endpoint is only for Camera Sketch projects.")
@@ -98,11 +98,16 @@ def compile_camera_path(project_id: str, body: CompileRequest, request: Request,
     compiled = compile_path(path_cfg, scene, out_w, out_h)
     hole, deferred = None, False
     if compiled.status != "invalid" and compiled.samples:
-        if COMPILE_BUDGET_S - (time.monotonic() - t0) > HOLE_RESERVE_S:
-            _, extras = load_scene_info(request.app.state.storage, scene_asset, depth_asset, cfg,
-                                        max_side=HOLE_DEPTH_MAX_SIDE)
-            hole = _hole_estimate(extras, compiled, out_w, out_h)
-            compiled.diagnostics["hole_ratio"] = hole
+        # The budget is checked before AND after loading the (low-res, cached) depth: a slow load defers the
+        # estimate instead of overrunning the compile budget.
+        if COMPILE_BUDGET_S - (_clock() - t0) > HOLE_RESERVE_S:
+            extras = load_estimate_extras(request.app.state.storage, scene, depth_asset,
+                                          lowres_depth_asset(db, depth_asset), scene_asset, cfg)
+            if COMPILE_BUDGET_S - (_clock() - t0) > HOLE_RESERVE_S:
+                hole = _hole_estimate(extras, compiled, out_w, out_h)
+                compiled.diagnostics["hole_ratio"] = hole
+            else:
+                deferred = True
         else:
             deferred = True
     return {"path": compiled.to_dict(), "control_points": compiled.control_points,

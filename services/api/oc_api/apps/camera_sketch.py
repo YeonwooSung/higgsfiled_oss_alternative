@@ -27,6 +27,10 @@ class CameraSketchApp:
     export_kind = "camera.export"
     export_source_key = "source_job_id"
     workflows: tuple[str, ...] = ("camera_depth_v1", "camera_cinematic_v1")  # Comfy-side; guide/compare run on the worker
+    # Profile availability per kind: analyze needs only the depth workflow; cinematic needs its workflow and
+    # calibrated control presets (profiles.CONTROL_PRESET_WORKFLOWS).
+    kind_workflows: dict[str, tuple[str, ...]] = {"camera.analyze": ("camera_depth_v1",),
+                                                  "camera.cinematic": ("camera_cinematic_v1",)}
 
     def default_config(self, profile: str) -> BaseModel:
         return default_config(profile)

@@ -2,7 +2,9 @@
 fixed-range depth-guide MP4 and the 1-bit validity PNGs frame by frame (never 120 frames in memory).
 
 - Geometry MP4: rendered RGB with holes <= 4 px inpainted (``fill_small_holes``); larger holes stay as
-  rendered (black), never stretched. This is the deterministic "Path render".
+  rendered: under the renderer's edge-layer rule a pixel covered only by a stretched (or flipped) edge face
+  keeps that face's texture colour but is marked invalid, and a pixel no face covers is black and invalid.
+  Nothing is filled beyond 4 px. This is the deterministic "Path render".
 - Validity: the post-fill valid mask (small inpainted holes count as valid; large holes are invalid).
 - Depth guide: one ``DepthGuideRange`` for the whole shot (union of the first and last frame's 1st/99th
   percentile valid z), invalid pixels nearest-valid filled.
@@ -44,6 +46,7 @@ from .camera_common import (
     GEOMETRY_LABEL_KO,
     api_errors,
     compiled_from_dict,
+    frame_checkpoint,
     json_asset,
     output_shape,
     ready_asset,
@@ -134,8 +137,7 @@ def camera_guide(run: JobRun) -> tuple[list[str], dict]:
                 zipfile.ZipFile(val_zip, "w", zipfile.ZIP_DEFLATED) as zf:
             frames = render_sequence(mesh, None, compiled, out_w, out_h, texture=extras.scene_rgb)
             for i, raw in enumerate(frames):
-                if i % 5 == 0:
-                    run.heartbeat()
+                frame_checkpoint(run, i, 5)  # heartbeat + cancel check (a cancel aborts the writers)
                 fr, _ = fill_small_holes(raw, SMALL_HOLE_PX)
                 g, _ = depth_guide(fr, rng)
                 geo_w.write(fr.rgb)

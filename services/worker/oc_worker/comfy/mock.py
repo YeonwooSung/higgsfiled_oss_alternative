@@ -8,6 +8,7 @@ labels every result of this profile as "Mock".
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import os
 import shutil
@@ -143,12 +144,27 @@ def mock_cinematic_frame(guide: np.ndarray) -> np.ndarray:
     return np.clip(np.rint(f), 0, 255).astype(np.uint8)
 
 
-def _guide_frames(src: str) -> list[np.ndarray]:
+def _guide_frames(src: str) -> Iterator[np.ndarray]:
+    """Stream the guide frames (a directory of images or a video); never the whole guide in memory."""
     p = Path(src)
     if p.is_dir():
         files = sorted(x for x in p.iterdir() if x.suffix.lower() in (".png", ".jpg", ".jpeg"))
-        return [np.asarray(Image.open(x).convert("RGB")) for x in files]
-    return list(decode_frames(p))
+        return (np.asarray(Image.open(x).convert("RGB")) for x in files)
+    return decode_frames(p)
+
+
+def _held_frames(frames: Iterator[np.ndarray], n: int) -> Iterator[np.ndarray]:
+    """Exactly ``n`` frames: the stream, then its last frame held (only that one frame is kept)."""
+    last = None
+    i = 0
+    for f in itertools.islice(frames, n):
+        last = f
+        i += 1
+        yield f
+    if last is None:
+        raise ProviderRejected("guide_rgb has no frames")
+    for _ in range(n - i):
+        yield last
 
 
 class MockRunner:
@@ -221,10 +237,7 @@ class MockRunner:
             return ["depth_0.png", "depth_0.json"]
         if workflow == "camera_cinematic_v1":
             w, h, n = b["width"], b["height"], b["frames"]
-            src = _guide_frames(b["guide_rgb"])
-            if not src:
-                raise ProviderRejected("guide_rgb has no frames")
-            frames = (mock_cinematic_frame(cover_fit(src[min(i, len(src) - 1)], w, h)) for i in range(n))
+            frames = (mock_cinematic_frame(cover_fit(f, w, h)) for f in _held_frames(_guide_frames(b["guide_rgb"]), n))
             encode_mp4(frames, d / "video_0.mp4", w, h, fps=24)
             (d / "video_0.json").write_text(json.dumps({
                 "mock": True, "frames": n, "width": w, "height": h, "label": "Mock",

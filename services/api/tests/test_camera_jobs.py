@@ -274,3 +274,52 @@ def test_project_keeps_render_jobs_after_many_exports(app, session_client, ready
     jobs = session_client.get(f"/api/v1/projects/{p['id']}").json()["recent_jobs"]
     assert gid in {j["id"] for j in jobs}
     assert [j["created_at"] for j in jobs] == sorted((j["created_at"] for j in jobs), reverse=True)
+
+
+@pytest.fixture
+def open_weights(app, session_client, ready, tmp_path):
+    """open_weights_v1 with both camera workflows exported but uncalibrated control presets."""
+    import json
+
+    from open_creative.comfy.bindings import REQUIRED_BINDINGS, REQUIRED_OUTPUTS
+
+    wdir = tmp_path / "workflows"
+    d = wdir / "camera-sketch"
+    d.mkdir(parents=True)
+    for name in ("camera_depth_v1", "camera_cinematic_v1"):
+        graph = {"1": {"inputs": {b: None for b in REQUIRED_BINDINGS[name]}}, "9": {"inputs": {}}}
+        manifest = {"workflow": name, "graph": f"{name}.api.json",
+                    "bindings": {b: {"node_id": "1", "input": b, "type": t} for b, t in REQUIRED_BINDINGS[name].items()},
+                    "outputs": {o: {"node_id": "9"} for o in REQUIRED_OUTPUTS[name]}}
+        (d / f"{name}.api.json").write_text(json.dumps(graph))
+        (d / f"{name}.bindings.json").write_text(json.dumps(manifest))
+    app.state.settings.workflows_dir = wdir
+    app.state.settings.comfy_base_url = "http://comfy.invalid"
+    p, rev, *_ = ready
+    proj = configure(session_client, p, model_profile="open_weights_v1")
+    return p, proj["current_revision"]
+
+
+def test_open_weights_availability_is_per_kind(app, session_client, open_weights):
+    p, rev = open_weights
+    est = session_client.post(f"/api/v1/projects/{p['id']}/estimates",
+                              json={"kind": "camera.analyze", "revision": rev}).json()
+    assert est["profile"]["available"] is True, est["profile"]
+    assert post(session_client, p, "camera.analyze", revision=rev).status_code == 202
+
+    gid = make_guide(app, p, rev)
+    est = session_client.post(f"/api/v1/projects/{p['id']}/estimates",
+                              json={"kind": "camera.cinematic", "revision": rev,
+                                    "options": {"guide_job_id": gid}}).json()
+    assert est["profile"] == {"id": "open_weights_v1", "label": "Open weights", "is_mock": False,
+                              "available": False, "reason": "control presets not calibrated"}
+    r = post(session_client, p, "camera.cinematic", {"guide_job_id": gid}, rev)
+    assert r.status_code == 503 and err(r)["code"] == "profile_unavailable"
+    assert "control presets not calibrated" in err(r)["message"]
+
+    caps = session_client.get("/api/v1/capabilities?app_slug=camera-sketch").json()
+    ow = {k: next(x for x in v if x["id"] == "open_weights_v1") for k, v in caps["kind_profiles"].items()}
+    assert ow["camera.analyze"]["available"] is True
+    assert ow["camera.cinematic"]["reason"] == "control presets not calibrated"
+    assert next(x for x in caps["profiles"] if x["id"] == "open_weights_v1")["available"] is False
+    assert "kind_profiles" not in session_client.get("/api/v1/capabilities?app_slug=product-lock").json()

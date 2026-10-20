@@ -78,6 +78,7 @@ export type AssetRole =
   | "scene"
   | "depth"
   | "depth_preview"
+  | "depth_lowres"
   | "path_artifact"
   | "geometry_video"
   | "guide_depth_video"
@@ -191,6 +192,8 @@ export interface CameraCapabilities {
   app_slug: "camera-sketch";
   default_profile: string;
   profiles: ProfileStatus[];
+  /** Per-kind availability: only the workflows a kind needs (camera.analyze does not need calibrated presets). */
+  kind_profiles?: Partial<Record<JobKind, ProfileStatus[]>>;
   kinds: JobKind[];
   presets: CameraPreset[];
   limits: {
@@ -400,6 +403,8 @@ export interface DepthGuideRangeInfo {
 export interface CameraAnalyzeResult {
   depth_asset_id: Uuid;
   depth_preview_asset_id: Uuid;
+  /** Low-res depth copy (long side <= 320) for the compile hole estimate; null for older analyze jobs. */
+  depth_lowres_asset_id: Uuid | null;
   convention: { kind: string; scale: number; offset: number; eps: number };
   intrinsics_suggestion: {
     focal_length_mm_equiv: number;

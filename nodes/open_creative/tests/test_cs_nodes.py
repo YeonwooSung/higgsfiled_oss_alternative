@@ -213,3 +213,14 @@ def test_render_guides_prealloc_and_frame_cap():
     p["samples"] = p["samples"] * 16  # 128 > 121
     with pytest.raises(ValueError, match="121"):
         CSRenderGuides().run(img, depth, scene, json.dumps(p), 4)
+
+
+def test_camera_depth_alone_does_not_need_calibrated_presets(tmp_path):
+    """camera.analyze (camera_depth_v1 only) is available while the cinematic presets are uncalibrated."""
+    write_camera(tmp_path)
+    st = profile_status(OPEN_WEIGHTS_PROFILE, tmp_path, "http://x", workflows=("camera_depth_v1",))
+    assert st.available, st.reason
+    st = profile_status(OPEN_WEIGHTS_PROFILE, tmp_path, "http://x", workflows=("camera_cinematic_v1",))
+    assert not st.available and st.reason == "control presets not calibrated"
+    st = profile_status(OPEN_WEIGHTS_PROFILE, tmp_path, None, workflows=("camera_depth_v1",))
+    assert not st.available and st.reason == "COMFY_BASE_URL is not configured"

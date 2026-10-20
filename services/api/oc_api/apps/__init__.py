@@ -34,6 +34,7 @@ class AppModule(Protocol):
     export_kind: str  # internal job kind created by POST /projects/{id}/exports
     export_source_key: str  # options key holding the source job id
     workflows: tuple[str, ...]  # bindings GPU profiles need for this app
+    kind_workflows: dict[str, tuple[str, ...]]  # kind -> the workflows that kind needs (absent: ``workflows``)
 
     def default_config(self, profile: str) -> BaseModel: ...
 
@@ -46,6 +47,11 @@ class AppModule(Protocol):
 
 
 APPS: dict[str, AppModule] = {}
+
+
+def kind_workflows(app: AppModule, kind: str | None) -> tuple[str, ...]:
+    """Workflows a profile must provide for ``kind`` (the app's full set when the kind is unknown / unmapped)."""
+    return app.kind_workflows.get(kind, app.workflows) if kind else app.workflows
 
 
 def get_app(slug: str) -> AppModule:

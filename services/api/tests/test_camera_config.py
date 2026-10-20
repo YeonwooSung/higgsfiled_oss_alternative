@@ -1,3 +1,5 @@
+import uuid
+
 import numpy as np
 import pytest
 from pydantic import ValidationError
@@ -5,11 +7,13 @@ from pydantic import ValidationError
 from helpers import configure, put_asset
 from oc_api.apps import get_app
 from oc_api.camera_sketch.config import CameraSketchConfig, default_config
-from open_creative.camera_sketch.scene import encode_depth_png16
+from oc_api.models import Asset
+from open_creative.camera_sketch.scene import downsample_depth, encode_depth_png16
 from open_creative.media.image import to_png_bytes
 
 
-def make_scene_and_depth(app, project_id, w=160, h=90, source_asset_id=None, near_left=True):
+def make_scene_and_depth(app, project_id, w=160, h=90, source_asset_id=None, near_left=True, lowres=False):
+    """Scene + depth assets; ``lowres`` also stores the ``depth_lowres`` copy the analyze job writes."""
     rgb = np.full((h, w, 3), 128, np.uint8)
     scene = put_asset(app, project_id, "scene", to_png_bytes(rgb), "image/png", w, h)
     d = np.tile(np.linspace(1.0, 0.2, w, dtype=np.float32), (h, 1))
@@ -18,6 +22,15 @@ def make_scene_and_depth(app, project_id, w=160, h=90, source_asset_id=None, nea
             "convention": {"kind": "inverse_relative", "scale": 1.0, "offset": 0.0, "eps": 1e-6},
             "min": rng["min"], "max": rng["max"], "model": "depth-anything-v2-small"}
     depth = put_asset(app, project_id, "depth", png, "image/png", w, h, meta=meta)
+    if lowres:
+        low = downsample_depth(d)
+        lpng, lrng = encode_depth_png16(low)
+        lid = put_asset(app, project_id, "depth_lowres", lpng, "image/png", low.shape[1], low.shape[0],
+                        meta={**meta, "min": lrng["min"], "max": lrng["max"], "source_depth_asset_id": depth})
+        with app.state.db() as db:
+            row = db.get(Asset, uuid.UUID(depth))
+            row.meta_json = {**meta, "lowres_asset_id": lid}
+            db.commit()
     return scene, depth
 
 

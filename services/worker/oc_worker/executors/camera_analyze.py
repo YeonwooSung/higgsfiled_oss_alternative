@@ -1,7 +1,9 @@
 """camera.analyze: scene image -> relative inverse depth (Depth Anything V2 Small; Mock on mock_v1).
 
-Stores the provider's 16-bit PNG as-is (``depth``) plus an 8-bit preview (near = bright). The project config
-is never patched here: the client applies ``depth_asset_id`` with a PATCH (lineage-checked by the API).
+Stores the provider's 16-bit PNG as-is (``depth``), a low-resolution copy (``depth_lowres``: area downsample to
+``LOWRES_DEPTH_MAX_SIDE`` long side, its own min/max, same meta contract plus ``source_depth_asset_id``; the depth
+asset's meta records it as ``lowres_asset_id``) for the compile endpoint's hole estimate, and an 8-bit preview
+(near = bright). The project config is never patched here: the client applies ``depth_asset_id`` with a PATCH (lineage-checked by the API).
 """
 
 from __future__ import annotations
@@ -12,7 +14,13 @@ import numpy as np
 from PIL import Image
 
 from open_creative.camera_sketch.camera import intrinsics
-from open_creative.camera_sketch.scene import DAV2_SMALL, decode_depth_png16
+from open_creative.camera_sketch.scene import (
+    DAV2_SMALL,
+    LOWRES_DEPTH_MAX_SIDE,
+    decode_depth_png16,
+    downsample_depth,
+    encode_depth_png16,
+)
 
 from ..stages import JobRun, StageFailed
 from .camera_common import ready_asset
@@ -56,17 +64,28 @@ def camera_analyze(run: JobRun) -> tuple[list[str], dict]:
         if provider.get("mock"):
             meta.update(mock=True, mock_source=provider.get("source"), provider_model=provider.get("model"))
         depth_id = run.store_asset("depth", png, "image/png", meta=meta, source_asset_id=scene.id)
+        low_png, low_rng = encode_depth_png16(downsample_depth(d, LOWRES_DEPTH_MAX_SIDE))
+        low = run.work_dir / "depth_lowres.png"
+        low.write_bytes(low_png)
+        low_id = run.store_asset("depth_lowres", low, "image/png", source_asset_id=depth_id,
+                                 meta={**meta, "min": low_rng["min"], "max": low_rng["max"],
+                                       "source_depth_asset_id": depth_id, "downsample": "area",
+                                       "max_side": LOWRES_DEPTH_MAX_SIDE})
+        depth_row = run.asset(depth_id)
+        depth_row.meta_json = {**meta, "lowres_asset_id": low_id}
+        run.db.commit()
         prev = run.work_dir / "depth_preview.png"
         Image.fromarray(depth_preview(d, meta["min"], meta["max"]), "L").save(prev)
         prev_id = run.store_asset("depth_preview", prev, "image/png", source_asset_id=depth_id,
                                   meta={"mapping": "inverse_depth_linear_near_bright", **(
                                       {"mock": True} if meta.get("mock") else {})})
-        return [depth_id, prev_id]
+        return [depth_id, prev_id, low_id]
 
     outputs = run.ensure_stage("depth", produce)
     K = intrinsics(SUGGESTED_FOCAL_MM, scene.width, scene.height, SENSOR_WIDTH_MM)
     return outputs, {
         "depth_asset_id": outputs[0], "depth_preview_asset_id": outputs[1],
+        "depth_lowres_asset_id": outputs[2] if len(outputs) > 2 else None,
         "convention": run.asset(outputs[0]).meta_json["convention"],
         "intrinsics_suggestion": {"focal_length_mm_equiv": SUGGESTED_FOCAL_MM,
                                   "sensor_width_mm_assumed": SENSOR_WIDTH_MM, "width": scene.width,

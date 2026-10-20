@@ -156,7 +156,8 @@ export function RenderBar({ cam, onDone, compact }: { cam: CameraPathState; onDo
   const gate = useRenderGate();
   const hash = useGeometryHash(config);
   const caps = useQuery({ queryKey: ["caps"], queryFn: () => api.cameraCapabilities(), staleTime: 60_000 });
-  const profile = caps.data?.profiles.find((p) => p.id === config?.model_profile);
+  // Cinematic availability is per kind (the app-level status also covers camera.analyze's workflow).
+  const profile = (caps.data?.kind_profiles?.["camera.cinematic"] ?? caps.data?.profiles)?.find((p) => p.id === config?.model_profile);
   const [confirm, setConfirm] = useState<string[] | null>(null);
   const [estimate, setEstimate] = useState<{ estimate: Estimate; guideId: string; warnings: string[]; holeMax: number | null } | null>(null);
   const [pending, setPending] = useState<"guide" | "cinematic" | null>(null);

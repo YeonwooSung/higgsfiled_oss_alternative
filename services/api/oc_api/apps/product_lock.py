@@ -29,6 +29,7 @@ class ProductLockApp:
     export_kind = "export"
     export_source_key = "render_job_id"
     workflows = ("product_segment_v1", "product_background_image_v1", "product_background_video_v1")
+    kind_workflows: dict[str, tuple[str, ...]] = {}  # every GPU kind is gated on the full set (unchanged)
 
     def default_config(self, profile: str) -> BaseModel:
         return default_config(profile)
