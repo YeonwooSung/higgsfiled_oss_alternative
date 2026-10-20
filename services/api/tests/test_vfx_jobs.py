@@ -1,0 +1,328 @@
+import uuid
+
+import pytest
+from sqlalchemy import select
+
+from helpers import configure, set_job_state
+from oc_api.models import Job, JobCost, Project, ProjectRevision
+from oc_api.pocket_vfx import jobs as vfx_jobs
+from oc_api.pocket_vfx.config import PocketVfxConfig
+from open_creative.pocket_vfx.keys import model_rev, track_key
+from test_vfx_config import CLIP_SHA, codes, make_ready, put_clip, validate, vproject  # noqa: F401
+
+
+@pytest.fixture
+def ready(app, session_client, vproject):  # noqa: F811
+    proj, clip, work = make_ready(app, session_client, vproject)
+    return vproject, proj["current_revision"]
+
+
+def post(client, project, kind, options=None, revision=1):
+    return client.post(f"/api/v1/projects/{project['id']}/jobs",
+                       json={"kind": kind, "revision": revision, "options": options or {}})
+
+
+def err(r):
+    return r.json()["error"]
+
+
+def job_row(app, job_id):
+    with app.state.db() as db:
+        j = db.get(Job, uuid.UUID(job_id))
+        c = db.scalar(select(JobCost).where(JobCost.job_id == j.id))
+        db.expunge_all()
+        return j, c
+
+
+def make_track(app, project, revision, state="succeeded", key=None, result=None):
+    """A vfx.track job for ``revision`` whose result carries the key the worker would compute."""
+    with app.state.db() as db:
+        p = db.get(Project, uuid.UUID(project["id"]))
+        cfg = db.get(ProjectRevision, (p.id, revision)).config_json
+        k = key or track_key(cfg, CLIP_SHA, model_rev(cfg["model_profile"]))
+        j = Job(project_id=p.id, session_id=p.session_id, input_revision=revision, kind="vfx.track",
+                options_json={}, model_profile=cfg["model_profile"], state=state,
+                result_json={"track_key": k, "invalid_intervals": [], **(result or {})})
+        db.add(j)
+        db.commit()
+        return str(j.id)
+
+
+def stages(app, job_id):
+    from oc_api.models import JobEvent
+    with app.state.db() as db:
+        ev = db.scalar(select(JobEvent).where(JobEvent.job_id == uuid.UUID(job_id)).order_by(JobEvent.sequence))
+        return ev.payload_json["stages"]
+
+
+# --- vfx.analyze ---------------------------------------------------------------------------------------------
+
+def test_analyze_cpu_with_stages(app, session_client, ready):
+    p, rev = ready
+    r = post(session_client, p, "vfx.analyze", revision=rev)
+    assert r.status_code == 202, r.text
+    j, c = job_row(app, r.json()["id"])
+    assert j.uses_gpu is False and c.reserved_units == 0 and j.options_json == {}
+    assert stages(app, r.json()["id"]) == ["normalize", "proxy", "filmstrip", "audio", "motion"]
+
+
+def test_analyze_requires_clip_and_rejects_options(app, session_client, vproject):  # noqa: F811
+    r = post(session_client, vproject, "vfx.analyze")
+    assert r.status_code == 422 and err(r)["code"] == "video_required"
+    clip = put_clip(app, vproject["id"])
+    proj = configure(session_client, vproject, video_asset_id=clip)
+    rev = proj["current_revision"]
+    assert post(session_client, vproject, "vfx.analyze", revision=rev).status_code == 202  # no analysis needed
+    r = post(session_client, vproject, "vfx.analyze", {"trim": {}}, rev)
+    assert r.status_code == 422 and err(r)["code"] == "invalid_options"
+
+
+def test_analyze_trim_past_clip_end(app, session_client, vproject):  # noqa: F811
+    clip = put_clip(app, vproject["id"], duration_ms=5500)
+    proj = configure(session_client, vproject, video_asset_id=clip, trim__source_start_ms=1000)
+    r = post(session_client, vproject, "vfx.analyze", revision=proj["current_revision"])
+    assert r.status_code == 422 and err(r)["code"] == "trim_range" and err(r)["field"] == "config.trim.duration_ms"
+
+
+# --- vfx.track -----------------------------------------------------------------------------------------------
+
+def test_track_gpu_with_masks_stage(app, session_client, ready):
+    p, rev = ready
+    r = post(session_client, p, "vfx.track", revision=rev)
+    assert r.status_code == 202, r.text
+    j, c = job_row(app, r.json()["id"])
+    assert j.uses_gpu is True and c.reserved_units == 120
+    assert stages(app, r.json()["id"]) == ["track", "masks"]
+
+
+def test_masks_stage_only_when_needed():
+    cfg = PocketVfxConfig()
+    no_mask = {"input_requirements": {"subject_mask": False}}
+    with_mask = {"input_requirements": {"subject_mask": True}}
+    assert vfx_jobs.masks_needed(cfg, with_mask) is True
+    assert vfx_jobs.masks_needed(cfg, no_mask) is True  # behind_subject needs the subject mask
+    cfg.effect.layer_order = "split_glow"
+    assert vfx_jobs.masks_needed(cfg, no_mask) is True
+    cfg.effect.layer_order = "in_front"
+    assert vfx_jobs.masks_needed(cfg, no_mask) is False
+    assert vfx_jobs.masks_needed(cfg, with_mask) is True
+
+
+def test_track_without_masks_is_cpu(monkeypatch, app, session_client, ready):
+    p, _ = ready
+    proj = configure(session_client, p, effect__layer_order="in_front")
+    monkeypatch.setattr(vfx_jobs, "masks_needed", lambda cfg, preset: False)
+    r = post(session_client, p, "vfx.track", revision=proj["current_revision"])
+    assert r.status_code == 202, r.text
+    j, c = job_row(app, r.json()["id"])
+    assert j.uses_gpu is False and c.reserved_units == 0 and stages(app, r.json()["id"]) == ["track"]
+
+
+def test_track_requires_analysis(app, session_client, vproject):  # noqa: F811
+    clip = put_clip(app, vproject["id"])
+    proj = configure(session_client, vproject, video_asset_id=clip)
+    r = post(session_client, vproject, "vfx.track", revision=proj["current_revision"])
+    assert r.status_code == 422 and err(r)["code"] == "analysis_required"
+
+
+def test_track_rejects_anchor_outside_clip(app, session_client, ready):
+    p, _ = ready
+    proj = configure(session_client, p, anchor__frame=130)
+    r = post(session_client, p, "vfx.track", revision=proj["current_revision"])
+    assert r.status_code == 422 and err(r)["code"] == "anchor_range"
+
+
+# --- vfx.generate_plate --------------------------------------------------------------------------------------
+
+def test_generate_plate_gpu_and_seed(app, session_client, ready):
+    p, rev = ready
+    r = post(session_client, p, "vfx.generate_plate", revision=rev)
+    assert r.status_code == 202, r.text
+    j, c = job_row(app, r.json()["id"])
+    assert j.uses_gpu is True and c.reserved_units == 600 and j.options_json == {"seed": 12345}
+    assert stages(app, r.json()["id"]) == ["plate", "matte"]
+    set_job_state(app, r.json()["id"], "succeeded")
+    r = post(session_client, p, "vfx.generate_plate", {"seed": 7}, rev)
+    assert r.status_code == 202 and job_row(app, r.json()["id"])[0].options_json == {"seed": 7}
+
+
+@pytest.mark.parametrize("seed", [-1, 2**31, "x"])
+def test_generate_plate_bad_seed(session_client, ready, seed):
+    p, rev = ready
+    r = post(session_client, p, "vfx.generate_plate", {"seed": seed}, rev)
+    assert r.status_code == 422 and err(r)["code"] == "invalid_options" and err(r)["field"] == "options.seed"
+
+
+def test_generate_plate_blocked_by_validation(app, session_client, ready):
+    p, _ = ready
+    proj = configure(session_client, p, effect__peak_ms=1200)
+    r = post(session_client, p, "vfx.generate_plate", revision=proj["current_revision"])
+    assert r.status_code == 422 and err(r)["code"] == "validation_failed"
+
+
+def test_estimate_generate_plate_price_unknown(session_client, vproject):  # noqa: F811
+    r = session_client.post(f"/api/v1/projects/{vproject['id']}/estimates",
+                            json={"kind": "vfx.generate_plate", "revision": 1})
+    assert r.status_code == 200, r.text
+    e = r.json()
+    assert e["price_status"] == "unknown" and e["price"] is None
+    assert e["reserved_units"] == 600 and e["unit"] == "gpu_seconds" and e["uses_gpu"] is True
+    assert e["profile"]["id"] == "mock_v1" and e["profile"]["available"] is True
+
+
+def test_estimate_render_without_options(session_client, vproject):  # noqa: F811
+    r = session_client.post(f"/api/v1/projects/{vproject['id']}/estimates",
+                            json={"kind": "vfx.render", "revision": 1})
+    assert r.status_code == 200, r.text
+    assert r.json()["stages"] == ["layers", "composite", "encode"] and r.json()["reserved_units"] == 0
+
+
+# --- vfx.render ----------------------------------------------------------------------------------------------
+
+def render(client, p, rev, track_job_id=None, profile="quick"):
+    return post(client, p, "vfx.render", {"track_job_id": track_job_id, "render_profile": profile}, rev)
+
+
+def test_render_with_fresh_track(app, session_client, ready):
+    p, rev = ready
+    tid = make_track(app, p, rev)
+    r = render(session_client, p, rev, tid)
+    assert r.status_code == 202, r.text
+    j, c = job_row(app, r.json()["id"])
+    assert j.uses_gpu is False and c.reserved_units == 0
+    assert j.options_json == {"track_job_id": tid, "render_profile": "quick"}
+    assert stages(app, r.json()["id"]) == ["layers", "composite", "encode"]
+
+
+def test_render_follow_requires_track(app, session_client, ready):
+    p, rev = ready
+    r = render(session_client, p, rev)
+    assert r.status_code == 422 and err(r)["code"] == "track_required" and err(r)["field"] == "options.track_job_id"
+    proj = configure(session_client, p, anchor__follow=False)
+    assert render(session_client, p, proj["current_revision"]).status_code == 202
+
+
+def test_render_track_from_older_anchor_is_stale(app, session_client, ready):
+    p, rev = ready
+    tid = make_track(app, p, rev)
+    proj = configure(session_client, p, anchor__x=0.3)
+    r = render(session_client, p, proj["current_revision"], tid)
+    assert r.status_code == 422 and err(r)["code"] == "track_stale" and err(r)["field"] == "options.track_job_id"
+
+
+@pytest.mark.parametrize("path,value", [
+    ("trim__duration_ms", 4000),
+    ("corrections", [{"frame": 60, "x": 0.4, "y": 0.4}]),
+    ("subject_prompts", [{"frame": 43, "points": [{"x": 0.5, "y": 0.4, "label": 1}]}]),
+])
+def test_render_track_stale_on_track_inputs(app, session_client, ready, path, value):
+    p, rev = ready
+    tid = make_track(app, p, rev)
+    if path.startswith("trim"):
+        cfg = session_client.get(f"/api/v1/projects/{p['id']}").json()["config"]
+        from test_vfx_config import put_work
+        work = put_work(app, p["id"], cfg["video_asset_id"], trim={"source_start_ms": 0, "duration_ms": 4000})
+        proj = configure(session_client, p, trim__duration_ms=4000, work_asset_id=work, anchor__frame=40)
+    else:
+        proj = configure(session_client, p, **{path: value})
+    r = render(session_client, p, proj["current_revision"], tid)
+    assert r.status_code == 422 and err(r)["code"] == "track_stale"
+
+
+def test_render_only_intensity_changed_reuses_track(app, session_client, ready):
+    p, rev = ready
+    tid = make_track(app, p, rev)
+    proj = configure(session_client, p, effect__intensity=0.3, effect__scale=1.5, effect__peak_ms=2000,
+                     plate__seed=99)
+    r = render(session_client, p, proj["current_revision"], tid)
+    assert r.status_code == 202, r.text
+
+
+def test_render_track_job_checks(app, session_client, ready):
+    p, rev = ready
+    other = session_client.post("/api/v1/projects", json={"app_slug": "pocket-vfx", "title": "o"}).json()
+    foreign = make_track(app, other, 1)
+    r = render(session_client, p, rev, foreign)
+    assert r.status_code == 422 and err(r)["code"] == "track_not_found"
+    r = render(session_client, p, rev, str(uuid.uuid4()))
+    assert r.status_code == 422 and err(r)["code"] == "track_not_found"
+    running = make_track(app, p, rev, state="running")
+    r = render(session_client, p, rev, running)
+    assert r.status_code == 422 and err(r)["code"] == "track_not_finished"
+    r = render(session_client, p, rev, make_track(app, p, rev), profile="best")
+    assert r.status_code == 422 and err(r)["code"] == "invalid_options"
+
+
+def test_render_validation_failed(app, session_client, ready):
+    p, _ = ready
+    proj = configure(session_client, p, effect__peak_ms=1200, anchor__follow=False)
+    r = render(session_client, p, proj["current_revision"])
+    e = err(r)
+    assert r.status_code == 422 and e["code"] == "validation_failed"
+    assert [x["code"] for x in e["details"]["blocking_errors"]] == ["timing_order"]
+
+
+def test_second_concurrent_render_is_render_busy(app, session_client, ready):
+    p, _ = ready
+    proj = configure(session_client, p, anchor__follow=False)
+    rev = proj["current_revision"]
+    assert render(session_client, p, rev).status_code == 202
+    r = render(session_client, p, rev)
+    assert r.status_code == 429 and err(r)["code"] == "render_busy"
+
+
+def test_render_blink_without_clean_plate(app, session_client, ready):
+    p, _ = ready
+    proj = configure(session_client, p, effect__preset_id="blink_out_v1", anchor__follow=False)
+    r = render(session_client, p, proj["current_revision"])
+    assert r.status_code == 422 and err(r)["code"] == "validation_failed"
+    assert [x["code"] for x in err(r)["details"]["blocking_errors"]] == ["clean_plate_required"]
+
+
+# --- track validity at peak in validate ---------------------------------------------------------------------
+
+def test_validate_track_invalid_at_peak(app, session_client, ready):
+    p, rev = ready  # peak_ms 1800 -> frame 43
+    make_track(app, p, rev, result={"invalid_intervals": [[40, 50]]})
+    v = validate(session_client, p, rev)
+    assert codes(v["blocking_errors"]) == ["track_invalid_at_peak"] and v["warnings"] == []
+    proj = configure(session_client, p, anchor__follow=False)
+    make_track(app, p, proj["current_revision"], result={"invalid_intervals": [[40, 50]]})
+    v = validate(session_client, p, proj["current_revision"])
+    assert v["valid"] is True and codes(v["warnings"]) == ["track_invalid_at_peak"]
+    proj = configure(session_client, p, anchor__follow=True, effect__peak_ms=2200)  # frame 53: valid again
+    assert validate(session_client, p, proj["current_revision"])["valid"] is True
+
+
+def test_render_track_invalid_at_peak_blocks_follow(app, session_client, ready):
+    p, rev = ready
+    tid = make_track(app, p, rev, result={"invalid_intervals": [[43, 43]]})
+    r = render(session_client, p, rev, tid)
+    assert r.status_code == 422 and err(r)["code"] == "validation_failed"
+    assert [x["code"] for x in err(r)["details"]["blocking_errors"]] == ["track_invalid_at_peak"]
+
+
+def test_stale_track_is_ignored_by_validate(app, session_client, ready):
+    p, rev = ready
+    make_track(app, p, rev, key="0" * 64, result={"invalid_intervals": [[0, 119]]})
+    assert validate(session_client, p, rev)["valid"] is True
+
+
+# --- exports -------------------------------------------------------------------------------------------------
+
+def test_export_kind_only_via_exports(app, session_client, ready):
+    p, _ = ready
+    proj = configure(session_client, p, anchor__follow=False)
+    rev = proj["current_revision"]
+    r = post(session_client, p, "vfx.export", {"render_job_id": str(uuid.uuid4())}, rev)
+    assert r.status_code == 422 and err(r)["code"] == "invalid_kind"
+    rid = render(session_client, p, rev).json()["id"]
+    set_job_state(app, rid, "succeeded")
+    for fmt in ("mp4", "cover_png", "recipe_zip", "layers_zip"):
+        r = session_client.post(f"/api/v1/projects/{p['id']}/exports", json={"job_id": rid, "format": fmt})
+        assert r.status_code == 202, r.text
+        j, _ = job_row(app, r.json()["id"])
+        assert j.kind == "vfx.export" and j.options_json == {"render_job_id": rid, "format": fmt}
+        assert j.input_revision == rev
+    r = session_client.post(f"/api/v1/projects/{p['id']}/exports", json={"job_id": rid, "format": "path_json"})
+    assert r.status_code == 422 and err(r)["code"] == "invalid_format"

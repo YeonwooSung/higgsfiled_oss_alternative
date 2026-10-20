@@ -28,6 +28,11 @@ GPU_SECONDS_CAP = {
     "camera.guide": 0,
     "camera.cinematic": 600,
     "camera.export": 0,
+    "vfx.analyze": 0,
+    "vfx.track": 120,  # masks stage; a track without masks runs on the CPU and reserves nothing
+    "vfx.generate_plate": 600,
+    "vfx.render": 0,
+    "vfx.export": 0,
 }
 
 
@@ -38,6 +43,8 @@ GPU_SECONDS_CAP = {
 CONTROL_PRESETS: dict[str, float | None] = {"low": None, "medium": None, "high": None}
 CAMERA_WORKFLOWS = ("camera_depth_v1", "camera_cinematic_v1")
 CONTROL_PRESET_WORKFLOWS = ("camera_cinematic_v1",)
+# Pocket VFX Comfy workflows: SAM 2.1 video masks (vfx.track masks stage) and the LTX effect plate.
+VFX_WORKFLOWS = ("vfx_masks_v1", "vfx_plate_v1")
 
 
 @dataclass(frozen=True)
