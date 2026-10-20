@@ -10,7 +10,8 @@ from open_creative.pocket_vfx.timeline import (
 
 def test_frame_index_rule():
     assert frame_index(1800) == 43 and frame_index(5000) == 120
-    assert frame_index(20.84) == 1 and frame_index(20.8333) == 0  # exact half is 20.8333.. ms and frame_index(20.8) == 0 and frame_index(0) == 0
+    assert frame_index(20.84) == 1 and frame_index(20.8333) == 0  # exact half is 20.8333.. ms
+    assert frame_index(20.8) == 0 and frame_index(0) == 0
     assert frame_count(5000) == 120
 
 
@@ -26,7 +27,9 @@ def test_timing_errors():
     assert timing_errors({"start_ms": 2000, "peak_ms": 1000, "end_ms": 3000}, 5000) == [
         {"code": "timing_order", "field": "start_ms"}
     ]
-    assert timing_errors({"start_ms": 0, "peak_ms": 4000, "end_ms": 3000}, 5000)[0]["code"] == "timing_order"
+    assert timing_errors({"start_ms": 0, "peak_ms": 4000, "end_ms": 3000}, 5000) == [
+        {"code": "timing_order", "field": "peak_ms"}
+    ]
     assert timing_errors({"start_ms": 0, "peak_ms": 1000, "end_ms": 5001}, 5000) == [
         {"code": "timing_range", "field": "end_ms"}
     ]
