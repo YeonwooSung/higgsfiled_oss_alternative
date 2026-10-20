@@ -8,6 +8,7 @@ Stages (each stores durable assets; a restarted job resumes after the last finis
   and is composited without occlusion (Ruling R2).
 - ``composite``: streams the work-clip frames (one in flight) through ``composite_frame`` into ``Mp4Writer`` and an
   ``IntegrityAccumulator``; per-frame ROI size/box and changed pixel count (pre-encode, vs the source frame) are kept.
+  An outside-ROI integrity failure fails the job (``roi_integrity``, Ruling R13): no video is stored.
 - ``encode``: final video (audio mux plugs in here, Task 13), output contract probe, ``cover`` PNG of the peak frame
   and the ``roi_qa`` JSON.
 """
@@ -163,10 +164,14 @@ def vfx_render(run: JobRun) -> tuple[list[str], dict]:
                 changed_px.append(int(np.count_nonzero((out != frame).any(axis=2))))
         if len(roi_px) != n:
             raise StageFailed("frame_count_mismatch", f"Composited {len(roi_px)} frames, expected {n}.")
+        integrity = acc.result()
+        if integrity["status"] != "pass":  # Ruling R13: never deliver a render that changed pixels outside the ROI
+            raise StageFailed("roi_integrity", f"The composite changed pixels outside the effect area (max error "
+                              f"{integrity['max_err']}/255 at frame {integrity['worst_frame']}).")
         meta = {"revision": run.job.input_revision, "render_profile": profile, "label": RENDER_PROFILE_LABEL,
                 "plate_source": "procedural", "preset_id": cfg.effect.preset_id,
                 "layer_order": cfg.effect.layer_order, "occlusion": False, "has_audio": False, "mock": False,
-                "integrity": acc.result(),
+                "integrity": integrity,
                 "frame_stats": {"roi_px": roi_px, "roi_bbox": roi_bbox, "changed_px": changed_px}}
         return [run.store_asset("render_video", out_path, "video/mp4", source_asset_id=work.id, meta=meta)]
 

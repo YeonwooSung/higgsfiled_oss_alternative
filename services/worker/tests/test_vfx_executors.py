@@ -7,11 +7,12 @@ import json
 import uuid
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 from oc_api.db import utcnow
-from oc_api.models import Asset, Job, JobStage, Project, ProjectRevision
+from oc_api.models import Asset, Job, JobEvent, JobStage, Project, ProjectRevision
 from oc_api.models import Session as SessionRow
 from oc_api.pocket_vfx.config import PocketVfxConfig, default_config
 from oc_api.pocket_vfx.jobs import analysis_matches, config_track_key
@@ -153,7 +154,10 @@ def test_analyze_stores_work_clip_proxy_filmstrip_and_motion(proj):
     assert proj.json(r["motion_asset_id"])["status"] == "fixed"
     with proj.db_factory() as db:
         stages = {s.stage_name: s.state for s in db.scalars(select(JobStage).where(JobStage.job_id == analyze.id))}
+        visible = {e.stage for e in db.scalars(select(JobEvent).where(JobEvent.job_id == analyze.id,
+                                                                     JobEvent.type == "state"))}
     assert stages == dict.fromkeys(("normalize", "proxy", "filmstrip", "audio", "motion"), "succeeded")
+    assert {"normalize", "proxy", "filmstrip", "audio", "motion"} <= visible  # the visible stage advances
 
 
 def test_analyze_trims_and_extracts_audio(proj):
@@ -255,6 +259,52 @@ def test_occluded_track_hides_effect_and_retrack_reuses_segments(proj):
     for f in (45, 70):  # the effect follows the tracked hand
         x0, y0, x1, y1 = stats["roi_bbox"][f]
         assert x0 < GT[f]["x"] < x1 and y0 < GT[f]["y"] < y1
+
+
+def test_invalid_policy_hide_and_freeze_anchor_resolution():
+    cfg = SimpleNamespace(anchor=SimpleNamespace(x=0.5, y=0.5))
+    valid = {2: (0.25, 0.5), 3: (0.5, 0.25), 6: (0.75, 0.75)}
+    track = {"points": [{"frame": f, "valid": f in valid, "x": valid.get(f, (None,))[0],
+                         "y": valid.get(f, (None, None))[1]} for f in range(8)]}
+    hide = vfx_render_mod._anchors(track, cfg, 100, 200, 8, "hide")
+    assert hide == [None, None, [25, 100], [50, 50], None, None, [75, 150], None]
+    freeze = vfx_render_mod._anchors(track, cfg, 100, 200, 8, "freeze")
+    # frames before the first valid point stay hidden; later gaps hold the last valid position
+    assert freeze == [None, None, [25, 100], [50, 50], [50, 50], [50, 50], [75, 150], [75, 150]]
+    assert vfx_render_mod._anchors(None, cfg, 100, 200, 3, "hide") == [[50, 100]] * 3  # follow=false
+
+
+def test_render_fails_early_without_required_masks_or_plate(proj):
+    proj.prepare("stomp_landscape.mp4")
+    proj.revise(anchor__follow=False)
+    job = proj.run("vfx.render", {"track_job_id": None, "render_profile": "generated"}, expect="failed")
+    assert job.error_code == "plate_required"
+    proj.revise(effect={**proj.cfg["effect"], "preset_id": "blink_out_v1"})
+    job = proj.run("vfx.render", {"track_job_id": None, "render_profile": "quick"}, expect="failed")
+    assert job.error_code == "mask_required"
+    assert not job.output_asset_ids
+
+
+def test_outside_roi_change_fails_the_render(proj, monkeypatch):
+    proj.prepare("stomp_landscape.mp4")
+    proj.revise(anchor__follow=False)
+    real, calls = vfx_render_mod.composite_frame, {"n": 0}
+
+    def leaky(inp, order):
+        out, roi = real(inp, order)
+        calls["n"] += 1
+        if calls["n"] == 6:  # one pixel outside the ROI moves by 3/255
+            assert not roi[0, 0]
+            out = out.copy()
+            out[0, 0, 0] = out[0, 0, 0] + 3 if out[0, 0, 0] < 250 else out[0, 0, 0] - 3
+        return out, roi
+
+    monkeypatch.setattr(vfx_render_mod, "composite_frame", leaky)
+    job = proj.run("vfx.render", {"track_job_id": None, "render_profile": "quick"}, expect="failed")
+    assert job.error_code == "roi_integrity" and "frame 5" in job.error_message
+    with proj.db_factory() as db:
+        roles = set(db.scalars(select(Asset.role).where(Asset.job_id == job.id)))
+    assert roles == {"render_layers"}  # no video delivered
 
 
 def test_follow_render_needs_a_fresh_track(proj):

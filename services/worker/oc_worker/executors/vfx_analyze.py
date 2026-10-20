@@ -61,6 +61,7 @@ def vfx_analyze(run: JobRun) -> tuple[list[str], dict]:
         raise StageFailed("frame_count_mismatch", f"The work clip has {work.frame_count} frames, expected {n}.")
 
     def proxy(stage):
+        run.transition("running", "proxy")
         out = run.work_dir / "work_proxy.mp4"
         make_proxy(run.fetch(work, "work.mp4"), out)
         return [run.store_asset("work_proxy", out, "video/mp4", source_asset_id=work.id,
@@ -69,6 +70,7 @@ def vfx_analyze(run: JobRun) -> tuple[list[str], dict]:
     (proxy_id,) = run.ensure_stage("proxy", proxy)
 
     def strip(stage):
+        run.transition("running", "filmstrip")
         src = run.fetch(work, "work.mp4")
         strip_png, first_png = run.work_dir / "filmstrip.png", run.work_dir / "first_frame.png"
         indices = filmstrip(src, strip_png, FILMSTRIP_THUMBS)
@@ -80,6 +82,7 @@ def vfx_analyze(run: JobRun) -> tuple[list[str], dict]:
     strip_id, first_id = run.ensure_stage("filmstrip", strip)
 
     def audio(stage):
+        run.transition("running", "audio")
         out = run.work_dir / "source_audio.m4a"
         if not extract_audio(run.fetch(clip), out, info, trim["source_start_ms"], trim["duration_ms"]):
             return []
@@ -89,6 +92,7 @@ def vfx_analyze(run: JobRun) -> tuple[list[str], dict]:
     audio_ids = run.ensure_stage("audio", audio)
 
     def motion(stage):
+        run.transition("running", "motion")
         frames = gray_frames(run.fetch(run.asset(proxy_id), "proxy.mp4"))
         report = {**camera_motion(frames), "frames": len(frames), "space": "proxy_px"}
         return [store_json(run, "motion_report", report, source_asset_id=work.id, meta={"status": report["status"]})]
