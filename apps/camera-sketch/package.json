@@ -27,10 +27,12 @@
     "@oc/web-core": "workspace:*",
     "@tanstack/react-query": "^5.104.4",
     "fast-png": "7.0.1",
+    "konva": "9.3.22",
     "lucide-react": "^1.59.0",
     "next": "^15.5.28",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
+    "react-konva": "19.2.7",
     "three": "0.186.1",
     "zustand": "^5.0.15"
   }

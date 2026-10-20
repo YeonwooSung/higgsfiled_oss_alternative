@@ -5,6 +5,11 @@ const API_ORIGIN = process.env.API_ORIGIN ?? "http://127.0.0.1:8000";
 const config: NextConfig = {
   reactStrictMode: true,
   transpilePackages: ["@oc/ui", "@oc/contracts", "@oc/web-core"],
+  webpack: (cfg) => {
+    // Konva's node entry wants the native `canvas` package; the sketch overlay only renders client-side.
+    cfg.resolve.alias = { ...cfg.resolve.alias, canvas: false };
+    return cfg;
+  },
   async rewrites() {
     // Same-origin API keeps the anonymous session cookie first-party and HttpOnly.
     return [{ source: "/api/:path*", destination: `${API_ORIGIN}/api/:path*` }];

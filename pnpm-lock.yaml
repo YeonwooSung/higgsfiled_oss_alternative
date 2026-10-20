@@ -25,6 +25,9 @@ importers:
       fast-png:
         specifier: 7.0.1
         version: 7.0.1
+      konva:
+        specifier: 9.3.22
+        version: 9.3.22
       lucide-react:
         specifier: ^1.59.0
         version: 1.59.0(@types/react@19.3.0)(react@19.3.1)
@@ -37,6 +40,9 @@ importers:
       react-dom:
         specifier: ^19.3.1
         version: 19.3.1(react@19.3.1)
+      react-konva:
+        specifier: 19.2.7
+        version: 19.2.7(@types/react@19.3.0)(konva@9.3.22)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       three:
         specifier: 0.186.1
         version: 0.186.1

@@ -3,19 +3,25 @@
 import type { CameraAnalyzeResult } from "@oc/contracts";
 import { cx } from "@oc/ui";
 import { useQuery } from "@tanstack/react-query";
+import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 import { api, ApiError } from "../api/client";
 import { depthToLink, latestJob, sceneToLink } from "../flow/scene";
 import { useAssetUrl } from "../hooks/assets";
 import { useIsDesktop } from "../hooks/media";
+import { useCameraPath, type CameraPathState } from "../hooks/cameraPath";
 import { usePreviewScene, useSceneBitmap } from "../hooks/previewScene";
+import { useEditorShortcuts } from "../hooks/shortcuts";
 import { useI18n } from "../i18n";
-import { compilePathProvisional, sceneInfoFromTarget } from "../model/path";
-import { outputSize } from "../model/preview";
-import { assetById, currentServerPath, useEditor } from "../state/editorStore";
+import { poseAtTime } from "../model/preview";
+import { moveControlPoint, outputToSourceUv, sketchAtTarget, sourceToOutputUv, targetOutputUv } from "../model/sketch";
+import { assetById, useEditor } from "../state/editorStore";
 import { CameraGizmo } from "./CameraGizmo";
+import { Inspector, MobileEdit } from "./Inspector";
+import { LeftPanel, ToolPicker } from "./LeftPanel";
 import { PreviewStage } from "./PreviewStage";
 import { AnalyzePanel, JobStatusList } from "./ScenePanel";
+import { Timeline, usePlayback } from "./Timeline";
 import { TopBar } from "./TopBar";
 
 type MobileTab = "upload" | "edit" | "result";
@@ -63,48 +69,51 @@ function SceneStage() {
   );
 }
 
-/**
- * The camera path shown in the stage and gizmo: the server compile for the current revision when it
- * has arrived, else the browser's provisional compile of the same config (badge "Provisional").
- */
-function useCameraPath() {
-  const project = useEditor((s) => s.project);
-  const config = useEditor((s) => s.config);
-  const serverPath = useEditor(currentServerPath);
-  const scene = assetById(project, config?.scene_asset_id);
-  const [outW, outH] = outputSize(config?.output.aspect ?? "16:9");
-  const pathCfg = config?.path;
-  const u = config?.target.u, v = config?.target.v, depthScale = config?.target.depth_scale;
-  const focalMm = config?.camera.focal_length_mm_equiv, sensorWMm = config?.camera.sensor_width_mm_assumed;
-  const srcW = scene?.width, srcH = scene?.height;
-  const info = useMemo(() => (srcW && srcH && u !== undefined && v !== undefined && depthScale !== undefined && focalMm !== undefined
-    ? sceneInfoFromTarget({ focalMm, srcW, srcH, u, v, depthScale, sensorWMm })
-    : null), [srcW, srcH, u, v, depthScale, focalMm, sensorWMm]);
-  const provisional = useMemo(() => (info && pathCfg ? compilePathProvisional(pathCfg, info, outW, outH) : null), [pathCfg, info, outW, outH]);
-  return { info, path: serverPath ?? provisional, provisional: !serverPath, outW, outH };
-}
+const SketchOverlay = dynamic(() => import("./SketchOverlay"), { ssr: false });
 
-function CameraStage({ cam }: { cam: ReturnType<typeof useCameraPath> }) {
+function CameraStage({ cam, freehand }: { cam: CameraPathState; freehand: boolean }) {
+  const { t } = useI18n();
   const project = useEditor((s) => s.project)!;
   const config = useEditor((s) => s.config)!;
   const timeMs = useEditor((s) => s.playheadMs);
+  const tool = useEditor((s) => s.tool);
   const sceneAsset = assetById(project, config.scene_asset_id);
   const depth = assetById(project, config.depth_asset_id);
   const image = useSceneBitmap(sceneAsset);
   const { scene, error } = usePreviewScene(depth, config);
   const desktop = useIsDesktop();
-  if (!cam.path) return <SceneStage />;
+  const { path, info, outW, outH, srcW, srcH } = cam;
+  const targetUv = useMemo(() => (path && info ? targetOutputUv(path.K, poseAtTime(path.samples, timeMs), info.target_world, outW, outH) : null),
+    [path, info, timeMs, outW, outH]);
+  const targetStartUv = useMemo(() => (info && srcW && srcH ? sourceToOutputUv(info.target_uv01, srcW, srcH, outW, outH) : null), [info, srcW, srcH, outW, outH]);
+  if (!path) return <SceneStage />;
+  const { update, commitSketch } = useEditor.getState();
+  const overlay = (size: { w: number; h: number }) => (
+    <SketchOverlay w={size.w} h={size.h} tool={freehand ? tool : "none"} points={config.path.sketch_points}
+      targetUv={targetUv} targetStartUv={targetStartUv} labels={{ sketch: t("sketch"), target: t("target") }}
+      onTarget={(uvOut) => {
+        if (!srcW || !srcH) return;
+        const [u, v] = outputToSourceUv(uvOut, srcW, srcH, outW, outH);
+        // New target: depth correction back to auto (the depth-map median under the target).
+        update((c) => { c.target.u = u; c.target.v = v; c.target.depth_scale = 1; });
+      }}
+      onStroke={commitSketch}
+      onMovePoint={(i, u, v, implicit) => update((c) => {
+        const pts = implicit && targetStartUv ? sketchAtTarget(targetStartUv) : c.path.sketch_points;
+        if (pts[i]) c.path.sketch_points = moveControlPoint(pts, i, u, v);
+      }, `drag:${i}`)} />
+  );
   return (
     <div data-region="stage" className="flex min-h-0 flex-1 flex-col gap-3 bg-stage p-3">
-      <PreviewStage bitmap={image.bitmap} scene={scene} path={cam.path} timeMs={timeMs} outW={cam.outW} outH={cam.outH}
+      <PreviewStage bitmap={image.bitmap} scene={scene} path={path} timeMs={timeMs} outW={outW} outH={outH} overlay={overlay}
         showHoles={config.scene.show_holes} provisional={cam.provisional} error={error || image.error} className="md:flex-1" />
       {/* Mobile: the gizmo stacks under the stage (desktop renders it in the right column instead). */}
-      {!desktop && cam.info && <CameraGizmo path={cam.path} targetWorld={cam.info.target_world} timeMs={timeMs} />}
+      {!desktop && info && <CameraGizmo path={path} comparePath={cam.suggestedPath} targetWorld={info.target_world} timeMs={timeMs} />}
     </div>
   );
 }
 
-function CameraViews({ cam }: { cam: ReturnType<typeof useCameraPath> }) {
+function CameraViews({ cam }: { cam: CameraPathState }) {
   const { t } = useI18n();
   const timeMs = useEditor((s) => s.playheadMs);
   const desktop = useIsDesktop();
@@ -117,7 +126,7 @@ function CameraViews({ cam }: { cam: ReturnType<typeof useCameraPath> }) {
       </div>
     );
   }
-  return <CameraGizmo path={cam.path} targetWorld={cam.info.target_world} timeMs={timeMs} />;
+  return <CameraGizmo path={cam.path} comparePath={cam.suggestedPath} targetWorld={cam.info.target_world} timeMs={timeMs} />;
 }
 
 export function ProjectView({ projectId }: { projectId: string }) {
@@ -127,7 +136,20 @@ export function ProjectView({ projectId }: { projectId: string }) {
   const config = useEditor((s) => s.config);
   const jobs = useEditor((s) => s.jobs);
   const [mobileTab, setMobileTab] = useState<MobileTab>("upload");
+  // Mobile: freehand sketch is off by default (preset + strength slider + keyframe numbers instead).
+  const [mobileFreehand, setMobileFreehand] = useState(false);
+  const desktop = useIsDesktop();
   const cam = useCameraPath();
+  useEditorShortcuts();
+  usePlayback();
+
+  // The target tool maps clicks back to the source image through the t = 0 (source) view; leaving
+  // t = 0 (scrub, play) ends it.
+  const tool = useEditor((s) => s.tool);
+  const playheadMs = useEditor((s) => s.playheadMs);
+  useEffect(() => {
+    if (tool === "target" && playheadMs !== 0) useEditor.getState().setTool("none");
+  }, [tool, playheadMs]);
   const query = useQuery({
     queryKey: ["project", projectId],
     queryFn: async () => {
@@ -177,6 +199,8 @@ export function ProjectView({ projectId }: { projectId: string }) {
       <JobStatusList />
     </div>
   );
+  const hasDepth = !!config.depth_asset_id;
+  const freehand = desktop || mobileFreehand;
 
   return (
     // Desktop: fixed app shell (panels scroll on their own), never shorter than 640px.
@@ -185,16 +209,19 @@ export function ProjectView({ projectId }: { projectId: string }) {
       <TopBar />
       <div className="flex min-h-0 flex-1 flex-col md:grid md:grid-cols-[240px_minmax(0,1fr)_320px] md:grid-rows-[minmax(0,1fr)_140px]">
         <aside data-region="left" aria-label={t("panelLeft")} className="scroll-panel hidden border-r border-border bg-panel md:col-start-1 md:row-span-2 md:row-start-1 md:block">
-          {scenePanel}
+          <LeftPanel />
         </aside>
         <main className="flex min-h-0 min-w-0 flex-col md:col-start-2 md:row-start-1">
-          {config.depth_asset_id ? <CameraStage cam={cam} /> : <SceneStage />}
+          {hasDepth ? <CameraStage cam={cam} freehand={freehand} /> : <SceneStage />}
         </main>
         <aside data-region="right" aria-label={t("panelInspector")} className="scroll-panel hidden flex-col gap-3 border-l border-border bg-panel p-3 md:col-start-3 md:row-span-2 md:row-start-1 md:flex">
           <CameraViews cam={cam} />
-          <Placeholder region="inspector" title={t("panelInspector")} hint={t("placeholderInspector")} className="min-h-[200px] flex-1" />
+          {hasDepth && cam.path ? <Inspector cam={cam} /> : <p className="text-xs text-muted">{t("noDepth")}</p>}
         </aside>
-        <Placeholder region="timeline" title={t("panelTimeline")} hint={t("placeholderTimeline")} className="hidden h-[140px] rounded-none border-x-0 border-b-0 bg-panel md:col-start-2 md:row-start-2 md:flex" />
+        <div className="hidden md:col-start-2 md:row-start-2 md:block">
+          {hasDepth && cam.path ? <Timeline cam={cam} /> : <div className="h-[140px] border-t border-border bg-panel" />}
+        </div>
+        {!desktop && hasDepth && cam.path && <Timeline cam={cam} compact />}
       </div>
       <nav aria-label={t("panelLeft")} className="border-t border-border bg-panel md:hidden">
         <div role="tablist" className="sticky top-0 z-10 flex border-b border-border bg-panel">
@@ -207,8 +234,24 @@ export function ProjectView({ projectId }: { projectId: string }) {
         </div>
         <div role="tabpanel">
           {mobileTab === "upload" && scenePanel}
-          {mobileTab === "edit" && <div className="p-3"><Placeholder region="inspector-mobile" title={t("panelInspector")} hint={t("placeholderInspector")} className="min-h-[160px]" /></div>}
-          {mobileTab === "result" && <div className="p-3"><Placeholder region="result-mobile" title={t("result")} hint={t("placeholderTimeline")} className="min-h-[160px]" /></div>}
+          {mobileTab === "edit" && (
+            <div className="space-y-4 p-3" data-region="inspector-mobile">
+              {hasDepth && cam.path ? (
+                <>
+                  <MobileEdit cam={cam} />
+                  <div className="space-y-2 border-t border-border pt-3">
+                    <label className="flex min-h-[44px] items-center justify-between text-[13px]">
+                      {t("freehandToggle")}
+                      <input type="checkbox" checked={mobileFreehand} className="h-5 w-5 accent-[#66DCF2]"
+                        onChange={(e) => { setMobileFreehand(e.target.checked); if (!e.target.checked) useEditor.getState().setTool("none"); }} />
+                    </label>
+                    {mobileFreehand ? <ToolPicker /> : <p className="text-xs text-muted">{t("sketchDesktopOnly")}</p>}
+                  </div>
+                </>
+              ) : <p className="text-xs text-muted">{t("noDepth")}</p>}
+            </div>
+          )}
+          {mobileTab === "result" && <p className="p-3 text-xs text-muted" data-region="result-mobile">{t("resultLater")}</p>}
         </div>
       </nav>
     </div>

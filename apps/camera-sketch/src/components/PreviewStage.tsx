@@ -8,7 +8,7 @@
  */
 import type { CompiledPath } from "@oc/contracts";
 import { cx } from "@oc/ui";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { LinearFilter, LinearMipmapLinearFilter, PerspectiveCamera, Scene, Texture, WebGLRenderer } from "three";
 import type { PreviewScene } from "../hooks/previewScene";
 import { useI18n } from "../i18n";
@@ -34,6 +34,8 @@ export interface PreviewStageProps {
   provisional: boolean;
   /** Depth or scene image failed to load / prepare. */
   error?: boolean;
+  /** Layer drawn over the frame (sketch, reticle, tools), given the frame's CSS size. */
+  overlay?: (size: { w: number; h: number }) => ReactNode;
   className?: string;
 }
 
@@ -170,6 +172,7 @@ export function PreviewStage(p: PreviewStageProps) {
       <div className="relative shrink-0 overflow-hidden rounded-panel bg-stage ring-1 ring-border"
         style={fit ? { width: fit.w, height: fit.h } : { width: "100%", aspectRatio: `${p.outW} / ${p.outH}` }}>
         <canvas ref={canvasRef} className="block h-full w-full" aria-label={t("cameraView")} role="img" />
+        {fit && p.overlay?.(fit)}
         <div className="pointer-events-none absolute left-2 top-2 flex flex-wrap gap-1.5">
           {p.provisional && (
             <span title={t("provisionalHint")} className="rounded-button border border-border bg-panel/90 px-2 py-0.5 text-[11px] font-medium text-muted">
@@ -184,7 +187,7 @@ export function PreviewStage(p: PreviewStageProps) {
           </div>
         )}
         {status && (
-          <p role={failed ? "alert" : "status"} className="absolute inset-x-0 bottom-8 mx-auto w-fit max-w-[90%] rounded-button bg-panel/90 px-3 py-1 text-center text-xs text-muted">
+          <p role={failed ? "alert" : "status"} className="pointer-events-none absolute inset-x-0 bottom-8 mx-auto w-fit max-w-[90%] rounded-button bg-panel/90 px-3 py-1 text-center text-xs text-muted">
             {status}
           </p>
         )}
