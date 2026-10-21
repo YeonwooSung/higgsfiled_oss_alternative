@@ -170,6 +170,21 @@ def plate_errors(db: DbSession, project: Project, cfg: PocketVfxConfig, render_p
     return plate_length_errors(cfg, plate.frame_count or meta.get("frames"), loopable=False)
 
 
+def _plate_palette_warning(db: DbSession, project: Project, cfg: PocketVfxConfig, render_profile: str) -> dict | None:
+    """A generated plate keeps the palette it was prompted with; the effect's palette changed since."""
+    if render_profile != "generated" or cfg.plate.mode != "generated" or cfg.plate.asset_id is None:
+        return None
+    plate = db.get(Asset, cfg.plate.asset_id)
+    if plate is None or plate.project_id != project.id or plate.role != "raw_plate":
+        return None
+    palette = (plate.meta_json or {}).get("palette")
+    if palette is None or palette == cfg.effect.palette:
+        return None
+    return {"code": "plate_palette_differs", "field": "config.effect.palette",
+            "message": f"The plate was generated with the {palette} palette; the effect uses {cfg.effect.palette}. "
+                       "Generate a new plate to match."}
+
+
 def _asset(db: DbSession, project: Project, asset_id, role: str) -> Asset | None:
     a = db.get(Asset, asset_id) if asset_id else None
     return a if a is not None and a.project_id == project.id and a.role == role else None
@@ -258,6 +273,9 @@ def validate(db: DbSession, project: Project, cfg: PocketVfxConfig, *, track: Jo
             blocking.append(_err("mask_required", "config.subject_prompts",
                                  "This effect needs a subject mask. Select the subject and track again."))
     blocking += plate_errors(db, project, cfg, render_profile or cfg.render_profile)
+    differs = _plate_palette_warning(db, project, cfg, render_profile or cfg.render_profile)
+    if differs:
+        warnings.append(differs)
     if preset["input_requirements"].get("clean_plate"):
         plate = _asset(db, project, cfg.clean_plate_asset_id, "clean_plate")
         if plate is None:
@@ -269,10 +287,10 @@ def validate(db: DbSession, project: Project, cfg: PocketVfxConfig, *, track: Jo
     return {"valid": not blocking, "blocking_errors": blocking, "warnings": warnings}
 
 
-def _raise_first(errors: list[dict], codes: tuple[str, ...]) -> None:
+def _raise_first(errors: list[dict], codes: tuple[str, ...], *, details: dict | None = None) -> None:
     for e in errors:
         if e["code"] in codes:
-            raise ApiError(422, e["code"], e["message"], field=e["field"])
+            raise ApiError(422, e["code"], e["message"], field=e["field"], details=details)
 
 
 def _check_track_job(db: DbSession, project: Project, cfg: PocketVfxConfig, track_id: uuid.UUID) -> Job:
@@ -326,7 +344,7 @@ def plan_job(db: DbSession, storage, project: Project, cfg: PocketVfxConfig, kin
             # exist, or to replace a mismatching/too short plate, is fine
             blocking = [e for e in report["blocking_errors"]
                         if kind == "vfx.render" or e["code"] not in ("mask_required", *PLATE_CODES)]
-            _raise_first(blocking, PLATE_CODES)  # a render that cannot place its plate: its own 422 code
+            _raise_first(blocking, PLATE_CODES, details={"blocking_errors": blocking})  # a render that cannot place its plate: its own 422 code
             if blocking:
                 raise ApiError(422, "validation_failed", blocking[0]["message"], field=blocking[0]["field"],
                                details={"blocking_errors": blocking})

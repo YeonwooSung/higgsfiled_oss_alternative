@@ -403,6 +403,7 @@ def test_plate_length_at_plan_time(app, session_client, ready):
     r = render(session_client, p, rev, profile="generated")
     assert r.status_code == 422 and err(r)["code"] == "plate_length" and err(r)["field"] == "config.effect.end_ms"
     assert codes(validate(session_client, p, rev)["blocking_errors"]) == ["plate_length"]  # config profile
+    assert codes(err(r)["details"]["blocking_errors"]) == ["plate_length"]  # same details as validation_failed
     with app.state.db() as db:
         n = db.scalar(select(func.count()).select_from(Job).where(Job.project_id == uuid.UUID(p["id"]),
                                                                   Job.kind == "vfx.render"))
@@ -412,6 +413,17 @@ def test_plate_length_at_plan_time(app, session_client, ready):
     # a new plate job for the long window is not blocked by the selected short plate
     r = post(session_client, p, "vfx.generate_plate", revision=rev)
     assert r.status_code == 202, r.text
+
+
+def test_validate_warns_when_the_plate_palette_differs(app, session_client, ready):
+    p, _ = ready
+    plate = make_plate(app, p)  # made with the amber palette
+    proj = generated(session_client, p, plate)
+    report = validate(session_client, p, proj["current_revision"])
+    assert "plate_palette_differs" not in codes(report["warnings"])
+    proj = configure(session_client, p, effect__palette="cyan")
+    report = validate(session_client, p, proj["current_revision"])
+    assert report["valid"] is True and "plate_palette_differs" in codes(report["warnings"])
 
 
 # --- track validity at peak in validate ---------------------------------------------------------------------

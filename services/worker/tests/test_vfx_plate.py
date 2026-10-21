@@ -2,6 +2,7 @@
 
 import importlib
 import json
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -17,6 +18,7 @@ from test_vfx_executors import (  # noqa: F401 - pv is the project fixture
 )
 
 mock_mod = importlib.import_module("oc_worker.comfy.mock")  # (not a from-import: root and worker isort disagree)
+render_mod = importlib.import_module("oc_worker.executors.vfx_render")  # the module (the package exports a function)
 MockRunner = mock_mod.MockRunner
 QUICK = {"track_job_id": None, "render_profile": "quick"}
 
@@ -113,6 +115,7 @@ def test_generate_plate_length_covers_the_window(proj):
 # ---- render with plates -------------------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_render_with_generated_plate(proj):
     quick = proj.run("vfx.render", QUICK).result_json
     plate = proj.run("vfx.generate_plate", {"seed": 3})
@@ -141,6 +144,7 @@ def test_render_with_generated_plate(proj):
     assert stats["roi_bbox"][peak + 10][1] < 0.7 * 720 - 0.2 * 720
 
 
+@pytest.mark.slow
 def test_quick_uses_the_bundled_plate_and_loops_it(proj):
     proj.revise(plate={**proj.cfg["plate"], "asset_id": None, "bundled_id": "dust_burst_v1"},
                 effect={**proj.cfg["effect"], "start_ms": 0, "peak_ms": 400, "end_ms": 5000})  # 0..119 = 120 frames
@@ -152,6 +156,7 @@ def test_quick_uses_the_bundled_plate_and_loops_it(proj):
     assert plate["tint"] == "amber" and r["roi_qa"]["status"] == "pass"
 
 
+@pytest.mark.slow
 def test_bundled_plate_follows_the_output_orientation(ctx, db_factory, storage, pv):  # noqa: F811
     p = Proj(ctx, db_factory, storage, pv)
     p.prepare("rotated_portrait.mp4", trim={"source_start_ms": 0, "duration_ms": 4000},
@@ -178,6 +183,13 @@ def test_generated_plate_checks_in_the_worker(proj):
     assert job.error_code == "plate_length"
 
 
+def test_missing_bundled_plate_file_is_a_stage_failure(proj, monkeypatch):
+    monkeypatch.setattr(render_mod, "bundled_path", lambda entry, portrait: Path("/nonexistent.mp4"))
+    job = proj.run("vfx.render", QUICK, expect="failed")
+    assert job.error_code == "plate_missing" and not job.output_asset_ids
+
+
+@pytest.mark.slow
 def test_121_frame_plate_trims_into_short_windows(proj):
     proj.revise(effect={**proj.cfg["effect"], "start_ms": 0, "peak_ms": 400, "end_ms": 4800})  # 0..115 = 116
     plate = proj.run("vfx.generate_plate")
@@ -219,6 +231,7 @@ def test_intensity_revision_reuses_track_and_plate(proj):
 # ---- provider failure ---------------------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_plate_provider_failure_keeps_the_track_outputs(proj, monkeypatch):
     proj.revise(anchor__follow=True)
     track = proj.run("vfx.track")
