@@ -459,6 +459,22 @@ def test_correction_only_retrack_reuses_masks_without_a_submission(proj):
     assert runner.submit_count == submitted + 1
 
 
+def test_anchor_only_retrack_reuses_masks_without_a_submission(proj):
+    """Moving the anchor re-runs the track (new track key) but not the masks (R26: the masks key has no anchor)."""
+    runner = proj.ctx.runner_for("mock_v1")
+    proj.prepare("stomp_landscape.mp4")
+    proj.revise(subject_prompts=BODY_PROMPT)
+    first = proj.run("vfx.track").result_json
+    submitted = runner.submit_count
+    proj.revise(anchor={**proj.cfg["anchor"], "frame": 50, "x": 0.45, "y": 0.62})
+    again = proj.run("vfx.track").result_json
+    assert again["track_key"] != first["track_key"]
+    assert runner.submit_count == submitted
+    m, m0 = again["masks"], first["masks"]
+    assert m["reused"] is True and m["masks_zip_asset_id"] == m0["masks_zip_asset_id"]
+    assert m["masks_key"] == m0["masks_key"]
+
+
 def test_track_without_subject_skips_masks_and_render_reports_mask_required(proj):
     proj.prepare("stomp_landscape.mp4")
     proj.revise(anchor__follow=False)

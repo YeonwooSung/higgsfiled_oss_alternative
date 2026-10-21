@@ -1,9 +1,9 @@
 """vfx.track, stage ``masks``: subject mask sequence of the proxy work clip through ``vfx_masks_v1`` (SAM 2.1 video;
 GPU, mock profile: fixture GT / GrabCut), spec §6.3.
 
-Reuse: the stage is keyed by ``masks_key`` (the track key without point corrections). When a previous succeeded
-``vfx.track`` of the project carries masks for the same key, its ``masks_zip`` / ``mask_preview`` assets are reused
-and nothing is submitted to the provider (a correction-only re-track never re-runs SAM).
+Reuse: the stage is keyed by ``masks_key`` (the track key without the anchor and the point corrections). When a
+previous succeeded ``vfx.track`` of the project carries masks for the same key, its ``masks_zip`` / ``mask_preview``
+assets are reused and nothing is submitted to the provider (an anchor- or correction-only re-track never re-runs SAM).
 
 Otherwise the bindings are built only when a submission is still needed (a resumed stage inspects its provider job):
 ``frames`` = the proxy MP4, ``prompts`` = ``masks.build_prompts`` (subject prompts in proxy px + mask edits as mask

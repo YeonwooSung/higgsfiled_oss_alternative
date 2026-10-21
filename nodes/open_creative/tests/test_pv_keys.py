@@ -26,7 +26,7 @@ def changed(path, value):
 
 
 def test_model_rev_combines_constant_and_profile():
-    assert TRACK_MODEL_REV == "lk_fb_median_v1+smooth_s1_b0.5+sam2.1_hiera_small"
+    assert TRACK_MODEL_REV == "lk_fb_median_v1+smooth_s1_b0.5+sam2.1_hiera_small+keys_v2"
     assert model_rev("mock_v1") != model_rev("open_weights_v1") and TRACK_MODEL_REV in model_rev("mock_v1")
 
 
@@ -56,11 +56,19 @@ def test_track_key_ignores_effect_plate_and_audio():
         assert track_key(changed(path, value), SHA, REV) == base, path
 
 
-def test_masks_key_ignores_corrections_only():
+def test_masks_key_ignores_corrections_and_anchor():
+    """The masks prompts use only subject prompts + mask edits (+ trim/aspect/source/model), so point corrections and
+    every anchor field leave the masks key unchanged (R26) while they still change the track key."""
     base = masks_key(CFG, SHA, REV)
-    assert masks_key(changed(("corrections",), [{"frame": 60, "x": 0.4, "y": 0.4}]), SHA, REV) == base
-    assert masks_key(changed(("anchor", "frame"), 44), SHA, REV) != base
-    assert masks_key(changed(("mask_edits",), [{"frame": 50, "asset_id": "0" * 32}]), SHA, REV) != base
+    for path, value in ((("corrections",), [{"frame": 60, "x": 0.4, "y": 0.4}]), (("anchor", "frame"), 44),
+                        (("anchor", "x"), 0.51), (("anchor", "y"), 0.2), (("anchor", "follow"), False),
+                        (("anchor", "track_window_frames"), 24)):
+        assert masks_key(changed(path, value), SHA, REV) == base, path
+    for path, value in ((("mask_edits",), [{"frame": 50, "asset_id": "0" * 32}]),
+                        (("subject_prompts",), [{"frame": 43, "points": [{"x": 0.5, "y": 0.4, "label": 1}]}]),
+                        (("trim", "duration_ms"), 4000), (("output", "aspect"), "9:16")):
+        assert masks_key(changed(path, value), SHA, REV) != base, path
+    assert masks_key(CFG, "b" * 64, REV) != base and masks_key(CFG, SHA, model_rev("open_weights_v1")) != base
     assert masks_key(CFG, SHA, REV) != track_key(CFG, SHA, REV)
 
 
