@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FRAME_S, mirrorFollower, needsSeek, shouldPublishTime, syncFollower, TIME_UI_MS, type MediaLike } from "../src/model/sync";
+import { FRAME_S, mirrorFollower, needsSeek, shouldPublishTime, syncFollower, TIME_UI_MS, type MediaLike } from "../src/sync";
 
 class FakeMedia implements MediaLike {
   seeks: number[] = [];

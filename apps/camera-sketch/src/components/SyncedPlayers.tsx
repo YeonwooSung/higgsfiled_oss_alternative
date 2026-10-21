@@ -3,7 +3,7 @@
 /**
  * Result players kept at the same timestamp (spec §4): the first visible video leads; every other
  * video mirrors its play/pause/rate and is re-seeked when it drifts more than one frame (1/24 s,
- * `model/sync.ts`). One shared transport drives the leader. All videos are muted and do not
+ * `@oc/web-core` sync). One shared transport drives the leader. All videos are muted and do not
  * autoplay. The optional path overlay (intended target trajectory) is drawn over output-space
  * videos only and never reaches an export.
  */
@@ -12,7 +12,7 @@ import { Pause, Play } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useI18n } from "../i18n";
 import type { TrajectoryPoint } from "../model/results";
-import { FRAME_S, shouldPublishTime, syncFollower } from "../model/sync";
+import { FRAME_S, shouldPublishTime, syncFollower } from "@oc/web-core";
 
 export interface PlayerSource {
   id: string;

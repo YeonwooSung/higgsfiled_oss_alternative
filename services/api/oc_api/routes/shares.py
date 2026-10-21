@@ -7,6 +7,7 @@ from datetime import timedelta
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import RedirectResponse
+from open_creative.comfy.profiles import PROFILES
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
@@ -14,12 +15,13 @@ from sqlalchemy.orm import Session as DbSession
 from ..db import utcnow
 from ..deps import current_session, get_db, owned_project, parse_uuid
 from ..errors import ApiError
-from ..models import Asset, Project, Share
+from ..models import Asset, Job, Project, Share
 from ..models import Session as SessionRow
 
 router = APIRouter()
-# Finished outputs only (Product Lock ad + cover, Camera Sketch Geometry / Cinematic videos); originals never.
-SHAREABLE_ROLES = ("render", "cover", "geometry_video", "cinematic_video")
+# Finished outputs only (Product Lock ad + cover, Camera Sketch Geometry / Cinematic videos, Pocket VFX render video and
+# cover); originals never.
+SHAREABLE_ROLES = ("render", "cover", "geometry_video", "cinematic_video", "render_video")
 
 
 class ShareCreate(BaseModel):
@@ -82,7 +84,12 @@ def open_share(token: str, request: Request, db: DbSession = Depends(get_db)):
 def share_meta(token: str, db: DbSession = Depends(get_db)):
     share, asset = resolve_share(db, token)
     meta = asset.meta_json or {}
+    job = db.get(Job, asset.job_id) if asset.job_id else None
+    profile = PROFILES.get(job.model_profile) if job is not None else None
+    # Mock = stand-in output in the asset itself, or made by a mock-profile job (e.g. a Quick render on mock masks)
+    mock = bool(meta.get("mock")) or bool(profile is not None and profile.is_mock)
     return {"mime": asset.mime, "width": asset.width, "height": asset.height, "role": asset.role,
-            "mode": meta.get("mode"), "mock": bool(meta.get("mock")),
+            "mode": meta.get("mode"), "mock": mock,
+            "render_profile": meta.get("render_profile"), "plate_source": meta.get("plate_source"),
             "exact_camera_control": False if meta.get("mode") == "cinematic" else None,
             "expires_at": share.expires_at.isoformat()}

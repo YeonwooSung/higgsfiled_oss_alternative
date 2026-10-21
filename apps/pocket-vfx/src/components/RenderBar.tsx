@@ -7,13 +7,14 @@
  * native-dialog Modal, job progress with Cancel, and reason text.
  */
 import type { Job } from "@oc/contracts";
-import { Badge, Button } from "@oc/ui";
+import { Button } from "@oc/ui";
 import { Clapperboard, Loader2, RotateCcw } from "lucide-react";
 import { useState } from "react";
 import { activeJob, errorReason, renderGate, startJob } from "../hooks/jobs";
 import { revalidate, useCurrentValidation } from "../hooks/validate";
 import { useI18n } from "../i18n";
 import { trackStatus, useEditor } from "../state/editorStore";
+import { ProfileBadge } from "./badges";
 import { usePresets } from "./EffectCards";
 import { ErrorLine, JobProgress, jobFailure, Reasons, reasonText } from "./JobUi";
 
@@ -61,9 +62,7 @@ export function RenderBar({ onDone }: { onDone?: (job: Job) => void }) {
   return (
     <div data-region="render-bar" className="flex flex-col gap-2">
       <div className="flex items-center gap-2">
-        <span data-badge="render-profile" title={generated ? t("renderGeneratedHint") : t("renderQuickHint")}>
-          <Badge tone="neutral">{generated ? t("renderGenerated") : t("renderQuick")}</Badge>
-        </span>
+        <span data-badge="render-profile"><ProfileBadge kind={generated ? "generated" : "quick"} /></span>
         <Button variant="primary" className="ml-auto" disabled={!gate.ok || pending} onClick={() => void render()}
           icon={pending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Clapperboard className="h-4 w-4" aria-hidden />}>
           {t("render")}

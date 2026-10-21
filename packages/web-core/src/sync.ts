@@ -1,5 +1,6 @@
 /**
- * Synced result playback (spec §4 result screen): one leader video drives the others. Followers mirror
+ * Synced result playback (moved from apps/camera-sketch/src/model/sync.ts; used by the Camera Sketch result
+ * players and the Pocket VFX before/after compare): one leader video drives the others. Followers mirror
  * play/pause/rate and are re-seeked only when they drift more than one output frame (1/24 s) from
  * the leader, so normal decoding jitter never causes seek storms.
  */

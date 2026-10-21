@@ -72,3 +72,37 @@ def test_delete_project_blocks_access_and_schedules_cleanup(app, session_client,
     assert not app.state.storage.exists(key)
     with app.state.db() as db:
         assert db.get(Asset, uuid.UUID(video)) is None
+
+
+def _vfx_render_video(app, project_id, *, profile, meta):
+    """A pocket-vfx ``render_video`` asset produced by a succeeded vfx.render job of ``profile``."""
+    aid = put_asset(app, project_id, "render_video", b"mp4", "video/mp4", 1280, 720, meta=meta)
+    with app.state.db() as db:
+        row = db.get(Project, uuid.UUID(project_id))
+        job = Job(project_id=row.id, session_id=row.session_id, input_revision=1, kind="vfx.render",
+                  model_profile=profile, state="succeeded", output_asset_ids=[aid], result_json={})
+        db.add(job)
+        db.flush()
+        db.get(Asset, uuid.UUID(aid)).job_id = job.id
+        db.commit()
+    return aid
+
+
+def test_vfx_render_video_is_shareable_with_profile_and_mock_meta(app, session_client):
+    pid = session_client.post("/api/v1/projects", json={"app_slug": "pocket-vfx", "title": "Stomp"}).json()["id"]
+    quick = _vfx_render_video(app, pid, profile="mock_v1", meta={"render_profile": "quick", "plate_source": "bundled",
+                                                                       "mock": False})
+    generated = _vfx_render_video(app, pid, profile="open_weights_v1", meta={"render_profile": "generated",
+                                                                                "plate_source": "generated", "mock": True})
+    plain = _vfx_render_video(app, pid, profile="open_weights_v1", meta={"render_profile": "quick", "mock": False})
+    clip = put_asset(app, pid, "clip", b"mp4", "video/mp4", 1280, 720)
+    assert session_client.post(f"/api/v1/projects/{pid}/shares", json={"output_asset_id": clip}).status_code == 422
+    for aid, profile, mock in ((quick, "quick", True), (generated, "generated", True), (plain, "quick", False)):
+        r = session_client.post(f"/api/v1/projects/{pid}/shares", json={"output_asset_id": aid})
+        assert r.status_code == 201, r.text
+        token = r.json()["url"].rsplit("/", 1)[1]
+        meta = TestClient(app).get(f"/api/v1/public/shares/{token}/meta").json()
+        # a Quick render of the mock profile is Mock (its masks are stand-ins) though the asset says mock=False
+        assert (meta["mime"], meta["role"], meta["render_profile"], meta["mock"]) == ("video/mp4", "render_video",
+                                                                                      profile, mock)
+        assert meta["plate_source"] == {quick: "bundled", generated: "generated", plain: None}[aid]
