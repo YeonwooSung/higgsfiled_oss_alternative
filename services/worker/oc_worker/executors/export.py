@@ -10,15 +10,15 @@ import uuid
 import zipfile
 from pathlib import Path
 
-from sqlalchemy import select
-
 from oc_api.models import Job, JobStage, ProjectRevision
 from oc_api.settings import REPO_ROOT
 from open_creative.comfy.profiles import get_profile
 from open_creative.product_lock.prompts import load_presets
+from sqlalchemy import select
 
 from ..stages import JobRun, StageFailed
 from .camera_export import camera_export
+from .vfx_export import vfx_export
 
 MODEL_MANIFEST = REPO_ROOT / "models" / "product-lock.manifest.json"
 
@@ -104,9 +104,12 @@ def _recipe(run: JobRun, render: Job) -> str:
 
 
 def export(run: JobRun) -> tuple[list[str], dict]:
-    """Export jobs dispatch by app: Product Lock (kind ``export``) and Camera Sketch (``camera.export``)."""
+    """Export jobs dispatch by app: Product Lock (``export``), Camera Sketch (``camera.export``), Pocket VFX
+    (``vfx.export``)."""
     if run.project.app_slug == "camera-sketch":
         return camera_export(run)
+    if run.project.app_slug == "pocket-vfx":
+        return vfx_export(run)
     return _product_lock_export(run)
 
 

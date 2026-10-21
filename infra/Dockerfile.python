@@ -12,6 +12,9 @@ COPY workflows workflows
 # Mock depth ground truth for the bundled Camera Sketch samples (MockRunner matches uploads by hash), so the
 # mock_v1 profile in the image returns the same depth as local dev. Only the scene manifest + images (~2.6 MB).
 COPY fixtures/camera-sketch/scenes.json fixtures/camera-sketch/*.png fixtures/camera-sketch/
+# Pocket VFX: the mock subject-mask path matches an uploaded fixture clip by sha256 (manifest.json) and reads its
+# ground-truth masks ZIP, so the mock_v1 profile in the image tracks the bundled sample clips like local dev.
+COPY fixtures/pocket-vfx/manifest.json fixtures/pocket-vfx/*_masks.zip fixtures/pocket-vfx/
 RUN uv sync --frozen --no-dev
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1
 EXPOSE 8000

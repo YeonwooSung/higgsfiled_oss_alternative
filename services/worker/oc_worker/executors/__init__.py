@@ -34,4 +34,5 @@ EXECUTORS: dict[str, Executor] = {
     "vfx.track": vfx_track,
     "vfx.generate_plate": vfx_generate_plate,
     "vfx.render": vfx_render,
+    "vfx.export": export,  # dispatches by app
 }

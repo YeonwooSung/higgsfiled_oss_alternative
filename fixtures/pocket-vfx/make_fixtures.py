@@ -392,7 +392,7 @@ def sfx():
         doc = json.loads(target.read_text(encoding="utf-8"))
         for preset in doc["presets"]:
             preset["sfx"]["peak_offset_ms"] = peaks[preset["sfx"]["file"]]
-        target.write_text(json.dumps(doc, indent=2, ensure_ascii=False), encoding="utf-8")
+        target.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(peaks)
 
 

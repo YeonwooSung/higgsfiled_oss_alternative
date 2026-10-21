@@ -199,6 +199,52 @@ class PlateLayers:
         return layer
 
 
+def load_masks(run: JobRun, subject: dict | None, n: int) -> list | None:
+    """The proxy masks of a render plan's ``subject_masks`` (None: the render had no masks)."""
+    if subject is None:
+        return None
+    try:
+        seq = read_masks_zip(run.fetch(run.asset(subject["masks_zip_asset_id"]), "masks.zip"), expect_frames=n,
+                             expect_size=tuple(subject["size"]))
+    except (MaskFormatError, OSError, ValueError) as e:
+        raise StageFailed("mask_required", "The subject masks could not be read. Track again.") from e
+    return seq.masks
+
+
+class FrameComposer:
+    """Per-frame composite inputs of a render plan (``layers`` stage document). The render and the layers export
+    both build their frames here, so the exported layers are the ones that were composited."""
+
+    def __init__(self, run: JobRun, cfg, cfg_json: dict, plan: dict, window: EffectWindow, w: int, h: int, n: int):
+        self.cfg, self.w, self.h = cfg, w, h
+        self.anchors = plan["anchors"]
+        self.params = {k: cfg_json["effect"][k] for k in EFFECT_PARAMS}
+        self.plates = PlateLayers(run, plan["plate"], cfg.effect.preset_id, self.params, window, w, h)
+        self.window = window
+        self.masks = load_masks(run, plan["subject_masks"], n)
+        self.occlude = self.masks is not None and cfg.effect.layer_order != "in_front"
+        aura = cfg.effect.preset_id == "energy_aura_v1"
+        self.band_masks = smooth_masks(self.masks, radius=1) if self.masks is not None and aura else None
+
+    def subject_at(self, i: int) -> np.ndarray | None:
+        """The output-size soft subject mask of frame ``i`` (None: the render had no masks)."""
+        return upscale_mask(self.masks[i], self.w, self.h) if self.masks is not None else None
+
+    def inputs(self, i: int, frame: np.ndarray) -> tuple[FrameInputs, np.ndarray | None]:
+        """``(composite inputs, occluding subject mask or None)`` of frame ``i``."""
+        anchor = self.anchors[i]
+        subject = self.subject_at(i) if self.occlude else None
+        band = upscale_mask(self.band_masks[i], self.w, self.h) if self.band_masks is not None else None
+        effect = None
+        if anchor is not None or band is not None:
+            effect = render_effect(self.cfg.effect.preset_id, self.params, self.window, i,
+                                   tuple(anchor) if anchor is not None else None, self.w, self.h,
+                                   self.cfg.plate.seed, band)
+        inp = FrameInputs(source=frame, effect=effect, plate=self.plates.at(i, anchor, band), subject_mask=subject,
+                          front_glow=None, roi_limit=None)
+        return inp, subject
+
+
 def final_video(run: JobRun, cfg, video_id: str, work: Asset, preset: dict,
                 window: EffectWindow) -> tuple[str, dict | None]:
     """``(asset id, audio summary)`` of the deliverable MP4. Without audio (no kept original, no SFX) the silent
@@ -300,26 +346,11 @@ def vfx_render(run: JobRun) -> tuple[list[str], dict]:
 
     (layers_id,) = run.ensure_stage("layers", layers_stage)
 
-    def load_masks(subject: dict | None) -> list | None:
-        if subject is None:
-            return None
-        try:
-            seq = read_masks_zip(run.fetch(run.asset(subject["masks_zip_asset_id"]), "masks.zip"), expect_frames=n,
-                                 expect_size=tuple(subject["size"]))
-        except (MaskFormatError, OSError, ValueError) as e:
-            raise StageFailed("mask_required", "The subject masks could not be read. Track again.") from e
-        return seq.masks
-
     def composite_stage(stage):
         run.transition("running", "composite")
         plan = json_asset(run, layers_id)
-        anchors = plan["anchors"]
-        params = {k: cfg_json["effect"][k] for k in EFFECT_PARAMS}
-        plates = PlateLayers(run, plan["plate"], cfg.effect.preset_id, params, window, w, h)
-        masks = load_masks(plan["subject_masks"])
-        occlude = masks is not None and cfg.effect.layer_order != "in_front"
-        aura = cfg.effect.preset_id == "energy_aura_v1"
-        band_masks = smooth_masks(masks, radius=1) if masks is not None and aura else None
+        composer = FrameComposer(run, cfg, cfg_json, plan, window, w, h, n)
+        occlude = composer.occlude
         acc = IntegrityAccumulator()
         roi_px, roi_bbox, changed_px, cover = [], [], [], []
         out_path = run.work_dir / "render.mp4"
@@ -328,15 +359,7 @@ def vfx_render(run: JobRun) -> tuple[list[str], dict]:
             for i, frame in enumerate(with_heartbeat(run, decode_frames(src), 5)):
                 if i >= n:
                     break
-                anchor = anchors[i]
-                subject = upscale_mask(masks[i], w, h) if occlude else None
-                band = upscale_mask(band_masks[i], w, h) if band_masks is not None else None
-                effect = None
-                if anchor is not None or band is not None:
-                    effect = render_effect(cfg.effect.preset_id, params, window, i,
-                                           tuple(anchor) if anchor is not None else None, w, h, cfg.plate.seed, band)
-                inp = FrameInputs(source=frame, effect=effect, plate=plates.at(i, anchor, band),
-                                  subject_mask=subject, front_glow=None, roi_limit=None)
+                inp, subject = composer.inputs(i, frame)
                 out, roi = composite_frame(inp, cfg.effect.layer_order)
                 writer.write(out)
                 acc.add(frame, out, roi)
