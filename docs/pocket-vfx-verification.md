@@ -36,17 +36,25 @@ in a browser or on a GPU in this task; the only timing test is `pv_composite::te
   ZIP can be large.
 - **S3 read URLs need CORS**: with `OC_STORAGE_BACKEND=s3` the browser reads signed bucket URLs cross-origin (GET with `Range`);
   the bucket needs a CORS rule for the Pocket VFX origin (`http://localhost:3002` in dev). The local backend needs no setup.
+- **Long decodes and the job lease**: `asset.inspect` and `vfx.analyze` heartbeat (and honour cancels) from a per-frame
+  callback of the PTS probe and the decode, so a 60 s 4K30 upload no longer outlives the 60 s lease. A single frame that
+  takes longer than the lease to decode (no output at all from ffmpeg/ffprobe) would still lapse it. The decoder now scales and
+  crops in ffmpeg (same cover-fit geometry as `cover_fit`; pixel values differ slightly from the former OpenCV resize), and a
+  trim more than 2 s into the clip seeks there first.
+- **Share links in Product Lock** still live in the result view's local state (Camera Sketch and Pocket VFX read
+  `GET /projects/{id}/shares`); the URL itself is shown only right after creation, since only the token hash is stored.
 - SAM masks are segmentation, not matting; Blink Out never restores a background (it uses the user's clean plate and refuses a mismatch).
 
 ## Commands run (final state of the branch)
 
 | Command | Result | Time |
 |---|---|---|
-| `uv run pytest -q` | 772 passed, 1 skipped, 18 deselected | 898 s (15 min) |
-| `uv run pytest -q -m slow` | 18 passed, 773 deselected | 310 s |
-| `pnpm -r test` | web-core 26, product-lock 11, pocket-vfx 105 (14 files), camera-sketch 347 tests passed | 4 s |
+| `uv run pytest -q` | 787 passed, 1 skipped, 18 deselected (after the final-review fixes) | 776 s (13 min) |
+| `uv run pytest -q -m slow` | 18 passed, 788 deselected | 269 s |
+| `pnpm -r test` | web-core 30, product-lock 11, pocket-vfx 108 (14 files), camera-sketch 347 tests passed | 4 s |
 | `pnpm -r typecheck` | all 6 projects clean | 3 s |
 | `pnpm --filter @oc/pocket-vfx build` | builds (routes `/`, `/p/[id]`, `/s/[token]`) | 9 s |
+| `pnpm --filter @oc/camera-sketch build` | builds (ShareLink now reads the server share list) | 9 s |
 | `docker compose -f infra/docker-compose.yml config` | valid; services include `web` (:3000), `web-camera` (:3001), `web-vfx` (:3002, `APP=pocket-vfx`, `PORT=3002`) | < 1 s |
 | `scripts/export_app.sh pocket-vfx <scratch>` then `pnpm install --frozen-lockfile` and `pnpm --filter @oc/pocket-vfx build` there | exports (includes `docs/03_POCKET_VFX_SPEC.md`); install 3 s; build succeeds | 3 s / 22 s |
 
