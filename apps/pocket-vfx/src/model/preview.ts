@@ -196,10 +196,10 @@ export class PreviewRenderer {
   }
 
   /** The effect layer (premultiplied, transparent background) of `plan`; mask-cut when `cut`. */
-  private drawEffect(plan: PreviewPlan, palette: VfxPalette, layers: PreviewLayers, w: number, h: number, cut: boolean) {
+  private drawEffect(plan: PreviewPlan, palette: VfxPalette, layers: PreviewLayers, w: number, h: number, cut: boolean, withPlate = true) {
     const { c, x } = this.layer("effect", w, h);
     x.globalCompositeOperation = "lighter";
-    const plate = layers.plate as (CanvasImageSource & { width: number; height: number }) | null;
+    const plate = withPlate ? layers.plate as (CanvasImageSource & { width: number; height: number }) | null : null;
     if (plan.plate && plate) {
       x.globalAlpha = Math.min(plan.plate.gain, 1);
       drawCover(x, plate, plan.plate.x, plan.plate.y, plan.plate.side);
@@ -255,25 +255,25 @@ export class PreviewRenderer {
     }
     if (view === "source" || !plan) return;
     const occlude = plan.occlude && !!layers.mask;
-    if (view === "composite" && occlude && plan.frontGlow > 0) {
-      x.globalCompositeOperation = "lighter";
+    const matte = view === "matte";
+    // effect alpha as gray: the layer turned white, keeping its alpha
+    const whiten = (c: HTMLCanvasElement) => {
+      const cx = ctx2d(c);
+      cx.globalCompositeOperation = "source-in";
+      cx.fillStyle = "#fff";
+      cx.fillRect(0, 0, w, h);
+      return c;
+    };
+    x.globalCompositeOperation = matte ? "source-over" : "lighter";
+    if (occlude && plan.frontGlow > 0) {
+      // split glow (R22): the procedural effect only (no plate), unoccluded, at 0.35 over the subject
+      const front = this.drawEffect(plan, palette, layers, w, h, false, false);
       x.globalAlpha = plan.frontGlow;
-      x.drawImage(this.drawEffect(plan, palette, layers, w, h, false), 0, 0);
+      x.drawImage(matte ? whiten(front) : front, 0, 0);
       x.globalAlpha = 1;
     }
     const fx = this.drawEffect(plan, palette, layers, w, h, occlude);
-    if (view === "matte") {
-      // effect alpha as gray: the layer turned white, keeping its alpha
-      const fxc = ctx2d(fx);
-      fxc.globalCompositeOperation = "source-in";
-      fxc.fillStyle = "#fff";
-      fxc.fillRect(0, 0, w, h);
-      x.globalCompositeOperation = "source-over";
-      x.drawImage(fx, 0, 0);
-      return;
-    }
-    x.globalCompositeOperation = "lighter";
-    x.drawImage(fx, 0, 0);
+    x.drawImage(matte ? whiten(fx) : fx, 0, 0);
     x.globalCompositeOperation = "source-over";
   }
 }

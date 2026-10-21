@@ -526,6 +526,20 @@ def test_mask_edit_replaces_its_frame(proj):
     assert proj.asset(m["masks_zip_asset_id"]).meta_json["mask_edit_frames"] == [50]
 
 
+def test_rgba_mask_edit_uses_its_alpha_like_the_inspect_step(proj):
+    """A mask edit decodes the same way everywhere (``load_mask_png``): RGBA -> the alpha channel. White RGB with
+    the mask in alpha must not turn into an all-white frame."""
+    proj.prepare("stomp_landscape.mp4")
+    alpha = np.zeros((360, 640), np.uint8)
+    alpha[100:250, 200:350] = 255
+    rgba = np.dstack([np.full((360, 640, 3), 255, np.uint8), alpha])
+    aid = _put_mask_edit(proj, Image.fromarray(rgba, "RGBA"))
+    proj.revise(subject_prompts=BODY_PROMPT, mask_edits=[{"frame": 50, "asset_id": aid}])
+    m = proj.run("vfx.track").result_json["masks"]
+    seq = _masks(proj, {"masks": m, "frame_count": 120})
+    assert np.array_equal(seq.masks[50] > 127, alpha > 127)
+
+
 def _load_make_fixtures():
     import importlib.util
 

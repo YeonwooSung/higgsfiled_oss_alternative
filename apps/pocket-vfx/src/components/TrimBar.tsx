@@ -65,7 +65,7 @@ export function TrimBar({ sourceMs, trim, onChange, onScrub, filmstripUrl, thumb
     <div role="slider" tabIndex={disabled ? -1 : 0} aria-label={label} aria-valuemin={0} aria-valuemax={Math.round(sourceMs)}
       aria-valuenow={Math.round(at)} aria-valuetext={value} aria-disabled={disabled || undefined}
       onPointerDown={down(kind)} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onKeyDown={key(kind)}
-      className={cx("group absolute inset-y-0 z-20 flex w-11 -translate-x-1/2 touch-none items-center justify-center outline-none",
+      className={cx("group absolute inset-y-0 z-20 flex w-[44px] -translate-x-1/2 touch-none items-center justify-center outline-none",
         disabled ? "cursor-not-allowed" : "cursor-ew-resize")}
       style={{ left: pct(at, sourceMs) }}>
       <span className={cx("flex h-full w-3 items-center justify-center rounded-[4px] bg-accent transition-transform duration-150",

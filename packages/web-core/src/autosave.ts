@@ -15,6 +15,7 @@ export class Autosaver<C> {
   private pending: C | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private saving = false;
+  private inFlight: Promise<void> | null = null;
 
   constructor(private opts: AutosaverOptions<C>) {
     this.revision = opts.revision;
@@ -27,31 +28,56 @@ export class Autosaver<C> {
   schedule(config: C): void {
     this.pending = config;
     if (this.timer) clearTimeout(this.timer);
-    this.timer = setTimeout(() => void this.flush(), this.opts.delayMs ?? AUTOSAVE_DEBOUNCE_MS);
+    this.timer = setTimeout(() => void this.run(), this.opts.delayMs ?? AUTOSAVE_DEBOUNCE_MS);
   }
 
+  /**
+   * Save now: waits for a save already in flight, then sends any pending edit, until nothing is left to save.
+   * Afterwards `revision` is the latest saved revision (callers pin jobs to it).
+   */
   async flush(): Promise<void> {
+    if (this.timer) clearTimeout(this.timer);
     this.timer = null;
-    if (this.saving || this.pending === null) return;
+    while (this.inFlight || this.pending !== null) {
+      if (this.inFlight) await this.inFlight;
+      else await this.saveOnce();
+    }
+  }
+
+  /** Debounce timer: one save, then the next pending edit unless a newer debounce is already scheduled. */
+  private async run(): Promise<void> {
+    this.timer = null;
+    if (this.inFlight) return; // the in-flight save picks the pending edit up when it finishes
+    await this.saveOnce();
+  }
+
+  private saveOnce(): Promise<void> {
+    if (this.pending === null) return Promise.resolve();
     const config = this.pending;
     this.pending = null;
     this.saving = true;
-    let outcome: () => void;
-    try {
-      const res = await this.opts.save(this.revision, config);
-      this.revision = res.revision;
-      outcome = () => this.opts.onSaved(res.revision, res.config);
-    } catch (e) {
-      if ((e as { status?: number }).status === 409) {
-        this.pending = null;
-        outcome = () => this.opts.onConflict(e);
-      } else {
-        outcome = () => this.opts.onError(e);
+    const p = (async () => {
+      let outcome: () => void;
+      try {
+        const res = await this.opts.save(this.revision, config);
+        this.revision = res.revision;
+        outcome = () => this.opts.onSaved(res.revision, res.config);
+      } catch (e) {
+        if ((e as { status?: number }).status === 409) {
+          this.pending = null;
+          outcome = () => this.opts.onConflict(e);
+        } else {
+          outcome = () => this.opts.onError(e);
+        }
       }
-    }
-    this.saving = false;
-    outcome();
-    if (this.pending !== null && !this.timer) await this.flush();
+      this.saving = false;
+      this.inFlight = null;
+      outcome();
+    })();
+    this.inFlight = p;
+    return p.then(() => {
+      if (this.pending !== null && !this.timer && !this.inFlight) return this.saveOnce();
+    });
   }
 
   cancel(): void {

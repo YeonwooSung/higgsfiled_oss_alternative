@@ -203,10 +203,10 @@ function EditorBody({ project, config, desktop, onTrim, t }: {
   const topActions = (
     <>
       <Button size="sm" variant="ghost" onClick={() => void back()} disabled={leaving} title={t("backToTrim")}
-        icon={<Scissors className="h-4 w-4" aria-hidden />} className="px-2"><span className="hidden lg:inline">{t("backToTrim")}</span></Button>
-      <Button size="sm" variant="ghost" onClick={undo} disabled={!canUndo} aria-label={t("undo")} title={`${t("undo")} (⌘Z)`} className="px-2"
+        icon={<Scissors className="h-4 w-4" aria-hidden />} className="min-w-[44px] px-2 md:min-w-0"><span className="hidden lg:inline">{t("backToTrim")}</span></Button>
+      <Button size="sm" variant="ghost" onClick={undo} disabled={!canUndo} aria-label={t("undo")} title={`${t("undo")} (⌘Z)`} className="min-w-[44px] px-2 md:min-w-0"
         icon={<Undo2 className="h-4 w-4" aria-hidden />} />
-      <Button size="sm" variant="ghost" onClick={redo} disabled={!canRedo} aria-label={t("redo")} title={`${t("redo")} (⇧⌘Z)`} className="px-2"
+      <Button size="sm" variant="ghost" onClick={redo} disabled={!canRedo} aria-label={t("redo")} title={`${t("redo")} (⇧⌘Z)`} className="min-w-[44px] px-2 md:min-w-0"
         icon={<Redo2 className="h-4 w-4" aria-hidden />} />
       <Button size="sm" variant="primary" disabled title={t("exportAfterRender")} className="hidden sm:inline-flex" icon={<Download className="h-4 w-4" aria-hidden />}>
         <span className="hidden sm:inline">{t("export")}</span>

@@ -75,4 +75,28 @@ describe("Autosaver", () => {
     expect(dirtyAtSave).toBe(false);
     vi.useRealTimers();
   });
+
+  it("flush() waits for the save in flight and the edit queued behind it, then reports the latest revision", async () => {
+    let release!: () => void;
+    const calls: number[] = [];
+    const save = vi.fn(async (rev: number, cfg: { v: number }) => {
+      calls.push(cfg.v);
+      if (cfg.v === 1) await new Promise<void>((r) => (release = r));
+      return { revision: rev + 1, config: cfg };
+    });
+    const s = new Autosaver({ save, revision: 1, onSaved: () => {}, onConflict: () => {}, onError: () => {} });
+    s.schedule({ v: 1 });
+    const first = s.flush(); // v1 is now in flight
+    await Promise.resolve();
+    s.schedule({ v: 2 }); // edited during the save, debounce pending
+    let done = false;
+    const second = s.flush().then(() => (done = true));
+    await new Promise((r) => setTimeout(r, 5));
+    expect(done).toBe(false); // must not return while v1 is still saving
+    release();
+    await Promise.all([first, second]);
+    expect(calls).toEqual([1, 2]);
+    expect(s.revision).toBe(3);
+    expect(s.dirty).toBe(false);
+  });
 });

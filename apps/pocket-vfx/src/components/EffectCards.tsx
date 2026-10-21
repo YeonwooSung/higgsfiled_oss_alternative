@@ -39,7 +39,8 @@ export function EffectCards({ projectId }: { projectId: string }) {
     setError(null);
     try {
       const { asset } = await api.uploadAsset(projectId, "clean_plate", f, f.name);
-      useEditor.getState().update((c) => { c.clean_plate_asset_id = asset.id; });
+      // linking an upload is not an undo step (undo must not orphan the uploaded frame)
+      useEditor.getState().link((c) => { c.clean_plate_asset_id = asset.id; });
       await useEditor.getState().refresh();
     } catch (e) {
       setError(errorText(e, t));

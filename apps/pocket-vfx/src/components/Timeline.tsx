@@ -65,7 +65,7 @@ export function Timeline({ n, filmstripId, track, trackFresh, compact }: {
         step(e, f, (v) => useEditor.getState().dragTiming(h, v, `key:${h}`));
       }}
       title={t(`handle_${h}`)}
-      className={cx("absolute top-0 z-10 flex h-full w-11 -translate-x-1/2 cursor-ew-resize touch-none items-start justify-center md:w-6",
+      className={cx("absolute top-0 z-10 flex h-full w-[44px] -translate-x-1/2 cursor-ew-resize touch-none items-start justify-center md:w-6",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent")}
       style={{ left: pct(f, n) }}>
       {h === "peak" ? (
@@ -84,7 +84,7 @@ export function Timeline({ n, filmstripId, track, trackFresh, compact }: {
       <div className="flex items-center gap-3">
         <button type="button" onClick={() => useEditor.getState().setPlaying(!playing)} aria-label={playing ? t("pause") : t("playClip")}
           title={`${playing ? t("pause") : t("playClip")} (Space)`}
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-button border border-border text-ink hover:bg-app md:h-8 md:w-8">
+          className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-button border border-border text-ink hover:bg-app md:h-8 md:w-8">
           {playing ? <Pause className="h-4 w-4" aria-hidden /> : <Play className="h-4 w-4" aria-hidden />}
         </button>
         <span className="tabular text-xs text-muted" aria-live="off">

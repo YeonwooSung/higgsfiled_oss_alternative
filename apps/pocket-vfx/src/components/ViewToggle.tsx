@@ -25,7 +25,7 @@ export function ViewToggle({ hasMask }: { hasMask: boolean }) {
         {VIEWS.map((v) => (
           <button key={v.id} type="button" role="radio" aria-checked={view === v.id} onClick={() => setView(v.id)}
             title={v.id === "mask" && !hasMask ? t("viewMaskNone") : undefined}
-            className={cx("min-h-[44px] rounded-[6px] px-2 text-xs md:min-h-7",
+            className={cx("min-h-[44px] min-w-[44px] rounded-[6px] px-2 text-xs md:min-h-7 md:min-w-0",
               view === v.id ? "bg-panel font-medium text-ink" : "text-muted hover:text-ink")}>
             {t(v.label)}
           </button>

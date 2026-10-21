@@ -148,7 +148,13 @@ export function Stage(props: StageProps) {
   // ---- Refine mask brush (proxy-size canvas; alpha = mask)
   const brush = useRef<HTMLCanvasElement>(null);
   const [brushSize, setBrushSize] = useState(12);
-  const [brushDirty, setBrushDirty] = useState(false);
+  const [brushDirty, setBrushDirtyState] = useState(false);
+  const brushDirtyRef = useRef(false);
+  const brushKey = useRef<string | null>(null);
+  const setBrushDirty = (v: boolean) => {
+    brushDirtyRef.current = v;
+    setBrushDirtyState(v);
+  };
   const [applying, setApplying] = useState(false);
   const [brushError, setBrushError] = useState<string | null>(null);
   const lastPaint = useRef<[number, number] | null>(null);
@@ -156,7 +162,15 @@ export function Stage(props: StageProps) {
   const maskBitmap = props.mask && props.mask.total === n ? props.mask.frames[frame] ?? null : null;
   useEffect(() => {
     const c = brush.current;
-    if (tool !== "mask" || !c) return;
+    if (tool !== "mask" || !c) {
+      brushKey.current = null; // leaving the tool discards the strokes
+      brushDirtyRef.current = false;
+      return;
+    }
+    // Same frame and edit as the strokes in progress (e.g. the mask frame decoded late): keep the strokes.
+    const key = `${frame}|${editId ?? ""}`;
+    if (brushKey.current === key && brushDirtyRef.current) return;
+    brushKey.current = key;
     let cancelled = false;
     const x = c.getContext("2d")!;
     x.globalCompositeOperation = "source-over";
@@ -164,6 +178,7 @@ export function Stage(props: StageProps) {
     setBrushDirty(false);
     setBrushError(null);
     const tint = (img: CanvasImageSource) => {
+      if (brushDirtyRef.current) return; // the user started painting before the start mask arrived
       x.fillStyle = BRUSH_COLOR;
       x.fillRect(0, 0, c.width, c.height);
       x.globalCompositeOperation = "destination-in";
@@ -309,7 +324,8 @@ export function Stage(props: StageProps) {
   const proxyUrl = props.proxyUrl;
   const cleanPlateUrl = useAssetUrl(tool === "clean_plate" ? assetById(project, config.clean_plate_asset_id) : undefined);
   const active = tool !== "none" && tool !== "clean_plate";
-  const nudge = (dx: number, dy: number) => useEditor.getState().nudge(dx, dy, [pw, ph]);
+  // a nudge on a tracked frame starts from the position shown there (like a click there)
+  const nudge = (dx: number, dy: number) => useEditor.getState().nudge(dx, dy, [pw, ph], current);
 
   return (
     <div ref={area} data-region="stage" className="relative flex min-h-[200px] flex-1 items-center justify-center overflow-hidden bg-stage">
@@ -345,7 +361,7 @@ export function Stage(props: StageProps) {
 
       {zoom.k > 1 && (
         <button type="button" onClick={() => setZoom({ k: 1, x: 0, y: 0 })} aria-label={t("resetZoom")}
-          className="absolute right-2 top-16 flex h-11 w-11 items-center justify-center rounded-button border border-border bg-app/90 text-ink md:top-12">
+          className="absolute right-2 top-16 flex h-[44px] w-[44px] items-center justify-center rounded-button border border-border bg-app/90 text-ink md:top-12">
           <ZoomOut className="h-4 w-4" aria-hidden />
         </button>
       )}
@@ -367,7 +383,7 @@ export function Stage(props: StageProps) {
             <PlusMinus label={pointLabel} addText={t("brushAdd")} removeText={t("brushErase")} />
             <label className="flex items-center gap-1.5 text-xs text-muted">
               {t("brushSize")}
-              <input type="range" min={2} max={48} value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))} className="w-20 accent-[#FF9A52]" />
+              <input type="range" min={2} max={48} value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))} className="h-[44px] w-20 accent-[#FF9A52] md:h-auto" />
             </label>
             <Button size="sm" variant="primary" disabled={!brushDirty || applying} onClick={() => void applyBrush()}
               icon={applying ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Check className="h-4 w-4" aria-hidden />}>
@@ -427,7 +443,7 @@ function PlusMinus({ label, addText, removeText }: { label: 0 | 1; addText: stri
 function NudgeButton({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
   return (
     <button type="button" aria-label={label} title={label} onClick={onClick}
-      className="flex h-11 w-11 items-center justify-center rounded-button border border-border bg-app/90 text-ink active:bg-panel">
+      className="flex h-[44px] w-[44px] items-center justify-center rounded-button border border-border bg-app/90 text-ink active:bg-panel">
       {children}
     </button>
   );

@@ -93,8 +93,12 @@ interface EditorState {
   dragTiming: (handle: TimingHandle, frame: number, coalesce?: string) => void;
   /** Anchor tool at the current frame: move the anchor, or (tracked, other frame) set a correction keyframe. */
   placeAnchor: (x: number, y: number, coalesce?: string) => void;
-  /** Fine adjust by whole proxy pixels: the correction at the current frame, else the anchor. */
-  nudge: (dx: number, dy: number, proxy: [number, number]) => void;
+  /**
+   * Fine adjust by whole proxy pixels, with the same rule as `placeAnchor`: on a tracked frame other than the anchor
+   * frame it sets the correction there, starting from that correction or from `shown` (the tracked position drawn
+   * on this frame); otherwise it moves the anchor.
+   */
+  nudge: (dx: number, dy: number, proxy: [number, number], shown?: [number, number] | null) => void;
   /** Select subject: add a point on the current frame, or remove the point within `hit` (uv) of it. */
   togglePromptPoint: (x: number, y: number, label: 0 | 1, hit: number) => void;
   /** Refine mask: the uploaded mask_edit replaces any earlier edit of `frame`. */
@@ -244,17 +248,13 @@ export const useEditor = create<EditorState>((set, get) => {
       set({ note: outsideTrackWindow(cfg.anchor, frame) ? { code: "outside_window", frame, window: cfg.anchor.track_window_frames! } : null });
     },
 
-    nudge: (dx, dy, [pw, ph]) => {
-      const { config: cfg, frame } = get();
+    nudge: (dx, dy, [pw, ph], shown) => {
+      const { config: cfg, frame, trackBasis } = get();
       if (!cfg) return;
+      const correction = trackBasis !== null && cfg.anchor.follow && frame !== cfg.anchor.frame;
       const k = cfg.corrections.find((c) => c.frame === frame);
-      const at = k ?? cfg.anchor;
-      const u = clamp01(at.x + dx / pw), v = clamp01(at.y + dy / ph);
-      get().update((c) => {
-        const target = k ? c.corrections.find((q) => q.frame === frame)! : c.anchor;
-        target.x = u;
-        target.y = v;
-      }, "nudge");
+      const [x, y] = correction ? (k ? [k.x, k.y] : shown ?? [cfg.anchor.x, cfg.anchor.y]) : [cfg.anchor.x, cfg.anchor.y];
+      get().placeAnchor(x + dx / pw, y + dy / ph, "nudge");
     },
 
     togglePromptPoint: (x, y, label, hit) => {

@@ -22,6 +22,7 @@ import numpy as np
 from oc_api.models import Asset, Job
 from oc_api.pocket_vfx.jobs import track_masks
 from open_creative.comfy.profiles import get_profile
+from open_creative.media.image import MediaError, load_mask_png
 from open_creative.media.video import encode_mp4
 from open_creative.pocket_vfx.masks import (
     MaskFormatError,
@@ -33,7 +34,6 @@ from open_creative.pocket_vfx.masks import (
     read_masks_zip,
     write_masks_zip,
 )
-from PIL import Image
 from sqlalchemy import select
 
 from ..stages import JobRun, StageFailed
@@ -61,12 +61,16 @@ def _reusable(run: JobRun, key: str) -> dict | None:
 
 def _edits(run: JobRun, cfg, pw: int, ph: int) -> dict[int, np.ndarray]:
     """``config.mask_edits`` (role ``mask_edit`` PNGs of any size) as proxy-size masks; a later edit of the same
-    frame wins."""
+    frame wins. Decoded like the inspect step (``load_mask_png``: alpha of an RGBA / LA PNG, else luminance), then
+    thresholded at 0.5."""
     out: dict[int, np.ndarray] = {}
     for e in cfg.mask_edits:
         asset = ready_asset(run, e.asset_id, "mask_edit", "mask_edit_missing")
-        with Image.open(run.fetch(asset, f"mask_edit_{e.frame}.png")) as im:
-            out[e.frame] = edit_to_proxy(np.asarray(im.convert("L")), pw, ph)
+        try:
+            mask = load_mask_png(run.fetch(asset, f"mask_edit_{e.frame}.png").read_bytes())
+        except MediaError as err:
+            raise StageFailed("mask_edit_invalid", "A mask edit could not be read.") from err
+        out[e.frame] = edit_to_proxy(mask, pw, ph)
     return out
 
 

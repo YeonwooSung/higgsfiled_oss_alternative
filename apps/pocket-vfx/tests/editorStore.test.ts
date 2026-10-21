@@ -129,6 +129,21 @@ describe("anchor tool", () => {
     expect(s().config!.corrections).toEqual([{ frame: 70, x: 0.3, y: 0.6 }]);
     expect(s().note).toEqual({ code: "outside_window", frame: 70, window: 10 });
   });
+  it("a nudge on a tracked frame other than the anchor frame sets a correction from the shown tracked position", () => {
+    s().setTrackBasis(trackInputs(s().config!));
+    s().setFrame(48);
+    s().nudge(1, 0, [640, 360], [0.3, 0.6]);
+    expect(s().config!.anchor).toMatchObject({ frame: 43, x: 0.5, y: 0.7 });
+    expect(s().config!.corrections).toHaveLength(1);
+    expect(s().config!.corrections[0].frame).toBe(48);
+    expect(s().config!.corrections[0].x).toBeCloseTo(0.3 + 1 / 640, 12);
+    expect(s().config!.corrections[0].y).toBeCloseTo(0.6, 12);
+    // the next nudge moves that correction, and both nudges are one undo step
+    s().nudge(0, 1, [640, 360], [0.9, 0.9]);
+    expect(s().config!.corrections[0].y).toBeCloseTo(0.6 + 1 / 360, 12);
+    s().undo();
+    expect(s().config!.corrections).toEqual([]);
+  });
   it("nudges the anchor by whole proxy pixels", () => {
     s().nudge(1, -1, [640, 360]);
     expect(s().config!.anchor.x).toBeCloseTo(0.5 + 1 / 640, 12);
