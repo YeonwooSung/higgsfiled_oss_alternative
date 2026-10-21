@@ -3,6 +3,7 @@
 Run: uv run python fixtures/pocket-vfx/make_fixtures.py
      uv run python fixtures/pocket-vfx/make_fixtures.py --plates   (bundled effect plates only)
      uv run python fixtures/pocket-vfx/make_fixtures.py --sfx      (bundled SFX WAVs + preset peak_offset_ms)
+     uv run python fixtures/pocket-vfx/make_fixtures.py --parity   (parity.v1.json for the TS ports)
 
 A seeded textured ground + a body-shaped blob that stomps across the frame while one arm swings a
 distinct yellow "hand" disk. Scene content is a pure function of time, so ground truth is exact.
@@ -27,6 +28,9 @@ emissive gray on black, ``open_creative.pocket_vfx.plate.procedural_plate``): <i
 presets/pocket-vfx/plates/manifest.json (sha256, seed, style, license).
 --sfx writes presets/pocket-vfx/sfx/{impact,aura,blink}_v1.wav (MIT, synthesized, 48 kHz mono 16-bit) and sets each
 preset's ``sfx.peak_offset_ms`` to the measured energy peak of its file (repo presets and the packaged mirror).
+--parity writes parity.v1.json: Python reference values the apps/pocket-vfx TS ports must reproduce (frame_index,
+frame_count, effect_window, timing_errors, the Impact Wave ring curve and anchor glow, plate_indices); checked by
+apps/pocket-vfx/tests/parity.test.ts and kept fresh by nodes/open_creative/tests/test_pv_parity.py.
 Fixed seeds and bitexact muxing -> byte-identical outputs on the same FFmpeg/x264 build.
 """
 
@@ -45,13 +49,21 @@ import cv2
 import numpy as np
 from open_creative.media.video_ingest import _frame_pts_ms
 from open_creative.pocket_vfx.audio import RATE, energy_peak_ms
-from open_creative.pocket_vfx.matte import loop_seam_ok
+from open_creative.pocket_vfx.matte import PlateLengthError, loop_seam_ok, plate_indices
 from open_creative.pocket_vfx.plate import (
     BUNDLED_FRAMES,
     BUNDLED_SIZES,
     procedural_plate,
 )
 from open_creative.pocket_vfx.presets import load_presets, presets_path
+from open_creative.pocket_vfx.procedural import impact_curve, impact_glow
+from open_creative.pocket_vfx.timeline import (
+    EffectWindow,
+    effect_window,
+    frame_count,
+    frame_index,
+    timing_errors,
+)
 from PIL import Image
 
 OUT = Path(__file__).parent
@@ -396,6 +408,80 @@ def sfx():
     print(peaks)
 
 
+# ---------------------------------------------------------------------------- TS parity
+
+PARITY = OUT / "parity.v1.json"
+PARITY_T_MS = [0, 1, 20, 1000 / 48, 20.8333, 20.8334, 20.84, 41.6666, 41.6667, 62.4999, 62.5, 1000 / 3, 1000,
+               1400, 1800, 3400, 4979, 4979.1667, 4999, 5000, 12345.678, -20, -20.8334, -21, 1e-9]
+PARITY_DURATIONS = [1000, 1001, 1020, 1021, 2500, 4979, 4999, 5000]
+PARITY_EFFECTS = [  # (start_ms, peak_ms, end_ms, duration_ms)
+    (1400, 1800, 3400, 5000), (0, 0, 5000, 5000), (0, 4990, 6000, 5000), (-100, 500, 900, 1000),
+    (2000, 1800, 3400, 5000), (1400, 3500, 3400, 5000), (-5, -10, -20, 5000), (2000, 1800, 5200, 5000),
+    (300, 300, 300, 1000), (0, 1000, 1000, 1000),
+]
+PARITY_IMPACT = [  # (window, short side px, scale, intensity)
+    ((34, 43, 82), 720, 1.0, 0.8), ((34, 43, 82), 360, 0.37, 0.55), ((10, 10, 12), 720, 0.5, 1.0),
+    ((20, 30, 30), 720, 2.0, 0.25), ((5, 9, 89), 360, 1.25, 1.0), ((0, 3, 9), 720, 0.25, 0.0),
+]
+PARITY_PLATES = [  # (plate frames, window frames, loopable, seam_ok)
+    (49, 1, False, False), (49, 20, False, False), (49, 24, False, False), (49, 25, False, False),
+    (49, 49, False, False), (49, 72, False, False), (49, 98, False, False), (1, 1, False, False),
+    (1, 2, False, False), (3, 2, False, False), (9, 5, False, False), (17, 12, False, False), (49, 99, True, True),
+    (49, 130, True, True), (49, 99, False, False), (49, 99, True, False), (0, 5, False, False), (5, 0, False, False),
+]
+
+
+def _plate_case(p, w, loopable, seam_ok):
+    case = {"plate_frames": p, "window_frames": w, "loopable": loopable, "seam_ok": seam_ok}
+    try:
+        idx = plate_indices(p, w, loopable=loopable, seam_ok=seam_ok)
+    except PlateLengthError:
+        return {**case, "kind": "plate_length", "indices": None}
+    except ValueError:
+        return {**case, "kind": "invalid", "indices": None}
+    kind = "trim" if p > 2 * w else "retime" if w <= 2 * p else "loop"
+    return {**case, "kind": kind, "indices": idx}
+
+
+def _impact_case(window, short, scale, intensity):
+    win = EffectWindow(*window)
+    params = {"scale": scale, "intensity": intensity}
+    flash = impact_glow(win, win.peak, params, short)
+    samples = []
+    for f in range(win.start - 2, win.end + 3):
+        curve, glow = impact_curve(win, f, params, short), impact_glow(win, f, params, short)
+        samples.append({"frame": f, "curve": list(curve) if curve else None, "glow": list(glow) if glow else None})
+    return {"window": list(window), "short_side": short, "scale": scale, "intensity": intensity,
+            "r_flash": flash[0], "tau": min(max((win.end - win.peak) / 4.0, 0.75), 3.0), "samples": samples}
+
+
+def _window(w: EffectWindow) -> list[int]:
+    return [w.start, w.peak, w.end]
+
+
+def parity_build() -> dict:
+    effects = [({"start_ms": s, "peak_ms": p, "end_ms": e}, d) for s, p, e, d in PARITY_EFFECTS]
+    return {
+        "version": 1,
+        "fps": 24,
+        "frame_index": [{"t_ms": t, "frame": frame_index(t)} for t in PARITY_T_MS],
+        "frame_count": [{"duration_ms": d, "n": frame_count(d)} for d in PARITY_DURATIONS],
+        "effect_window": [{"effect": e, "duration_ms": d, "window": _window(effect_window(e, d))}
+                          for e, d in effects],
+        "timing_errors": [{"effect": e, "duration_ms": d, "errors": timing_errors(e, d)} for e, d in effects],
+        "impact": [_impact_case(*c) for c in PARITY_IMPACT],
+        "plate_indices": [_plate_case(*c) for c in PARITY_PLATES],
+    }
+
+
+def parity_dumps(doc: dict) -> str:
+    return json.dumps(doc, indent=1) + "\n"
+
+
+def parity():
+    PARITY.write_text(parity_dumps(parity_build()))
+
+
 if __name__ == "__main__":
     import sys
 
@@ -403,5 +489,7 @@ if __name__ == "__main__":
         plates()
     elif "--sfx" in sys.argv[1:]:
         sfx()
+    elif "--parity" in sys.argv[1:]:
+        parity()
     else:
         main()

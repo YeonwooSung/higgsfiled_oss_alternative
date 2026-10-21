@@ -58,6 +58,22 @@ def impact_curve(window: EffectWindow, frame: int, params: dict, short_side: flo
     return radius, params["intensity"] * (1.0 - s) ** 1.5
 
 
+def impact_glow(window: EffectWindow, frame: int, params: dict, short_side: float) -> tuple[float, float, float] | None:
+    """Anchor glow ``(radius_px, alpha, heat)`` at ``frame``; ``None`` outside ``[start, end]``. Before the peak a
+    charge glow ramps up from ``start`` (frame ``start`` is already visible); from the peak on, the impact flash
+    (radius ``0.13 * short_side * scale``) decays with tau = clamp((end - peak) / 4, 0.75, 3) frames: the fastest
+    decay that still reads at 24 fps, shorter for short windows."""
+    if frame < window.start or frame > window.end:
+        return None
+    r_flash = 0.13 * short_side * params["scale"]
+    if frame < window.peak:
+        t = smoothstep((frame - window.start + 1) / (window.peak - window.start + 1))
+        return r_flash * (0.35 + 0.65 * t), params["intensity"] * t, t
+    tau = min(max((window.end - window.peak) / 4.0, 0.75), 3.0)
+    k = math.exp(-(frame - window.peak) / tau)
+    return r_flash, params["intensity"] * k, k
+
+
 def render_effect(
     preset_id: str,
     params: dict,
@@ -100,18 +116,14 @@ def render_effect(
 
 
 def _impact(p, pal, window, frame, anchor, w, h, seed) -> list[_Patch | None]:
-    if frame < window.start or frame > window.end:
+    short, scale = min(w, h), p["scale"]
+    glow = impact_glow(window, frame, p, short)
+    if glow is None:
         return []
-    short, scale, intensity = min(w, h), p["scale"], p["intensity"]
     cx, cy = float(anchor[0]), float(anchor[1])
-    r_flash = 0.13 * short * scale
-    if frame < window.peak:  # charge glow ramping from start; frame `start` is already visible
-        t = smoothstep((frame - window.start + 1) / (window.peak - window.start + 1))
-        return [_glow(cx, cy, r_flash * (0.35 + 0.65 * t), intensity * t, t, pal, w, h)]
-    # impact flash: fastest decay that still reads at 24 fps, shorter for short windows
-    tau = min(max((window.end - window.peak) / 4.0, 0.75), 3.0)
-    k = math.exp(-(frame - window.peak) / tau)
-    patches = [_glow(cx, cy, r_flash, intensity * k, k, pal, w, h)]
+    patches = [_glow(cx, cy, *glow, pal, w, h)]  # charge glow before the peak, impact flash from it
+    if frame < window.peak:
+        return patches
     radius, ring_a = impact_curve(window, frame, p, short)
     s = min((frame - window.peak) / max(window.end - window.peak, 1), 1.0)
     squash, rot = float(p["squash"]), math.radians(float(p["rotation_deg"]))

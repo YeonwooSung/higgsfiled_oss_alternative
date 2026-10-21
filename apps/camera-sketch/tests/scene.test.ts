@@ -5,7 +5,7 @@ import { SAMPLES, jobLabelKey, analysisState, depthToLink, handledScenesOnLoad, 
 
 const asset = (p: Partial<Asset>): Asset => ({
   id: "a", project_id: "p", role: "scene", state: "ready", sha256: null, mime: "image/png", bytes: 1, width: 1, height: 1,
-  frame_count: null, duration_ms: null, error_code: null, filename: null, source_asset_id: null, job_id: null, meta: {},
+  frame_count: null, fps_num: null, fps_den: null, duration_ms: null, error_code: null, filename: null, source_asset_id: null, job_id: null, meta: {},
   created_at: "2026-01-01T00:00:00Z", ...p,
 });
 const cfg = (p: Partial<CameraSketchConfig> = {}) => ({ scene_asset_id: null, depth_asset_id: null, ...p }) as CameraSketchConfig;
