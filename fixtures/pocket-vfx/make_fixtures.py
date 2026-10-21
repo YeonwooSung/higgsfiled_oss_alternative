@@ -2,6 +2,7 @@
 
 Run: uv run python fixtures/pocket-vfx/make_fixtures.py
      uv run python fixtures/pocket-vfx/make_fixtures.py --plates   (bundled effect plates only)
+     uv run python fixtures/pocket-vfx/make_fixtures.py --sfx      (bundled SFX WAVs + preset peak_offset_ms)
 
 A seeded textured ground + a body-shaped blob that stomps across the frame while one arm swings a
 distinct yellow "hand" disk. Scene content is a pure function of time, so ground truth is exact.
@@ -24,6 +25,8 @@ stomp_landscape.mp4 and rotated_portrait.mp4 are copied to apps/pocket-vfx/publi
 emissive gray on black, ``open_creative.pocket_vfx.plate.procedural_plate``): <id>.mp4 768x448 and
 <id>_portrait.mp4 448x768, 49 frames @24 fps, periodic so the loop seam passes ``loop_seam_ok``, plus
 presets/pocket-vfx/plates/manifest.json (sha256, seed, style, license).
+--sfx writes presets/pocket-vfx/sfx/{impact,aura,blink}_v1.wav (MIT, synthesized, 48 kHz mono 16-bit) and sets each
+preset's ``sfx.peak_offset_ms`` to the measured energy peak of its file (repo presets and the packaged mirror).
 Fixed seeds and bitexact muxing -> byte-identical outputs on the same FFmpeg/x264 build.
 """
 
@@ -33,6 +36,7 @@ import math
 import shutil
 import subprocess
 import tempfile
+import wave
 import zipfile
 from io import BytesIO
 from pathlib import Path
@@ -40,6 +44,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 from open_creative.media.video_ingest import _frame_pts_ms
+from open_creative.pocket_vfx.audio import RATE, energy_peak_ms
 from open_creative.pocket_vfx.matte import loop_seam_ok
 from open_creative.pocket_vfx.plate import (
     BUNDLED_FRAMES,
@@ -325,7 +330,78 @@ def plates():
          "fps": 24, "files": files}, indent=1) + "\n")
 
 
+# ---------------------------------------------------------------------------- bundled SFX
+
+
+def _env(t, peak, rise, fall):
+    """Smooth one-peak envelope: raised-cosine rise over ``rise`` s, exponential decay with time constant ``fall``."""
+    up = 0.5 - 0.5 * np.cos(np.pi * np.clip(t / rise, 0, 1)) if rise else np.ones_like(t)
+    return np.where(t < peak, up, np.exp(-(t - peak) / fall))
+
+
+def sfx_impact(rng):
+    """Low thump (pitch drop 90 -> 45 Hz) + a short noise burst; energy peak ~ 80 ms."""
+    t = np.arange(int(0.9 * RATE)) / RATE
+    thump = np.sin(2 * np.pi * (45 * t + 45 * 0.06 * (1 - np.exp(-t / 0.06)))) * _env(t, 0.08, 0.08, 0.16)
+    burst = rng.standard_normal(len(t)) * np.exp(-0.5 * ((t - 0.08) / 0.012) ** 2)
+    return 0.8 * thump + 0.45 * burst
+
+
+def sfx_aura(rng):
+    """Rising shimmer: three detuned partials sweeping up, tremolo, energy peak ~ 0.9 s, then a decay."""
+    t = np.arange(int(1.6 * RATE)) / RATE
+    sig = sum(a * np.sin(2 * np.pi * (f0 * t + 0.5 * k * t * t) + ph)
+              for f0, k, a, ph in ((330, 380, 1.0, 0.0), (497, 570, 0.7, 1.3), (743, 850, 0.5, 2.1)))
+    sig = sig * (0.75 + 0.25 * np.sin(2 * np.pi * 9 * t)) * _env(t, 0.9, 0.9, 0.12)
+    return 0.3 * sig + 0.03 * rng.standard_normal(len(t)) * _env(t, 0.9, 0.9, 0.12)
+
+
+def sfx_blink(rng):
+    """Sparkly sweep: a falling chirp plus random high pings; energy peak ~ 0.25 s."""
+    t = np.arange(int(0.7 * RATE)) / RATE
+    sweep = np.sin(2 * np.pi * (3200 * t - 3000 * t * t / (2 * 0.7))) * _env(t, 0.25, 0.25, 0.12)
+    pings = np.zeros_like(t)
+    for at, f in zip(rng.uniform(0.05, 0.5, 14), rng.uniform(2500, 7000, 14)):
+        s = t - at
+        pings += np.where(s > 0, np.sin(2 * np.pi * f * s) * np.exp(-s / 0.025), 0)
+    return 0.55 * sweep + 0.12 * pings
+
+
+SFX = {"impact_v1": (sfx_impact, 11), "aura_v1": (sfx_aura, 22), "blink_v1": (sfx_blink, 33)}
+
+
+def write_wav(path, x):
+    pcm = np.round(np.clip(x / max(np.abs(x).max(), 1e-9) * 0.9, -1, 1) * 32767).astype("<i2")
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(RATE)
+        w.writeframes(pcm.tobytes())
+    return pcm.astype(np.float64) / 32768
+
+
+def sfx():
+    root = presets_path().parent
+    peaks = {}
+    for stem, (make, seed) in SFX.items():
+        path = root / "sfx" / f"{stem}.wav"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        peaks[f"sfx/{stem}.wav"] = energy_peak_ms(write_wav(path, make(np.random.default_rng(seed))))
+    for target in {presets_path(), Path(presets_path()).parents[2] / "nodes" / "open_creative" / "open_creative"
+                   / "pocket_vfx" / "presets.v1.json"}:
+        doc = json.loads(target.read_text(encoding="utf-8"))
+        for preset in doc["presets"]:
+            preset["sfx"]["peak_offset_ms"] = peaks[preset["sfx"]["file"]]
+        target.write_text(json.dumps(doc, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(peaks)
+
+
 if __name__ == "__main__":
     import sys
 
-    plates() if "--plates" in sys.argv[1:] else main()
+    if "--plates" in sys.argv[1:]:
+        plates()
+    elif "--sfx" in sys.argv[1:]:
+        sfx()
+    else:
+        main()

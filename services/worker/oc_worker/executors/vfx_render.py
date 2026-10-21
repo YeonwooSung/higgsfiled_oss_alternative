@@ -25,8 +25,9 @@ Stages (each stores durable assets; a restarted job resumes after the last finis
   bundled plate is tinted by the palette, then ``place_plate`` puts it behind the effect around the anchor
   (``pocket_vfx.plate``); it is occluded by the subject like the effect.
   An outside-ROI integrity failure fails the job (``roi_integrity``, Ruling R13): no video is stored.
-- ``encode``: final video (audio mux plugs in here, Task 13), output contract probe, ``cover`` PNG of the peak frame
-  and the ``roi_qa`` JSON.
+- ``encode``: final video (the audio plan of ``pocket_vfx.audio`` - kept original audio and/or the preset's bundled
+  SFX aligned to the effect peak - is muxed into a new ``render_video``; no audio -> the silent composite is the
+  deliverable), output contract probe, ``cover`` PNG of the peak frame and the ``roi_qa`` JSON.
 """
 
 from __future__ import annotations
@@ -42,6 +43,7 @@ from oc_api.pocket_vfx.jobs import (
     track_masks,
 )
 from open_creative.media.video import Mp4Writer, decode_frames, probe
+from open_creative.pocket_vfx.audio import mux, plan_audio
 from open_creative.pocket_vfx.composite import FrameInputs, composite_frame
 from open_creative.pocket_vfx.integrity import IntegrityAccumulator, subject_core_cover
 from open_creative.pocket_vfx.masks import (
@@ -131,6 +133,8 @@ def resolve_plate(run: JobRun, cfg, profile: str, preset: dict, window: EffectWi
                 raise StageFailed("plate_mismatch", "This plate belongs to another effect.")
             return None
         path = bundled_path(entry, portrait)
+        if not path.is_file():
+            raise StageFailed("plate_missing", f"The bundled plate {entry['id']} is not installed on this server.")
         doc = {"source": "bundled", "bundled_id": entry["id"], "portrait": portrait, "asset_id": None,
                "tint": cfg.effect.palette, "mock": False}
         loopable = bool(entry["loopable"])
@@ -195,10 +199,25 @@ class PlateLayers:
         return layer
 
 
-def final_video(run: JobRun, cfg, video_id: str) -> tuple[str, bool]:
-    """``(asset id, has_audio)`` of the deliverable MP4. Audio mux (original audio / SFX, Task 13) plugs in here and
-    stores a new muxed ``render_video``; until then the composite video is the deliverable, without audio."""
-    return video_id, False
+def final_video(run: JobRun, cfg, video_id: str, work: Asset, preset: dict,
+                window: EffectWindow) -> tuple[str, dict | None]:
+    """``(asset id, audio summary)`` of the deliverable MP4. Without audio (no kept original, no SFX) the silent
+    composite is the deliverable and the summary is None; otherwise the plan is muxed into a new ``render_video``."""
+    source = derived_asset(run, work, "source_audio")
+    source_path = run.fetch(source, "source_audio.m4a") if source and cfg.audio.keep_original else None
+    plan = plan_audio(cfg, preset, window, source_path)
+    if plan is None:
+        return video_id, None
+    if plan.sfx is not None and not plan.sfx.is_file():
+        raise StageFailed("sfx_missing", "The effect sound is not available on this server.")
+    composite = run.asset(video_id)
+    out = run.work_dir / "render_audio.mp4"
+    mux(run.fetch(composite, "render_silent.mp4"), plan, out)
+    summary = {"original_kept": plan.original is not None, "sfx": plan.sfx is not None,
+               "sfx_delay_ms": plan.sfx_delay_ms if plan.sfx else None,
+               "sfx_gain_db": plan.sfx_gain_db if plan.sfx else None, "duration_ms": plan.duration_ms}
+    meta = {**composite.meta_json, "has_audio": True, "audio": summary}
+    return run.store_asset("render_video", out, "video/mp4", source_asset_id=work.id, meta=meta), summary
 
 
 def _anchors(track: dict | None, cfg, w: int, h: int, n: int, policy: str) -> list[list[float] | None]:
@@ -351,7 +370,7 @@ def vfx_render(run: JobRun) -> tuple[list[str], dict]:
 
     def encode_stage(stage):
         run.transition("postprocessing", "encode")
-        video_id, has_audio = final_video(run, cfg, composite_id)
+        video_id, audio = final_video(run, cfg, composite_id, work, preset, window)
         video = run.asset(video_id)
         path = run.fetch(video, "render.mp4")
         info = probe(path)
@@ -368,10 +387,12 @@ def vfx_render(run: JobRun) -> tuple[list[str], dict]:
         return [video_id, run.store_asset("cover", cover, "image/png", source_asset_id=video_id,
                                           meta={"frame": window.peak, "revision": run.job.input_revision}),
                 store_json(run, "roi_qa", qa, source_asset_id=video_id,
-                           meta={"status": meta["integrity"]["status"], "has_audio": has_audio})]
+                           meta={"status": meta["integrity"]["status"], "has_audio": audio is not None,
+                                       "audio": audio})]
 
     video_id, cover_id, qa_id = run.ensure_stage("encode", encode_stage)
     plan, meta = json_asset(run, layers_id), run.asset(composite_id).meta_json
+    qa_meta = run.asset(qa_id).meta_json
     badge = {"render_profile": profile, **BADGES[profile], "plate_source": meta["plate_source"], "mock": meta["mock"]}
     return [layers_id, video_id, cover_id, qa_id], {
         "render_profile": profile, "label": meta["label"], "badge": badge, "roi_qa": meta["integrity"],
@@ -379,7 +400,7 @@ def vfx_render(run: JobRun) -> tuple[list[str], dict]:
         "mask_warnings": (plan["subject_masks"] or {}).get("diagnostics") or [],
         "tracking_warnings": plan["tracking_warnings"], "plate_source": meta["plate_source"],
         "plate_asset_id": meta["plate_asset_id"], "bundled_plate_id": meta["bundled_plate_id"],
-        "frame_count": n, "mock": meta["mock"], "has_audio": bool(run.asset(qa_id).meta_json["has_audio"]),
+        "frame_count": n, "mock": meta["mock"], "has_audio": bool(qa_meta["has_audio"]), "audio": qa_meta["audio"],
         "render_video_asset_id": video_id, "cover_asset_id": cover_id, "roi_qa_asset_id": qa_id,
         "layers_asset_id": layers_id, "track_job_id": plan["track_job_id"], "revision": run.job.input_revision,
         "width": w, "height": h,

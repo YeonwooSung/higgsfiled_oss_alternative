@@ -115,7 +115,7 @@
       "invalid_policy": "hide",
       "sfx": {
         "file": "sfx/impact_v1.wav",
-        "peak_offset_ms": 0
+        "peak_offset_ms": 79
       }
     },
     {
@@ -173,7 +173,7 @@
       "invalid_policy": "hide",
       "sfx": {
         "file": "sfx/aura_v1.wav",
-        "peak_offset_ms": 0
+        "peak_offset_ms": 803
       }
     },
     {
@@ -231,7 +231,7 @@
       "invalid_policy": "hide",
       "sfx": {
         "file": "sfx/blink_v1.wav",
-        "peak_offset_ms": 0
+        "peak_offset_ms": 248
       }
     }
   ]
