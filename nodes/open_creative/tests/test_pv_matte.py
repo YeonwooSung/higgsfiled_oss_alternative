@@ -77,6 +77,24 @@ def test_brightening_bg_is_halo_risk():
     assert qa["status"] == "check" and "halo_risk" in qa["reasons"]
 
 
+def test_background_drifting_over_time_is_halo_risk():
+    # every frame's background is spatially flat (per-frame std 0) but its level drifts from frame to frame:
+    # only the temporal std of the background means can flag it
+    frames = []
+    for i in range(10):
+        f = np.full((H, W, 3), 4 * i, np.float64)  # sRGB codes 0..36, below the matte threshold
+        frames.append(np.rint(_wisp(f)).astype(np.uint8))
+    stats = MatteStats()
+    list(matte_sequence(iter(frames), None, stats))
+    s = stats.summary()
+    assert s["bg_nonuniformity"] > 0.03
+    qa = matte_qa(s)
+    assert qa["status"] == "check" and qa["reasons"] == ["halo_risk"]
+    flat = [np.rint(_wisp(np.full((H, W, 3), 20.0))).astype(np.uint8) for _ in range(10)]
+    _, qa = _run(flat)
+    assert qa["status"] == "ok" and qa["bg_nonuniformity"] < 1e-6
+
+
 def test_flicker_detected():
     rng = np.random.default_rng(3)
     frames = [np.rint(_wisp(_bg(rng), size=40, value=230 if i % 2 else 0)).astype(np.uint8) for i in range(8)]

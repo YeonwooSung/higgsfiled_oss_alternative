@@ -1,4 +1,10 @@
-"""vfx.render: tracked procedural effect composited over the work clip -> H.264 MP4 (render profile "Quick").
+"""vfx.render: tracked procedural effect + effect plate composited over the work clip -> H.264 MP4.
+
+Render profiles (the render option wins over ``config.render_profile``): ``quick`` = procedural effect + the preset's
+bundled MIT plate (``plate.bundled_id`` or the preset default; ``plate.asset_id`` is ignored), badge "Quick";
+``generated`` = procedural effect + the ``raw_plate`` of a succeeded ``vfx.generate_plate`` job of this project for the
+same preset (``plate.mode == "generated"``, ``plate.asset_id``), badge "Generated plate". Render stages never call a
+provider: a revision that only changes scale/intensity/timing reuses the track and plate jobs as they are.
 
 Stages (each stores durable assets; a restarted job resumes after the last finished stage):
 - ``layers``: per-frame effect anchor in output px. ``follow=false`` -> the config anchor (uv x canvas) on every
@@ -6,13 +12,18 @@ Stages (each stores durable assets; a restarted job resumes after the last finis
   ``invalid_policy``: ``hide`` draws no effect that frame, ``freeze`` holds the last valid position. Subject masks
   come from the track job (Ruling R2): when the render needs them (``masks_needed``: ``behind_subject``,
   ``split_glow``) the track job is required even with ``follow=false`` and its masks must carry the config's
-  ``masks_key`` (else ``mask_required``). The plate is resolved here too (Task 12; procedural only until then).
+  ``masks_key`` (else ``mask_required``). The plate is resolved here too: its source, frame count and the plate frame
+  index of every effect-window frame (``plate_indices``, Ruling R3: trim / retime / loop only when the bundled plate
+  is loopable and its seam passes ``loop_seam_ok``; otherwise ``plate_length``).
 - ``composite``: streams the work-clip frames (one in flight) through ``composite_frame`` into ``Mp4Writer`` and an
   ``IntegrityAccumulator``; per-frame ROI size/box and changed pixel count (pre-encode, vs the source frame) are kept.
   The proxy masks (<= 120 x 640x360 bytes) are held in memory and upscaled per frame with ``upscale_mask`` (soft):
   ``behind_subject``/``split_glow`` restore the subject inside it, Energy Aura draws its contour band from the
   temporally smoothed masks (``smooth_masks``) plus the anchor glow. Occlusion QA = max over frames of
   ``subject_core_cover`` (fraction of subject-core pixels changed > 2/255; core = ``masks.subject_core``).
+  The plate is matted on the fly (``PlateFrames``, one plate frame decoded at a time, ``config.plate.matte``), a
+  bundled plate is tinted by the palette, then ``place_plate`` puts it behind the effect around the anchor
+  (``pocket_vfx.plate``); it is occluded by the subject like the effect.
   An outside-ROI integrity failure fails the job (``roi_integrity``, Ruling R13): no video is stored.
 - ``encode``: final video (audio mux plugs in here, Task 13), output contract probe, ``cover`` PNG of the peak frame
   and the ``roi_qa`` JSON.
@@ -20,7 +31,10 @@ Stages (each stores durable assets; a restarted job resumes after the last finis
 
 from __future__ import annotations
 
+import uuid
+
 import numpy as np
+from oc_api.models import Asset, Job
 from oc_api.pocket_vfx.jobs import (
     config_masks_key,
     config_track_key,
@@ -38,8 +52,28 @@ from open_creative.pocket_vfx.masks import (
     subject_core,
     upscale_mask,
 )
-from open_creative.pocket_vfx.presets import load_presets
-from open_creative.pocket_vfx.procedural import render_effect
+from open_creative.pocket_vfx.matte import (
+    MatteConfig,
+    PlateLengthError,
+    loop_seam_ok,
+    plate_indices,
+)
+from open_creative.pocket_vfx.plate import (
+    PLATE_GAIN,
+    PLATE_SIDE,
+    PlateFrames,
+    aura_roi,
+    bundled_entry,
+    bundled_path,
+    impact_weight,
+    place_plate,
+    plate_envelope,
+    restrict,
+    tint_matte,
+    window_frames,
+)
+from open_creative.pocket_vfx.presets import load_palettes, load_presets
+from open_creative.pocket_vfx.procedural import EffectLayer, render_effect
 from open_creative.pocket_vfx.timeline import EffectWindow, effect_window
 from open_creative.pocket_vfx.track import anchor_positions
 from PIL import Image
@@ -54,17 +88,111 @@ from .vfx_common import (
     store_json,
 )
 
-RENDER_PROFILE_LABEL = "Quick"
+BADGES = {"quick": {"label": "Quick", "label_ko": "Quick"},
+          "generated": {"label": "Generated plate", "label_ko": "생성 plate"}}
 EFFECT_PARAMS = ("scale", "intensity", "palette", "rotation_deg", "squash")
 
 
-def resolve_plate(run: JobRun, cfg, w: int, h: int) -> dict | None:
-    """The effect plate placed on the canvas, or None (procedural only). Plates arrive with Task 12."""
-    return None
+def generated_plate(run: JobRun, cfg) -> Asset:
+    """``plate.asset_id`` of a ``generated`` render: a ``raw_plate`` of this project for the effect's preset, made
+    by a succeeded vfx.generate_plate job (the API checks the same before the job is created)."""
+    if cfg.plate.mode != "generated" or cfg.plate.asset_id is None:
+        raise StageFailed("plate_required", "Generate a plate (or pick it) before a Generated plate render.")
+    asset = run.db.get(Asset, uuid.UUID(str(cfg.plate.asset_id)))
+    if asset is None or asset.project_id != run.project.id or asset.role != "raw_plate" or asset.state != "ready":
+        raise StageFailed("plate_mismatch", "The selected plate is not a generated plate of this project.")
+    if (asset.meta_json or {}).get("preset_id") != cfg.effect.preset_id:
+        raise StageFailed("plate_mismatch", "The selected plate was generated for another effect.")
+    job = run.db.get(Job, asset.job_id) if asset.job_id else None
+    if job is None or job.kind != "vfx.generate_plate" or job.state != "succeeded":
+        raise StageFailed("plate_mismatch", "The selected plate has not finished generating.")
+    return asset
 
 
-def plate_layer(plate: dict | None, frame: int):
-    """The plate's ``EffectLayer`` at ``frame`` (retimed into the effect window); None without a plate."""
+def _first_last(frames) -> tuple[np.ndarray, np.ndarray]:
+    first = last = None
+    for f in frames:
+        first = f if first is None else first
+        last = f
+    if first is None:
+        raise StageFailed("plate_length", "The plate has no frames.")
+    return first, last
+
+
+def resolve_plate(run: JobRun, cfg, profile: str, preset: dict, window: EffectWindow, w: int,
+                  h: int) -> dict | None:
+    """The plate of this render: source, frames, and the plate frame of each effect-window frame (None: the preset
+    has no bundled plate -> procedural only)."""
+    portrait = h > w
+    if profile == "quick":
+        entry = bundled_entry(preset, cfg.plate.bundled_id)
+        if entry is None:
+            if cfg.plate.bundled_id is not None:
+                raise StageFailed("plate_mismatch", "This plate belongs to another effect.")
+            return None
+        path = bundled_path(entry, portrait)
+        doc = {"source": "bundled", "bundled_id": entry["id"], "portrait": portrait, "asset_id": None,
+               "tint": cfg.effect.palette, "mock": False}
+        loopable = bool(entry["loopable"])
+    else:
+        asset = generated_plate(run, cfg)
+        path = run.fetch(asset, "plate.mp4")
+        doc = {"source": "generated", "bundled_id": None, "portrait": portrait, "asset_id": str(asset.id),
+               "tint": None, "mock": bool((asset.meta_json or {}).get("mock"))}
+        loopable = False  # LTX output is not made to loop
+    info = probe(path)
+    p, n = info["frame_count"], window_frames(window)
+    seam_ok = None
+    if n > 2 * p and loopable:
+        seam_ok = loop_seam_ok(*_first_last(decode_frames(path)))
+    try:
+        indices = plate_indices(p, n, loopable=loopable, seam_ok=bool(seam_ok))
+    except PlateLengthError as e:
+        raise StageFailed("plate_length", f"The {p}-frame plate cannot cover the {n}-frame effect "
+                          "(retime 0.5-2x only). Shorten the effect or generate a new plate.") from e
+    return {**doc, "frames": p, "size": [info["width"], info["height"]], "seam_ok": seam_ok,
+            "indices": indices, "matte": {"threshold": cfg.plate.matte.threshold, "knee": cfg.plate.matte.knee}}
+
+
+class PlateLayers:
+    """Per-frame plate ``EffectLayer`` of a resolved plate (``resolve_plate``), placed around the anchor."""
+
+    def __init__(self, run: JobRun, plate: dict | None, preset_id: str, params: dict, window: EffectWindow,
+                 w: int, h: int):
+        self.plate, self.preset_id, self.params, self.window, self.w, self.h = plate, preset_id, params, window, w, h
+        self.frames = None
+        if plate is None:
+            return
+        if plate["source"] == "bundled":
+            entry = bundled_entry(load_presets()[preset_id], plate["bundled_id"])
+            path = bundled_path(entry, plate["portrait"])
+        else:
+            path = run.fetch(run.asset(plate["asset_id"]), "plate.mp4")
+        self.frames = PlateFrames(lambda: decode_frames(path), MatteConfig(**plate["matte"]))
+        self.palette = load_palettes()[plate["tint"]] if plate["tint"] else None
+        self.size = min(w, h) * params["scale"]
+        self.weight = impact_weight(round(PLATE_SIDE * self.size)) if preset_id == "impact_wave_v1" else None
+
+    def at(self, i: int, anchor, subject: np.ndarray | None) -> EffectLayer | None:
+        """``subject``: the output-size mask an Energy Aura plate is confined around (its contour band)."""
+        if self.frames is None or not self.window.start <= i <= self.window.end:
+            return None
+        gain = self.params["intensity"] * plate_envelope(self.window, i) * PLATE_GAIN
+        aura = self.preset_id == "energy_aura_v1"
+        center = tuple(anchor) if anchor is not None else None
+        if center is None and aura and subject is not None and (subject > 0.5).any():
+            ys, xs = np.nonzero(subject > 0.5)
+            center = ((xs.min() + xs.max() + 1) / 2.0, (ys.min() + ys.max() + 1) / 2.0)
+        if gain <= 0 or center is None:
+            return None
+        rgb, alpha = self.frames.get(self.plate["indices"][i - self.window.start])
+        if self.palette is not None:
+            rgb = tint_matte(rgb, alpha, self.palette)
+        layer = place_plate(rgb, alpha, center, PLATE_SIDE * self.size, self.w, self.h, gain, self.weight)
+        if aura and layer is not None:
+            layer = restrict(layer, aura_roi(subject, tuple(anchor) if anchor is not None else None, self.size,
+                                             self.w, self.h))
+        return layer
 
 
 def final_video(run: JobRun, cfg, video_id: str) -> tuple[str, bool]:
@@ -107,8 +235,8 @@ def vfx_render(run: JobRun) -> tuple[list[str], dict]:
     cfg, cfg_json = pinned_config(run)
     opts = run.job.options_json or {}
     profile = opts.get("render_profile") or cfg.render_profile  # the option wins over the config
-    if profile != "quick":
-        raise StageFailed("plate_required", "Generated plate renders are not available yet.")
+    if profile == "generated":
+        generated_plate(run, cfg)  # fail before any work
     work = fresh_work_clip(run, cfg, cfg_json)
     w, h, n = canvas(cfg)
     preset = load_presets()[cfg.effect.preset_id]
@@ -141,7 +269,7 @@ def vfx_render(run: JobRun) -> tuple[list[str], dict]:
                               "again.")
         motion_asset = derived_asset(run, work, "motion_report")
         motion = json_asset(run, motion_asset.id) if motion_asset else None
-        plate = resolve_plate(run, cfg, w, h)
+        plate = resolve_plate(run, cfg, profile, preset, window, w, h)
         doc = {"schema_version": 1, "canvas": [w, h], "frame_count": n, "space": "output_px",
                "window": {"start": window.start, "peak": window.peak, "end": window.end},
                "follow": cfg.anchor.follow, "invalid_policy": policy,
@@ -168,6 +296,7 @@ def vfx_render(run: JobRun) -> tuple[list[str], dict]:
         plan = json_asset(run, layers_id)
         anchors = plan["anchors"]
         params = {k: cfg_json["effect"][k] for k in EFFECT_PARAMS}
+        plates = PlateLayers(run, plan["plate"], cfg.effect.preset_id, params, window, w, h)
         masks = load_masks(plan["subject_masks"])
         occlude = masks is not None and cfg.effect.layer_order != "in_front"
         aura = cfg.effect.preset_id == "energy_aura_v1"
@@ -187,7 +316,7 @@ def vfx_render(run: JobRun) -> tuple[list[str], dict]:
                 if anchor is not None or band is not None:
                     effect = render_effect(cfg.effect.preset_id, params, window, i,
                                            tuple(anchor) if anchor is not None else None, w, h, cfg.plate.seed, band)
-                inp = FrameInputs(source=frame, effect=effect, plate=plate_layer(plan["plate"], i),
+                inp = FrameInputs(source=frame, effect=effect, plate=plates.at(i, anchor, band),
                                   subject_mask=subject, front_glow=None, roi_limit=None)
                 out, roi = composite_frame(inp, cfg.effect.layer_order)
                 writer.write(out)
@@ -207,10 +336,13 @@ def vfx_render(run: JobRun) -> tuple[list[str], dict]:
                               f"{integrity['max_err']}/255 at frame {integrity['worst_frame']}).")
         occlusion_qa = ({"max": max(cover), "worst_frame": int(np.argmax(cover)), "frames": len(cover),
                          "core_erode_px": CORE_ERODE_PX} if cover else None)
-        meta = {"revision": run.job.input_revision, "render_profile": profile, "label": RENDER_PROFILE_LABEL,
-                "plate_source": "procedural", "preset_id": cfg.effect.preset_id,
+        plate = plan["plate"]
+        meta = {"revision": run.job.input_revision, "render_profile": profile, "label": BADGES[profile]["label"],
+                "plate_source": plate["source"] if plate else "procedural",
+                "plate_asset_id": plate["asset_id"] if plate else None,
+                "bundled_plate_id": plate["bundled_id"] if plate else None, "preset_id": cfg.effect.preset_id,
                 "layer_order": cfg.effect.layer_order, "occlusion": occlude, "occlusion_qa": occlusion_qa,
-                "has_audio": False, "mock": False, "integrity": integrity,
+                "has_audio": False, "mock": bool(plate and plate["mock"]), "integrity": integrity,
                 "frame_stats": {"roi_px": roi_px, "roi_bbox": roi_bbox, "changed_px": changed_px,
                                 "core_cover": cover or None}}
         return [run.store_asset("render_video", out_path, "video/mp4", source_asset_id=work.id, meta=meta)]
@@ -240,11 +372,13 @@ def vfx_render(run: JobRun) -> tuple[list[str], dict]:
 
     video_id, cover_id, qa_id = run.ensure_stage("encode", encode_stage)
     plan, meta = json_asset(run, layers_id), run.asset(composite_id).meta_json
+    badge = {"render_profile": profile, **BADGES[profile], "plate_source": meta["plate_source"], "mock": meta["mock"]}
     return [layers_id, video_id, cover_id, qa_id], {
-        "render_profile": profile, "label": RENDER_PROFILE_LABEL, "roi_qa": meta["integrity"],
+        "render_profile": profile, "label": meta["label"], "badge": badge, "roi_qa": meta["integrity"],
         "occlusion_qa": (meta["occlusion_qa"] or {}).get("max"), "occlusion": meta["occlusion"],
         "mask_warnings": (plan["subject_masks"] or {}).get("diagnostics") or [],
         "tracking_warnings": plan["tracking_warnings"], "plate_source": meta["plate_source"],
+        "plate_asset_id": meta["plate_asset_id"], "bundled_plate_id": meta["bundled_plate_id"],
         "frame_count": n, "mock": meta["mock"], "has_audio": bool(run.asset(qa_id).meta_json["has_audio"]),
         "render_video_asset_id": video_id, "cover_asset_id": cover_id, "roi_qa_asset_id": qa_id,
         "layers_asset_id": layers_id, "track_job_id": plan["track_job_id"], "revision": run.job.input_revision,

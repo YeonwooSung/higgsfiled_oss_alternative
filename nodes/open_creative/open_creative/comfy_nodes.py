@@ -26,7 +26,7 @@ from .pocket_vfx import masks as pv_masks
 from .pocket_vfx.composite import FrameInputs
 from .pocket_vfx.composite import composite_frame as pv_composite_frame
 from .pocket_vfx.integrity import IntegrityAccumulator, subject_core_cover
-from .pocket_vfx.matte import MatteConfig, matte_sequence
+from .pocket_vfx.matte import MatteConfig, MatteStats, matte_qa, matte_sequence
 from .pocket_vfx.presets import load_presets as load_pv_presets
 from .pocket_vfx.procedural import render_effect
 from .pocket_vfx.timeline import EffectWindow
@@ -661,12 +661,13 @@ class PVOutsideROIIntegrity:
 
 
 class PVPlateMatte:
-    """Raw emissive plate frames (sRGB) -> linear premultiplied RGB (IMAGE) + alpha (MASK)."""
+    """Raw emissive plate frames (sRGB) -> linear premultiplied RGB (IMAGE) + alpha (MASK) + matte QA (JSON STRING
+    of ``matte_qa``: halo risk / flicker / empty plate)."""
 
     CATEGORY = PV_CATEGORY
     FUNCTION = "run"
-    RETURN_TYPES = ("IMAGE", "MASK")
-    RETURN_NAMES = ("rgb_premult_linear", "alpha")
+    RETURN_TYPES = ("IMAGE", "MASK", "STRING")
+    RETURN_NAMES = ("rgb_premult_linear", "alpha", "qa")
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -677,8 +678,10 @@ class PVPlateMatte:
         }}
 
     def run(self, frames, threshold, knee):
-        pairs = list(matte_sequence(iter(_frames_u8(frames)), MatteConfig(float(threshold), float(knee))))
-        return (_out(np.stack([p[0] for p in pairs])), _out(np.stack([p[1] for p in pairs])))
+        stats = MatteStats()
+        pairs = list(matte_sequence(iter(_frames_u8(frames)), MatteConfig(float(threshold), float(knee)), stats))
+        return (_out(np.stack([p[0] for p in pairs])), _out(np.stack([p[1] for p in pairs])),
+                json.dumps(matte_qa(stats.summary())))
 
 
 NODE_CLASS_MAPPINGS = {cls.__name__: cls for cls in

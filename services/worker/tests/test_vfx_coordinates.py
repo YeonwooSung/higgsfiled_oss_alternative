@@ -16,7 +16,7 @@ import pytest
 from oc_api.models import Asset
 from open_creative.media.video import decode_frames
 from open_creative.pocket_vfx.timeline import frame_index
-from test_vfx_executors import Proj, pv  # noqa: F401 - pv is the project fixture
+from test_vfx_executors import Proj, pv, vfx_render_mod  # noqa: F401 - pv is the project fixture
 
 FIX = Path(__file__).resolve().parents[3] / "fixtures" / "pocket-vfx"
 MANIFEST = json.loads((FIX / "manifest.json").read_text())
@@ -59,7 +59,10 @@ def effect_centroid(render_path, work_path, frame: int) -> tuple[float, float]:
 
 
 @pytest.mark.parametrize("name", CASES)
-def test_gt_point_tracks_and_renders_in_output_space(ctx, db_factory, storage, pv, name):  # noqa: F811
+def test_gt_point_tracks_and_renders_in_output_space(ctx, db_factory, storage, pv, name, monkeypatch):  # noqa: F811
+    # the centroid measures the procedural effect: the (asymmetric, edge-clipped) bundled dust plate would pull it
+    # off the anchor; plate placement around the anchor is covered by test_vfx_plate
+    monkeypatch.setattr(vfx_render_mod.PlateLayers, "at", lambda self, i, anchor, subject: None)
     case = CASES[name]
     proj = Proj(ctx, db_factory, storage, pv)
     analyze = proj.prepare(case["file"], trim=case["trim"], output={"aspect": case["aspect"], "fps": 24})

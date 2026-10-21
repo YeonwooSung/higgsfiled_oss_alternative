@@ -28,6 +28,8 @@ from open_creative.comfy.bindings import REQUIRED_BINDINGS
 from open_creative.comfy.profiles import MOCK_PROFILE
 from open_creative.media.video import cover_fit, decode_frames, encode_mp4
 from open_creative.pocket_vfx.masks import MaskSequence, decode_prompt_mask, disk_kernel, prompts_hash, write_masks_zip
+from open_creative.pocket_vfx.plate import procedural_plate
+from open_creative.pocket_vfx.presets import load_palettes
 
 from .runner import ProviderRejected, ProviderStatus, SubmissionKeyReused
 
@@ -299,6 +301,29 @@ def _mock_masks(b: dict, d: Path) -> list[str]:
     return ["masks_0.zip", "masks_0.json"]
 
 
+# ---- Pocket VFX effect plate (vfx_plate_v1) --------------------------------------------------------------------
+# Not LTX: the bundled-plate generator seeded by (prompt, seed), tinted by the palette word of the prompt.
+_PLATE_STYLE_WORDS = (("dust", "dust"), ("wisps", "wisps"), ("particles", "particles"))
+
+
+def mock_plate_frames(prompt: str, seed: int, w: int, h: int, frames: int) -> Iterator[np.ndarray]:
+    style = next((style for word, style in _PLATE_STYLE_WORDS if word in prompt), "particles")
+    palettes = load_palettes()
+    palette = next((palettes[name] for name in palettes if name in prompt), None)
+    return procedural_plate(style, _seed_from(prompt, seed), w, h, frames, palette)
+
+
+def _mock_plate(b: dict, d: Path) -> list[str]:
+    w, h, n = b["width"], b["height"], b["frames"]
+    if w % 32 or h % 32 or n < 9 or (n - 1) % 8:
+        raise ProviderRejected(f"LTX shape {w}x{h}x{n} is not /32 and 8k+1")
+    encode_mp4(mock_plate_frames(b["prompt"], b["seed"], w, h, n), d / "video_0.mp4", w, h, fps=24)
+    (d / "video_0.json").write_text(json.dumps({
+        "mock": True, "frames": n, "width": w, "height": h, "seed": b["seed"], "label": "Mock",
+        "model": "Mock (procedural plate, not LTX)"}))
+    return ["video_0.mp4", "video_0.json"]
+
+
 def _guide_frames(src: str) -> Iterator[np.ndarray]:
     """Stream the guide frames (a directory of images or a video); never the whole guide in memory."""
     p = Path(src)
@@ -400,6 +425,8 @@ class MockRunner:
             return ["video_0.mp4", "video_0.json"]
         if workflow == "vfx_masks_v1":
             return _mock_masks(b, d)
+        if workflow == "vfx_plate_v1":
+            return _mock_plate(b, d)
         raise ProviderRejected(workflow)
 
     def inspect(self, provider_job_id: str) -> ProviderStatus:

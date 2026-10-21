@@ -44,6 +44,8 @@ def _matte(rgb_u8: np.ndarray, cfg: MatteConfig) -> tuple[np.ndarray, np.ndarray
     alpha = _smoothstep(cfg.threshold - cfg.knee, cfg.threshold + cfg.knee, y).astype(np.float32)
     bg = alpha < _BG_ALPHA
     if bg.any():
+        # Per-channel black-level subtraction is the P0 despill (Ruling R20): an emissive plate on a dark
+        # background has no coloured spill to suppress, only a lifted/tinted black that would halo after premultiply.
         black = np.percentile(lin[bg], 5, axis=0).astype(np.float32)
         luma = linear_to_srgb(y[bg]).astype(np.float32) / 255.0
         bg_std, bg_mean = float(luma.std()), float(luma.mean())

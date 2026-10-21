@@ -26,6 +26,9 @@ REQUIRED_BINDINGS: dict[str, dict[str, str]] = {
     },
     # Pocket VFX. SAM 2.1 video masks of the proxy work clip; ``prompts`` = ``pocket_vfx.masks.build_prompts``.
     "vfx_masks_v1": {"frames": "video", "prompts": "json", "width": "int", "height": "int"},
+    # LTX-2.3 effect plate on black: 768x448 / 448x768, frames = 8k+1 covering the effect window (Ruling R3).
+    "vfx_plate_v1": {"prompt": "string", "negative": "string", "seed": "int", "width": "int", "height": "int",
+                     "frames": "int"},
 }
 # Which app (workflows/<app>/ directory) owns each workflow.
 WORKFLOW_APP: dict[str, str] = {
@@ -33,7 +36,7 @@ WORKFLOW_APP: dict[str, str] = {
     "camera_depth_v1": "camera-sketch",
     "camera_cinematic_v1": "camera-sketch",
     "vfx_masks_v1": "pocket-vfx",
-    "vfx_plate_v1": "pocket-vfx",  # bindings arrive with Task 12
+    "vfx_plate_v1": "pocket-vfx",
 }
 REQUIRED_OUTPUTS: dict[str, tuple[str, ...]] = {
     "product_segment_v1": ("mask",),
@@ -42,6 +45,7 @@ REQUIRED_OUTPUTS: dict[str, tuple[str, ...]] = {
     "camera_depth_v1": ("depth",),
     "camera_cinematic_v1": ("video",),
     "vfx_masks_v1": ("masks",),  # ZIP of mask_%04d.png (8-bit gray, proxy size) + manifest.json
+    "vfx_plate_v1": ("video",),  # raw emissive plate MP4 (sRGB, black background; the worker mattes it)
 }
 TYPES = {"string", "int", "float", "image", "video", "json"}
 

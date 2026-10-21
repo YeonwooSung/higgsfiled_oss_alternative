@@ -39,6 +39,21 @@ def test_vfx_masks_contract():
     assert app_workflows_dir(ROOT / "workflows", "vfx_masks_v1") == ROOT / "workflows" / "pocket-vfx"
 
 
+def test_vfx_plate_contract(tmp_path):
+    from open_creative.comfy.bindings import validate_manifest
+
+    assert REQUIRED_BINDINGS["vfx_plate_v1"] == {"prompt": "string", "negative": "string", "seed": "int",
+                                                 "width": "int", "height": "int", "frames": "int"}
+    assert REQUIRED_OUTPUTS["vfx_plate_v1"] == ("video",)
+    validate_manifest(*min_graph("vfx_plate_v1"))
+    # both pocket-vfx graphs exported -> open weights available for the app
+    for name in VFX_WORKFLOWS:
+        g, m = min_graph(name)
+        (tmp_path / f"{name}.api.json").write_text(json.dumps(g))
+        (tmp_path / f"{name}.bindings.json").write_text(json.dumps(m))
+    assert profile_status(OPEN_WEIGHTS_PROFILE, tmp_path, "http://x", workflows=VFX_WORKFLOWS).available
+
+
 def test_open_weights_vfx_unavailable_until_graphs_exist():
     d = app_workflows_dir(ROOT / "workflows", "vfx_masks_v1")
     st = profile_status(OPEN_WEIGHTS_PROFILE, d, "http://127.0.0.1:8189", workflows=VFX_WORKFLOWS)
@@ -304,6 +319,8 @@ def test_pv_plate_matte_node():
 
     plate = np.zeros((4, 32, 48, 3), np.float32)
     plate[:, 8:20, 10:30] = 0.9
-    rgb, alpha = PVPlateMatte().run(plate, 0.06, 0.04)
+    rgb, alpha, qa = PVPlateMatte().run(plate, 0.06, 0.04)
     assert rgb.shape == (4, 32, 48, 3) and alpha.shape == (4, 32, 48)
     assert alpha[:, 12, 20].min() > 0.99 and alpha[:, 0, 0].max() == 0.0
+    qa = json.loads(qa)
+    assert qa["status"] == "ok" and qa["reasons"] == [] and qa["coverage"] > 0.1

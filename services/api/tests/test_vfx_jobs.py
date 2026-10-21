@@ -1,10 +1,10 @@
 import uuid
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from helpers import configure, set_job_state
-from oc_api.models import Job, JobCost, Project, ProjectRevision
+from oc_api.models import Asset, Job, JobCost, Project, ProjectRevision
 from oc_api.pocket_vfx import jobs as vfx_jobs
 from oc_api.pocket_vfx.config import MaskEdit, PocketVfxConfig, SubjectPrompt
 from open_creative.pocket_vfx.keys import masks_key, model_rev, track_key
@@ -330,6 +330,88 @@ def test_render_blink_without_clean_plate(app, session_client, ready):
     r = render(session_client, p, rev, make_track(app, p, rev))
     assert r.status_code == 422 and err(r)["code"] == "validation_failed"
     assert [x["code"] for x in err(r)["details"]["blocking_errors"]] == ["clean_plate_required"]
+
+
+# --- plates (Ruling R3) ---------------------------------------------------------------------------------------
+
+def make_plate(app, project, frames=49, preset_id="impact_wave_v1", state="succeeded", kind="vfx.generate_plate"):
+    """A raw_plate asset made by a ``kind`` job in ``state`` (what vfx.generate_plate stores)."""
+    with app.state.db() as db:
+        p = db.get(Project, uuid.UUID(project["id"]))
+        j = Job(project_id=p.id, session_id=p.session_id, input_revision=1, kind=kind, options_json={"seed": 1},
+                model_profile="mock_v1", state=state, result_json={})
+        db.add(j)
+        db.flush()
+        aid = uuid.uuid4()
+        db.add(Asset(id=aid, project_id=p.id, role="raw_plate", state="ready", object_key=f"x/{aid}.mp4",
+                     mime="video/mp4", bytes=1, width=768, height=448, frame_count=frames, job_id=j.id,
+                     meta_json={"preset_id": preset_id, "palette": "amber", "seed": 1, "frames": frames,
+                                "mock": True}))
+        db.commit()
+        return str(aid)
+
+
+def generated(client, p, plate_id, **changes):
+    return configure(client, p, anchor__follow=False, effect__layer_order="in_front", plate__mode="generated",
+                     plate__asset_id=plate_id, render_profile="generated", **changes)
+
+
+def test_generated_render_needs_a_selected_plate(app, session_client, ready):
+    p, _ = ready
+    proj = configure(session_client, p, anchor__follow=False, effect__layer_order="in_front")
+    rev = proj["current_revision"]
+    r = render(session_client, p, rev, profile="generated")
+    assert r.status_code == 422 and err(r)["code"] == "plate_required" and err(r)["field"] == "config.plate.asset_id"
+    # asset id set, but mode still bundled: the option asks for a generated plate the config does not select
+    proj = configure(session_client, p, plate__asset_id=make_plate(app, p))
+    r = render(session_client, p, proj["current_revision"], profile="generated")
+    assert r.status_code == 422 and err(r)["code"] == "plate_required"
+    # quick ignores plate.asset_id and uses the bundled plate
+    assert render(session_client, p, proj["current_revision"]).status_code == 202
+
+
+def test_generated_render_plate_must_match(app, session_client, ready):
+    p, _ = ready
+    for plate in (make_plate(app, p, preset_id="energy_aura_v1"), make_plate(app, p, state="running"),
+                  make_plate(app, p, kind="vfx.track")):
+        proj = generated(session_client, p, plate)
+        r = render(session_client, p, proj["current_revision"], profile="generated")
+        assert r.status_code == 422 and err(r)["code"] == "plate_mismatch", plate
+    proj = generated(session_client, p, make_plate(app, p))
+    r = render(session_client, p, proj["current_revision"], profile="generated")
+    assert r.status_code == 202, r.text
+    assert job_row(app, r.json()["id"])[0].options_json["render_profile"] == "generated"
+
+
+def test_plate_length_at_plan_time(app, session_client, ready):
+    p, _ = ready
+    plate = make_plate(app, p, frames=121)
+    # 2 s window (frames 34..81 = 48): 121 > 2 x 48 -> the first 48 plate frames (Ruling R3 trim)
+    proj = generated(session_client, p, plate, effect__end_ms=3375)
+    r = render(session_client, p, proj["current_revision"], profile="generated")
+    assert r.status_code == 202, r.text
+    set_job_state(app, r.json()["id"], "succeeded")
+    # 0.4 s window (34..43 = 10 frames): trimmed too, still fine
+    proj = configure(session_client, p, effect__end_ms=1800)
+    r = render(session_client, p, proj["current_revision"], profile="generated")
+    assert r.status_code == 202, r.text
+    set_job_state(app, r.json()["id"], "succeeded")
+    # a 49-frame plate under a 5 s window (0..119 = 120 frames > 2 x 49): no loop for a generated plate -> 422
+    short = make_plate(app, p, frames=49)
+    proj = generated(session_client, p, short, effect__start_ms=0, effect__peak_ms=400, effect__end_ms=5000)
+    rev = proj["current_revision"]
+    r = render(session_client, p, rev, profile="generated")
+    assert r.status_code == 422 and err(r)["code"] == "plate_length" and err(r)["field"] == "config.effect.end_ms"
+    assert codes(validate(session_client, p, rev)["blocking_errors"]) == ["plate_length"]  # config profile
+    with app.state.db() as db:
+        n = db.scalar(select(func.count()).select_from(Job).where(Job.project_id == uuid.UUID(p["id"]),
+                                                                  Job.kind == "vfx.render"))
+    assert n == 2  # the refused render created no job
+    # the bundled 49-frame plate is loopable: the same window renders quick (the option wins over the config)
+    assert render(session_client, p, rev).status_code == 202
+    # a new plate job for the long window is not blocked by the selected short plate
+    r = post(session_client, p, "vfx.generate_plate", revision=rev)
+    assert r.status_code == 202, r.text
 
 
 # --- track validity at peak in validate ---------------------------------------------------------------------

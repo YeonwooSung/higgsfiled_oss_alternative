@@ -187,7 +187,10 @@ def test_quick_render_with_static_anchor(proj):
     proj.revise(anchor__follow=False, effect__layer_order="in_front")
     render = proj.run("vfx.render", {"track_job_id": None, "render_profile": "quick"})
     r = render.result_json
-    assert r["render_profile"] == "quick" and r["plate_source"] == "procedural" and r["occlusion_qa"] is None
+    assert r["render_profile"] == "quick" and r["plate_source"] == "bundled" and r["occlusion_qa"] is None
+    assert r["bundled_plate_id"] == "dust_burst_v1" and r["plate_asset_id"] is None
+    assert r["badge"] == {"render_profile": "quick", "label": "Quick", "label_ko": "Quick", "plate_source": "bundled",
+                          "mock": False}  # never labelled AI-generated
     assert r["frame_count"] == 120 and r["mock"] is False and r["has_audio"] is False
     assert r["roi_qa"]["status"] == "pass" and r["roi_qa"]["frames"] == 120 and r["roi_qa"]["max_err"] <= 1
     assert r["tracking_warnings"] == []  # static anchor on a fixed camera

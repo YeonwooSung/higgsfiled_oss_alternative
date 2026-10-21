@@ -4,6 +4,13 @@ Subject masks (Ruling R2): a render whose layer order occludes the subject (``be
 whose preset is drawn inside the mask (Blink Out) needs fresh masks: a succeeded ``vfx.track`` whose ``masks``
 result carries the config's ``masks_key``. Such a render always names its track job (``track_required``), also with
 ``follow=false``. ``in_front`` Impact Wave / Energy Aura render without masks.
+
+Plates (Ruling R3): the render option ``render_profile`` is authoritative. ``quick`` always uses the preset's bundled
+plate (``plate.bundled_id`` or the default; ``plate.asset_id`` is ignored). ``generated`` needs ``plate.mode ==
+"generated"`` and ``plate.asset_id`` (``plate_required``), a ``raw_plate`` of this project for the effect's preset made
+by a succeeded vfx.generate_plate job (``plate_mismatch``). A plate of P frames covers an effect window of W frames by
+trim/retime when ``W <= 2P``; beyond that only a loopable bundled plate may loop (``plate_length`` otherwise), so a
+render that cannot place its plate is refused before any job runs.
 """
 
 from __future__ import annotations
@@ -17,8 +24,9 @@ from sqlalchemy.orm import Session as DbSession
 
 from open_creative.comfy.profiles import GPU_SECONDS_CAP
 from open_creative.pocket_vfx.keys import masks_key, model_rev, track_key
+from open_creative.pocket_vfx.plate import bundled_entry, window_frames
 from open_creative.pocket_vfx.presets import load_presets
-from open_creative.pocket_vfx.timeline import frame_count, frame_index, timing_errors
+from open_creative.pocket_vfx.timeline import effect_window, frame_count, frame_index, timing_errors
 
 from ..apps import JobPlan
 from ..errors import ApiError
@@ -118,13 +126,48 @@ def clip_duration_ms(clip: Asset) -> int | None:
     return clip.duration_ms or ((clip.meta_json or {}).get("source") or {}).get("duration_ms")
 
 
-def plate_length_errors(cfg: PocketVfxConfig, *_args) -> list[dict]:
-    """Plate frames vs effect window (Ruling R3). Stub: Task 12 fills it with ``retime_factor``/``plate_length``."""
-    return []
+PLATE_CODES = ("plate_required", "plate_mismatch", "plate_length")
 
 
 def _err(code: str, field: str, message: str) -> dict:
     return {"code": code, "field": field, "message": message}
+
+
+def plate_length_errors(cfg: PocketVfxConfig, plate_frames: int | None, *, loopable: bool = False) -> list[dict]:
+    """A ``plate_frames`` plate vs the effect window (Ruling R3): ``W > 2P`` needs a loop (``loopable``: a bundled
+    plate whose seam QA passed when it was made; the worker re-checks the seam). Skipped while the timing itself is
+    invalid (reported as ``timing_*``)."""
+    if not plate_frames or timing_errors(cfg.effect.model_dump(), cfg.trim.duration_ms):
+        return []
+    n = window_frames(effect_window(cfg.effect.model_dump(), cfg.trim.duration_ms))
+    if n > 2 * plate_frames and not loopable:
+        return [_err("plate_length", "config.effect.end_ms",
+                     f"The {plate_frames}-frame plate cannot cover this {n}-frame effect (retime 0.5-2x only). "
+                     "Shorten the effect or generate a new plate.")]
+    return []
+
+
+def plate_errors(db: DbSession, project: Project, cfg: PocketVfxConfig, render_profile: str) -> list[dict]:
+    """Plate checks of a render with ``render_profile`` (see the module docstring)."""
+    preset = load_presets()[cfg.effect.preset_id]
+    if cfg.plate.bundled_id is not None and bundled_entry(preset, cfg.plate.bundled_id) is None:
+        return [_err("plate_mismatch", "config.plate.bundled_id", "This plate belongs to another effect.")]
+    if render_profile == "quick":
+        entry = bundled_entry(preset, cfg.plate.bundled_id)
+        return plate_length_errors(cfg, entry["frames"], loopable=bool(entry["loopable"])) if entry else []
+    field = "config.plate.asset_id"
+    if cfg.plate.mode != "generated" or cfg.plate.asset_id is None:
+        return [_err("plate_required", field, "Generate a plate and select it for a Generated plate render.")]
+    plate = db.get(Asset, cfg.plate.asset_id)
+    if plate is None or plate.project_id != project.id or plate.role != "raw_plate" or plate.state != "ready":
+        return [_err("plate_mismatch", field, "The selected plate is not a generated plate of this project.")]
+    meta = plate.meta_json or {}
+    if meta.get("preset_id") != cfg.effect.preset_id:
+        return [_err("plate_mismatch", field, "The selected plate was generated for another effect.")]
+    job = db.get(Job, plate.job_id) if plate.job_id else None
+    if job is None or job.project_id != project.id or job.kind != "vfx.generate_plate" or job.state != "succeeded":
+        return [_err("plate_mismatch", field, "The selected plate has not finished generating.")]
+    return plate_length_errors(cfg, plate.frame_count or meta.get("frames"), loopable=False)
 
 
 def _asset(db: DbSession, project: Project, asset_id, role: str) -> Asset | None:
@@ -189,8 +232,10 @@ def invalid_at(track: Job, frame: int) -> bool:
     return any(a <= frame <= b for a, b in (track.result_json or {}).get("invalid_intervals") or [])
 
 
-def validate(db: DbSession, project: Project, cfg: PocketVfxConfig, *, track: Job | None = None) -> dict:
-    """Pre-render checks (spec §11). ``track`` is the track the render will use; default: the newest fresh one."""
+def validate(db: DbSession, project: Project, cfg: PocketVfxConfig, *, track: Job | None = None,
+             render_profile: str | None = None) -> dict:
+    """Pre-render checks (spec §11). ``track`` is the track the render will use; default: the newest fresh one.
+    ``render_profile``: the render option (default ``config.render_profile``)."""
     preset = load_presets()[cfg.effect.preset_id]
     explicit_track = track is not None
     blocking, clip = _input_errors(db, project, cfg)
@@ -212,10 +257,7 @@ def validate(db: DbSession, project: Project, cfg: PocketVfxConfig, *, track: Jo
         if not fresh:
             blocking.append(_err("mask_required", "config.subject_prompts",
                                  "This effect needs a subject mask. Select the subject and track again."))
-    bundled = {p["id"] for p in preset["bundled_plates"]}
-    if cfg.plate.bundled_id is not None and cfg.plate.bundled_id not in bundled:
-        blocking.append(_err("plate_mismatch", "config.plate.bundled_id", "This plate belongs to another effect."))
-    blocking += plate_length_errors(cfg)
+    blocking += plate_errors(db, project, cfg, render_profile or cfg.render_profile)
     if preset["input_requirements"].get("clean_plate"):
         plate = _asset(db, project, cfg.clean_plate_asset_id, "clean_plate")
         if plate is None:
@@ -278,9 +320,13 @@ def plan_job(db: DbSession, storage, project: Project, cfg: PocketVfxConfig, kin
                     raise ApiError(422, "track_required", msg, field="options.track_job_id")
                 if opts.track_job_id is not None:
                     track = _check_track_job(db, project, cfg, opts.track_job_id)
-            report = validate(db, project, cfg, track=track)
-            # the plate does not depend on the subject: generating it before masks exist is fine
-            blocking = [e for e in report["blocking_errors"] if kind == "vfx.render" or e["code"] != "mask_required"]
+            report = validate(db, project, cfg, track=track,
+                              render_profile=opts.render_profile if kind == "vfx.render" else None)
+            # the plate does not depend on the subject or on the plate currently selected: generating it before masks
+            # exist, or to replace a mismatching/too short plate, is fine
+            blocking = [e for e in report["blocking_errors"]
+                        if kind == "vfx.render" or e["code"] not in ("mask_required", *PLATE_CODES)]
+            _raise_first(blocking, PLATE_CODES)  # a render that cannot place its plate: its own 422 code
             if blocking:
                 raise ApiError(422, "validation_failed", blocking[0]["message"], field=blocking[0]["field"],
                                details={"blocking_errors": blocking})

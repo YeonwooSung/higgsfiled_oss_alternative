@@ -12,6 +12,7 @@ from .inspect_render import inspect_render
 from .render import render
 from .segment import segment
 from .vfx_analyze import vfx_analyze
+from .vfx_plate import vfx_generate_plate
 from .vfx_render import vfx_render
 from .vfx_track import vfx_track
 
@@ -31,5 +32,6 @@ EXECUTORS: dict[str, Executor] = {
     "camera.export": export,  # dispatches by app
     "vfx.analyze": vfx_analyze,
     "vfx.track": vfx_track,
+    "vfx.generate_plate": vfx_generate_plate,
     "vfx.render": vfx_render,
 }

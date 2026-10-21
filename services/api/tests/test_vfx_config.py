@@ -271,5 +271,12 @@ def test_validate_endpoint_errors(session_client, vproject):
     assert r.status_code == 422 and r.json()["error"]["code"] == "invalid_app"
 
 
-def test_plate_length_check_is_a_stub_until_task_12():
-    assert plate_length_errors(default_config()) == []
+def test_plate_length_errors_follow_ruling_r3():
+    cfg = default_config()  # window 1400..3400 ms -> frames 34..82 = 49 frames
+    assert plate_length_errors(cfg, 121) == []  # P > 2W: time-trim
+    assert plate_length_errors(cfg, 25) == []  # W <= 2P: retime (factor 0.51)
+    assert [e["code"] for e in plate_length_errors(cfg, 24)] == ["plate_length"]  # W > 2P, no loop
+    assert plate_length_errors(cfg, 24, loopable=True) == []
+    assert plate_length_errors(cfg, None) == []
+    cfg.effect.peak_ms = 1000  # invalid timing is reported as timing_order, not as a plate error
+    assert plate_length_errors(cfg, 9) == []
