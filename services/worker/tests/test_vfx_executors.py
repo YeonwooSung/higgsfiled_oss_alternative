@@ -9,6 +9,7 @@ from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
+import cv2
 import numpy as np
 import pytest
 from oc_api.db import utcnow
@@ -103,6 +104,20 @@ class Proj:
         analyze = self.run("vfx.analyze")
         self.revise(work_asset_id=analyze.result_json["work_asset_id"])
         return analyze
+
+    def add_clean_plate(self, data: bytes) -> str:
+        """Upload + inspect an empty-background frame (role clean_plate) and link it to the config."""
+        aid = uuid.uuid4()
+        key = f"{self.project.session_id}/{self.project.id}/{aid}/clean_plate-original.png"
+        self.storage.put_bytes(key, data, "image/png")
+        with self.db_factory() as db:
+            db.add(Asset(id=aid, project_id=self.project.id, role="clean_plate", state="uploaded", object_key=key,
+                         mime="image/png", bytes=len(data), sha256="c" * 64))
+            db.commit()
+        run_kind(self.ctx, self.db_factory, self.project, "asset.inspect", {"asset_id": str(aid)}, self.rev,
+                 profile="cpu")
+        self.revise(clean_plate_asset_id=str(aid))
+        return str(aid)
 
     def asset(self, aid) -> Asset:
         return load(self.db_factory, Asset, aid)
@@ -284,8 +299,11 @@ def test_render_fails_early_without_required_masks_or_plate(proj):
     assert job.error_code == "plate_required"
     proj.revise(effect={**proj.cfg["effect"], "preset_id": "blink_out_v1"})
     job = proj.run("vfx.render", {"track_job_id": None, "render_profile": "quick"}, expect="failed")
-    assert job.error_code == "mask_required"
+    assert job.error_code == "clean_plate_required"
     assert not job.output_asset_ids
+    proj.add_clean_plate((FIX / "clean_plate.png").read_bytes())
+    job = proj.run("vfx.render", {"track_job_id": None, "render_profile": "quick"}, expect="failed")
+    assert job.error_code == "track_required"  # Blink Out dissolves inside the subject mask: a track is required
 
 
 def test_outside_roi_change_fails_the_render(proj, monkeypatch):
@@ -611,3 +629,72 @@ def test_portrait_grabcut_masks_are_upright(proj, tmp_path, monkeypatch):
         assert score >= 0.6, (f, score)
         for wrong in (gt[::-1, ::-1], gt[:, ::-1], gt[::-1]):  # 180 deg, horizontal and vertical mirror
             assert _iou(up, wrong) < score - 0.2, f
+
+
+# ---- Blink Out (clean plate) -----------------------------------------------------------------------------
+
+
+def _blink(proj, plate: bytes):
+    proj.prepare("stomp_landscape.mp4")
+    eff = dict(proj.cfg["effect"], preset_id="blink_out_v1", palette="cyan")
+    proj.revise(effect=eff, anchor__follow=False, subject_prompts=BODY_PROMPT)
+    proj.add_clean_plate(plate)
+    return proj.run("vfx.track")
+
+
+def _png_bytes(rgb: np.ndarray) -> bytes:
+    buf = io.BytesIO()
+    Image.fromarray(rgb).save(buf, "PNG")
+    return buf.getvalue()
+
+
+def test_blink_render_dissolves_the_subject_into_the_clean_plate(proj):
+    plate = np.asarray(Image.open(FIX / "clean_plate.png").convert("RGB"))
+    track = _blink(proj, (FIX / "clean_plate.png").read_bytes())
+    r = proj.run("vfx.render", {"track_job_id": str(track.id), "render_profile": "quick"}).result_json
+    cp = r["clean_plate"]
+    assert cp["asset_id"] == proj.cfg["clean_plate_asset_id"]
+    assert cp["alignment"]["status"] == "ok" and cp["alignment"]["median_err_px"] <= 0.5
+    assert r["roi_qa"]["status"] == "pass" and r["roi_qa"]["max_err"] <= 1
+    assert r["occlusion"] is False and r["occlusion_qa"] is None
+    layers = proj.json(r["layers_asset_id"])
+    assert layers["layer_order"] == "in_front" and layers["clean_plate"] == cp
+    start, peak, end = (frame_index(proj.cfg["effect"][k]) for k in ("start_ms", "peak_ms", "end_ms"))
+    stats = proj.json(r["roi_qa_asset_id"])["frame_stats"]
+    assert all(c == 0 for c in stats["changed_px"][:start])  # untouched before the effect window
+    x0, y0, x1, y1 = stats["roi_bbox"][peak]  # the particle plate is centred on the subject, not on the anchor
+    sx0, sy0, sx1, sy1 = _box(_gt_stomp(peak))
+    assert x0 <= (sx0 + sx1) / 2 <= x1 and y0 <= (sy0 + sy1) / 2 <= y1
+    work = proj.path(proj.cfg["work_asset_id"])
+    for f, (out, src) in enumerate(zip(decode_frames(proj.path(r["render_video_asset_id"])), decode_frames(work),
+                                       strict=True)):
+        core = cv2.erode(_gt_stomp(f).astype(np.uint8), np.ones((9, 9), np.uint8)).astype(bool)
+        to_plate = np.abs(out[core].astype(np.int16) - plate[core].astype(np.int16)).mean()
+        to_src = np.abs(out[core].astype(np.int16) - src[core].astype(np.int16)).mean()
+        if f > end + 2:  # gone: the subject area shows the user's empty background (H.264 tolerance)
+            assert to_plate < 4 and to_src > 20, (f, to_plate, to_src)
+        if f < start:
+            assert to_src < 4, (f, to_src)
+
+
+def test_blink_with_a_shifted_clean_plate_fails_with_mismatch(proj):
+    shifted = np.roll(np.asarray(Image.open(FIX / "clean_plate.png").convert("RGB")), 20, axis=1)
+    track = _blink(proj, _png_bytes(np.ascontiguousarray(shifted)))
+    job = proj.run("vfx.render", {"track_job_id": str(track.id), "render_profile": "quick"}, expect="failed")
+    assert job.error_code == "clean_plate_mismatch" and "20" in job.error_message
+    assert not job.output_asset_ids
+
+
+def test_blink_on_a_moving_camera_fails_with_mismatch(proj, monkeypatch):
+    analyze_mod = importlib.import_module("oc_worker.executors.vfx_analyze")
+    monkeypatch.setattr(analyze_mod, "camera_motion", lambda frames, masks=None: {
+        "status": "moving", "median_shift_px": 30.0, "max_shift_px": 60.0})
+    track = _blink(proj, (FIX / "clean_plate.png").read_bytes())
+    job = proj.run("vfx.render", {"track_job_id": str(track.id), "render_profile": "quick"}, expect="failed")
+    assert job.error_code == "clean_plate_mismatch" and "fixed camera" in job.error_message
+
+
+def test_blink_with_an_unrelated_plate_is_never_treated_as_aligned(proj):
+    track = _blink(proj, _png_bytes(np.full((720, 1280, 3), 128, np.uint8)))
+    job = proj.run("vfx.render", {"track_job_id": str(track.id), "render_profile": "quick"}, expect="failed")
+    assert job.error_code == "clean_plate_mismatch" and "cannot be confirmed" in job.error_message

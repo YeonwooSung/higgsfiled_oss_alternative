@@ -26,6 +26,14 @@ Stages (each stores durable assets; a restarted job resumes after the last finis
   bundled plate is tinted by the palette, then ``place_plate`` puts it behind the effect around the anchor
   (``pocket_vfx.plate``); it is occluded by the subject like the effect.
   An outside-ROI integrity failure fails the job (``roi_integrity``, Ruling R13): no video is stored.
+- Blink Out (preset ``input_requirements.clean_plate``): the ``layers`` stage needs the user's empty-background photo
+  (``config.clean_plate_asset_id``, else ``clean_plate_required``) and a camera the analysis found ``fixed``; it then
+  checks once, on ``alignment_frames`` of the work clip with the background outside the dilated subject mask, that
+  the cover-fit plate lines up (``clean_plate_alignment``). Anything but ``ok`` - an offset above 2 output px, a
+  moving camera, or too few matching background points (``unknown``: never treated as aligned) - fails the job
+  with ``clean_plate_mismatch``. The composite then dissolves the subject into that photo
+  (``dissolve_alpha``, noise threshold from the peak to the end) with the boundary particles on top; the layer order
+  is always ``in_front`` (``render_layer_order``): the subject is what disappears, so nothing is occluded by it.
 - ``encode``: final video (the audio plan of ``pocket_vfx.audio`` - kept original audio and/or the preset's bundled
   SFX aligned to the effect peak - is muxed into a new ``render_video``; no audio -> the silent composite is the
   deliverable), output contract probe, ``cover`` PNG of the peak frame and the ``roi_qa`` JSON.
@@ -45,6 +53,12 @@ from oc_api.pocket_vfx.jobs import (
 )
 from open_creative.media.video import Mp4Writer, decode_frames, probe
 from open_creative.pocket_vfx.audio import mux, plan_audio
+from open_creative.pocket_vfx.blink import (
+    alignment_frames,
+    clean_plate_alignment,
+    dissolve_alpha,
+    load_clean_plate,
+)
 from open_creative.pocket_vfx.composite import FrameInputs, composite_frame, split_glow
 from open_creative.pocket_vfx.integrity import IntegrityAccumulator, subject_core_cover
 from open_creative.pocket_vfx.masks import (
@@ -87,6 +101,7 @@ from .vfx_common import (
     canvas,
     derived_asset,
     fresh_work_clip,
+    gray_frames_at,
     pinned_config,
     store_json,
 )
@@ -94,6 +109,56 @@ from .vfx_common import (
 BADGES = {"quick": {"label": "Quick", "label_ko": "Quick"},
           "generated": {"label": "Generated plate", "label_ko": "생성 plate"}}
 EFFECT_PARAMS = ("scale", "intensity", "palette", "rotation_deg", "squash")
+
+
+def is_blink(preset: dict) -> bool:
+    """The preset dissolves the subject into the user's clean plate (Blink Out)."""
+    return bool(preset["input_requirements"].get("clean_plate"))
+
+
+def render_layer_order(cfg, preset: dict) -> str:
+    """The layer order the composite uses: the config's, except Blink Out which never occludes (``in_front``)."""
+    return "in_front" if is_blink(preset) else cfg.effect.layer_order
+
+
+def clean_plate_asset(run: JobRun, cfg) -> Asset:
+    if cfg.clean_plate_asset_id is None:
+        raise StageFailed("clean_plate_required", "Blink Out needs an empty background frame from the same camera "
+                          "position. Add one, or choose another effect.")
+    asset = run.db.get(Asset, uuid.UUID(str(cfg.clean_plate_asset_id)))
+    if asset is None or asset.project_id != run.project.id or asset.role != "clean_plate" or asset.state != "ready":
+        raise StageFailed("clean_plate_required", "The empty background frame is missing or has not passed "
+                          "inspection. Add it again.")
+    return asset
+
+
+_CAMERA_WORDS = {"handheld": "handheld (it shakes)", "moving": "moving", "unknown": "not confirmed as fixed"}
+
+
+def check_clean_plate(run: JobRun, cfg, work: Asset, subject: dict | None, motion: dict | None, w: int, h: int,
+                      n: int) -> dict:
+    """The Blink Out clean plate of this render, checked against the work clip (see the module docstring)."""
+    asset = clean_plate_asset(run, cfg)
+    status = (motion or {}).get("status") or "unknown"
+    if status != "fixed":
+        raise StageFailed("clean_plate_mismatch", f"Blink Out needs a fixed camera, and this clip's camera is "
+                          f"{_CAMERA_WORDS.get(status, status)}. Choose another effect or use a clip shot from a "
+                          "fixed camera.")
+    plate = load_clean_plate(run.fetch(asset, "clean_plate.png"), w, h)
+    idx = alignment_frames(n)
+    masks = load_masks(run, subject, n)
+    grays = gray_frames_at(run.fetch(work, "work.mp4"), idx)
+    rep = clean_plate_alignment(plate, grays, [upscale_mask(masks[i], w, h, soft=False) for i in idx]
+                                if masks is not None else None, camera_motion=status)
+    if rep["status"] == "unknown":
+        raise StageFailed("clean_plate_mismatch", "The empty background frame could not be matched to the clip: "
+                          "too few background details match, so it cannot be confirmed to line up. Use a photo of "
+                          "the same scene from the same fixed camera position, or choose another effect.")
+    if rep["status"] != "ok":
+        raise StageFailed("clean_plate_mismatch", f"The empty background frame does not line up with the clip "
+                          f"(the background is off by {rep['median_err_px']:.1f} px; at most 2 px is allowed). "
+                          "Take it from the exact camera position of the clip, or choose another effect.")
+    return {"asset_id": str(asset.id), "sha256": asset.sha256, "alignment": rep}
 
 
 def generated_plate(run: JobRun, cfg) -> Asset:
@@ -179,13 +244,15 @@ class PlateLayers:
         self.weight = impact_weight(round(PLATE_SIDE * self.size)) if preset_id == "impact_wave_v1" else None
 
     def at(self, i: int, anchor, subject: np.ndarray | None) -> EffectLayer | None:
-        """``subject``: the output-size mask an Energy Aura plate is confined around (its contour band)."""
+        """``subject``: the output-size mask an Energy Aura plate is confined around (its contour band) and centred
+        on without an anchor; a Blink Out plate is always centred on the subject (anchor only without a mask)."""
         if self.frames is None or not self.window.start <= i <= self.window.end:
             return None
         gain = self.params["intensity"] * plate_envelope(self.window, i) * PLATE_GAIN
         aura = self.preset_id == "energy_aura_v1"
         center = tuple(anchor) if anchor is not None else None
-        if center is None and aura and subject is not None and (subject > 0.5).any():
+        blink = self.preset_id == "blink_out_v1"  # its particles leave the subject: centred on it, not the anchor
+        if ((center is None and aura) or blink) and subject is not None and (subject > 0.5).any():
             ys, xs = np.nonzero(subject > 0.5)
             center = ((xs.min() + xs.max() + 1) / 2.0, (ys.min() + ys.max() + 1) / 2.0)
         if gain <= 0 or center is None:
@@ -223,7 +290,15 @@ class FrameComposer:
         self.plates = PlateLayers(run, plan["plate"], cfg.effect.preset_id, self.params, window, w, h)
         self.window = window
         self.masks = load_masks(run, plan["subject_masks"], n)
-        self.occlude = self.masks is not None and cfg.effect.layer_order != "in_front"
+        preset = load_presets()[cfg.effect.preset_id]
+        self.layer_order = render_layer_order(cfg, preset)
+        self.occlude = self.masks is not None and self.layer_order != "in_front"
+        clean = plan.get("clean_plate")
+        self.clean_plate = (load_clean_plate(run.fetch(run.asset(clean["asset_id"]), "clean_plate.png"), w, h)
+                            if clean is not None else None)
+        if is_blink(preset) and (self.clean_plate is None or self.masks is None):
+            raise StageFailed("clean_plate_required", "Blink Out needs subject masks and a checked empty background "
+                              "frame. Render again.")
         aura = cfg.effect.preset_id == "energy_aura_v1"
         self.band_masks = smooth_masks(self.masks, radius=1) if self.masks is not None and aura else None
 
@@ -233,6 +308,8 @@ class FrameComposer:
 
     def inputs(self, i: int, frame: np.ndarray) -> tuple[FrameInputs, np.ndarray | None]:
         """``(composite inputs, occluding subject mask or None)`` of frame ``i``."""
+        if self.clean_plate is not None:
+            return self._blink_inputs(i, frame), None
         anchor = self.anchors[i]
         subject = self.subject_at(i) if self.occlude else None
         band = upscale_mask(self.band_masks[i], self.w, self.h) if self.band_masks is not None else None
@@ -241,10 +318,21 @@ class FrameComposer:
             effect = render_effect(self.cfg.effect.preset_id, self.params, self.window, i,
                                    tuple(anchor) if anchor is not None else None, self.w, self.h,
                                    self.cfg.plate.seed, band)
-        glow = split_glow(effect) if self.cfg.effect.layer_order == "split_glow" else None
+        glow = split_glow(effect) if self.layer_order == "split_glow" else None
         inp = FrameInputs(source=frame, effect=effect, plate=self.plates.at(i, anchor, band), subject_mask=subject,
                           front_glow=glow, roi_limit=None)
         return inp, subject
+
+    def _blink_inputs(self, i: int, frame: np.ndarray) -> FrameInputs:
+        """Blink Out: the subject dissolves into the clean plate; boundary particles and the plate on top."""
+        subject = self.subject_at(i)
+        anchor = self.anchors[i]
+        effect = render_effect(self.cfg.effect.preset_id, self.params, self.window, i,
+                               tuple(anchor) if anchor is not None else None, self.w, self.h, self.cfg.plate.seed,
+                               subject)
+        return FrameInputs(source=frame, effect=effect, plate=self.plates.at(i, anchor, subject), subject_mask=None,
+                           front_glow=None, roi_limit=None, clean_plate=self.clean_plate,
+                           dissolve=dissolve_alpha(subject, i, self.window, self.cfg.plate.seed))
 
 
 def final_video(run: JobRun, cfg, video_id: str, work: Asset, preset: dict,
@@ -309,8 +397,9 @@ def vfx_render(run: JobRun) -> tuple[list[str], dict]:
     preset = load_presets()[cfg.effect.preset_id]
     policy = preset.get("invalid_policy", "hide")
     window = effect_window(cfg_json["effect"], cfg.trim.duration_ms)
-    if cfg.effect.preset_id == "blink_out_v1":
-        raise StageFailed("mask_required", "Blink Out needs subject masks; track the subject first.")
+    blink = is_blink(preset)
+    if blink:
+        clean_plate_asset(run, cfg)  # fail before any work
 
     needs_masks = masks_needed(cfg, preset)
 
@@ -336,12 +425,14 @@ def vfx_render(run: JobRun) -> tuple[list[str], dict]:
                               "again.")
         motion_asset = derived_asset(run, work, "motion_report")
         motion = json_asset(run, motion_asset.id) if motion_asset else None
+        clean = check_clean_plate(run, cfg, work, subject, motion, w, h, n) if blink else None
         plate = resolve_plate(run, cfg, profile, preset, window, w, h)
         doc = {"schema_version": 1, "canvas": [w, h], "frame_count": n, "space": "output_px",
                "window": {"start": window.start, "peak": window.peak, "end": window.end},
                "follow": cfg.anchor.follow, "invalid_policy": policy,
                "track_job_id": str(track_job.id) if track_job else None,
                "anchors": _anchors(track, cfg, w, h, n, policy), "plate": plate, "subject_masks": subject,
+               "clean_plate": clean, "layer_order": render_layer_order(cfg, preset),
                "tracking_warnings": _tracking_warnings(track, window, policy, motion, preset)}
         return [store_json(run, "render_layers", doc, source_asset_id=work.id,
                            meta={"revision": run.job.input_revision})]
@@ -362,7 +453,7 @@ def vfx_render(run: JobRun) -> tuple[list[str], dict]:
                 if i >= n:
                     break
                 inp, subject = composer.inputs(i, frame)
-                out, roi = composite_frame(inp, cfg.effect.layer_order)
+                out, roi = composite_frame(inp, composer.layer_order)
                 writer.write(out)
                 acc.add(frame, out, roi)
                 if occlude:
@@ -385,7 +476,7 @@ def vfx_render(run: JobRun) -> tuple[list[str], dict]:
                 "plate_source": plate["source"] if plate else "procedural",
                 "plate_asset_id": plate["asset_id"] if plate else None,
                 "bundled_plate_id": plate["bundled_id"] if plate else None, "preset_id": cfg.effect.preset_id,
-                "layer_order": cfg.effect.layer_order, "occlusion": occlude, "occlusion_qa": occlusion_qa,
+                "layer_order": composer.layer_order, "occlusion": occlude, "occlusion_qa": occlusion_qa,
                 "has_audio": False, "mock": bool(plate and plate["mock"]), "integrity": integrity,
                 "frame_stats": {"roi_px": roi_px, "roi_bbox": roi_bbox, "changed_px": changed_px,
                                 "core_cover": cover or None}}
@@ -428,5 +519,5 @@ def vfx_render(run: JobRun) -> tuple[list[str], dict]:
         "frame_count": n, "mock": meta["mock"], "has_audio": bool(qa_meta["has_audio"]), "audio": qa_meta["audio"],
         "render_video_asset_id": video_id, "cover_asset_id": cover_id, "roi_qa_asset_id": qa_id,
         "layers_asset_id": layers_id, "track_job_id": plan["track_job_id"], "revision": run.job.input_revision,
-        "width": w, "height": h,
+        "width": w, "height": h, "clean_plate": plan.get("clean_plate"),
     }

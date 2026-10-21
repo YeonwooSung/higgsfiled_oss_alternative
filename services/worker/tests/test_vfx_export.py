@@ -261,3 +261,27 @@ def test_layers_export_resumes_without_rerunning_the_stage(masked):
         st = db.scalar(select(JobStage).where(JobStage.job_id == first.id, JobStage.stage_name == "layers_zip"))
         assert st.state == "succeeded" and st.output_asset_ids == first.output_asset_ids
     assert load(proj.db_factory, Job, first.id).result_json["format"] == "layers_zip"
+
+
+def test_blink_exports_the_reveal_layer_and_credits_the_users_photo(proj):
+    from test_vfx_executors import FIX, _blink
+
+    track = _blink(proj, (FIX / "clean_plate.png").read_bytes())
+    render = proj.run("vfx.render", {"track_job_id": str(track.id), "render_profile": "quick"})
+    with open_zip(proj, export(proj, render, "recipe_zip")) as z:
+        readme = z.read("README.md").decode()
+        assert "your own empty-background photo" in readme and "not a restored or generated background" in readme
+        assert "layer order `in_front`" in readme
+        inputs = json.loads(z.read("inputs.json"))
+        assert inputs["clean_plate"]["sha256"] == proj.asset(proj.cfg["clean_plate_asset_id"]).sha256
+        assert json.loads(z.read("layers.json"))["clean_plate"]["alignment"]["status"] == "ok"
+    with open_zip(proj, export(proj, render, "layers_zip")) as z:
+        manifest = json.loads(z.read("manifest.json"))
+        assert manifest["layer_order"] == ["reveal", "plate", "effect"] and manifest["folders"] == ["reveal", "effect"]
+        assert not any(n.startswith("foreground/") for n in z.namelist())
+        assert "nothing is restored or generated" in z.read("README.md").decode()
+        plate = np.asarray(Image.open(FIX / "clean_plate.png").convert("RGB"))
+        assert not png(z, "reveal/0010.png")[..., 3].any()  # before the effect: nothing revealed
+        last = png(z, "reveal/0110.png")
+        on = last[..., 3] == 255
+        assert on.sum() > 5000 and np.array_equal(last[..., :3][on], plate[on])

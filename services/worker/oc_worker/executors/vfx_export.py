@@ -6,6 +6,8 @@ muxed one, so the role is never used to pick it). ``recipe_zip`` packs what repr
 track/mask/plate metadata, preset, QA, workflow graphs, model manifest, input hashes). ``layers_zip`` re-renders the
 effect layers deterministically from the render's own plan (``FrameComposer``) and streams them frame by frame:
 ``effect/%04d.png`` straight-alpha sRGB RGBA, ``foreground/%04d.png`` the source with the subject mask as alpha.
+A Blink Out render has no foreground (nothing is drawn behind the subject); instead ``reveal/%04d.png`` is the user's
+clean plate with the dissolve as alpha, laid over the source below the effect.
 """
 
 from __future__ import annotations
@@ -90,13 +92,14 @@ def _readme(render: Job, cfg: dict, plan: dict, track_key: str | None, mock: boo
          "- Track job: none (fixed anchor, no subject masks)"),
         f"- Execution profile: {profile.label if profile else render.model_profile} (`{render.model_profile}`)",
         (f"- Effect: preset `{cfg['effect']['preset_id']}`, palette `{cfg['effect']['palette']}`, layer order "
-         f"`{cfg['effect']['layer_order']}`, plate seed {cfg['plate']['seed']}"),
+         f"`{plan.get('layer_order') or cfg['effect']['layer_order']}`, plate seed {cfg['plate']['seed']}"),
         (f"- Plate: {plate['source']} " + (f"`{plate['bundled_id']}`" if plate["bundled_id"] else
                                           f"asset `{plate['asset_id']}`") + f", {plate['frames']} frames")
         if plate else "- Plate: none (procedural effect only)",
         (f"- Output: {plan['canvas'][0]}x{plan['canvas'][1]}, {plan['frame_count']} frames @ 24 fps, "
          f"audio: {'yes' if res.get('has_audio') else 'no'}"),
         f"- Outside-ROI integrity: {res['roi_qa']['status']} (max channel error {res['roi_qa']['max_err']}/255)\n",
+        *(_clean_plate_lines(plan["clean_plate"]) if plan.get("clean_plate") else []),
         "## Masks\n",
         ("SAM masks are segmentation, not alpha matting: edges are binary-derived and soft only through the "
          "resize, so hair and motion blur are not matted.\n"),
@@ -111,6 +114,19 @@ def _readme(render: Job, cfg: dict, plan: dict, track_key: str | None, mock: boo
          "across GPUs or library versions.\n"),
     ]
     return "\n".join(lines)
+
+
+def _clean_plate_lines(clean: dict) -> list[str]:
+    a = clean["alignment"]
+    return [
+        "## Blink Out background\n",
+        ("Where the subject disappears, the background comes from **your own empty-background photo** (the clean "
+         f"plate, asset `{clean['asset_id']}`), cover-fit to the frame like the clip. It is not a restored or "
+         "generated background: anything that photo does not show cannot appear."),
+        (f"- Alignment check before rendering: {a['status']} (worst median background offset {a['median_err_px']} px "
+         f"over {a['frames']} sampled frames, at least {a['inliers']} matching background points per frame; "
+         "a fixed camera is required).\n"),
+    ]
 
 
 def _recipe(run: JobRun, render: Job) -> str:
@@ -128,6 +144,8 @@ def _recipe(run: JobRun, render: Job) -> str:
     inputs = {"clip": _input_doc(run.asset(cfg["video_asset_id"])), "work_clip": _input_doc(run.asset(cfg["work_asset_id"]))}
     if plan["plate"] and plan["plate"]["asset_id"]:
         inputs["plate"] = _input_doc(run.asset(plan["plate"]["asset_id"]))
+    if plan.get("clean_plate"):
+        inputs["clean_plate"] = _input_doc(run.asset(plan["clean_plate"]["asset_id"]))
     related = [render] + ([track_job] if track_job else [])
     track_doc = masks_doc = None
     if track_job is not None:
@@ -207,8 +225,11 @@ def effect_rgba(layers: list[EffectLayer], subject: np.ndarray | None, w: int, h
     return out
 
 
-def layer_order(mode: str, has_foreground: bool) -> list[str]:
-    """Bottom -> top stacking of the exported layers over the source, from the config's ``layer_order``."""
+def layer_order(mode: str, has_foreground: bool, reveal: bool = False) -> list[str]:
+    """Bottom -> top stacking of the exported layers over the source, from the render's layer order. Blink Out
+    (``reveal``): the clean plate reveal, then plate and effect (never occluded, no foreground)."""
+    if reveal:
+        return ["reveal", "plate", "effect"]
     fg = ["foreground"] if has_foreground else []
     if mode == "in_front":  # no occlusion: the effect is drawn over the subject
         return [*fg, "plate", "effect"]
@@ -232,13 +253,29 @@ def _outside_roi(rgba: np.ndarray, box: list[int] | None) -> bool:
     return bool(xs.min() < x0 or xs.max() >= x1 or ys.min() < y0 or ys.max() >= y1)
 
 
-def _layers_readme(order: list[str], mode: str, has_fg: bool, mock: bool) -> str:
-    stack = {
+def reveal_rgba(clean_plate: np.ndarray, dissolve: np.ndarray | None) -> np.ndarray:
+    """Blink Out reveal layer: the clean plate (sRGB) with the dissolve as straight alpha."""
+    a = np.zeros(clean_plate.shape[:2], np.float32) if dissolve is None else np.clip(dissolve, 0.0, 1.0)
+    alpha = np.rint(a * 255.0).astype(np.uint8)
+    return np.dstack([np.where(alpha[..., None] > 0, clean_plate, 0).astype(np.uint8), alpha])
+
+
+_REVEAL_README = (
+    "Blink Out: the subject dissolves into your empty-background photo. `reveal/%04d.png` is that photo (cover-fit "
+    "to the frame) with the dissolve as straight alpha; laid over the source it replaces the subject. The background "
+    "comes from your photo - nothing is restored or generated. The render blends it in linear light, so an sRGB "
+    "over may differ slightly on soft edges. The particles (`effect/`) are drawn over it, not occluded.")
+
+
+def _layers_readme(order: list[str], mode: str, has_fg: bool, mock: bool, reveal: bool = False) -> str:
+    stack = _REVEAL_README if reveal else {
         "behind_subject": "The effect is drawn behind the subject: the subject is restored on top of plate + effect.",
         "in_front": "The effect is drawn over the subject (no occlusion): the stack is foreground, plate, effect.",
         "split_glow": ("The effect is drawn behind the subject and a weaker front glow (`glow/`, the effect at 35 %) "
                        "is drawn on top of the subject, inside the effect's footprint."),
     }[mode]
+    folders = ("- `reveal/%04d.png`: your empty-background photo with the dissolve as straight alpha, sRGB RGBA.\n"
+               if reveal else "")
     return (
         "# Pocket VFX layers\n\n" + ("**Mock profile**: stand-in masks/plates, not SAM/LTX output.\n\n" if mock else "")
         + f"Layer order, bottom to top: {' -> '.join(order)} (render layer order `{mode}`). {stack}\n\n"
@@ -246,8 +283,10 @@ def _layers_readme(order: list[str], mode: str, has_fg: bool, mock: bool) -> str
         + (" after the subject occlusion of the render" if mode != "in_front" else " (not occluded)")
         + ", straight (un-premultiplied) alpha, sRGB, RGBA, one PNG per frame.\n"
         + ("- `glow/%04d.png`: the front glow, straight alpha sRGB RGBA, not occluded.\n" if mode == "split_glow" else "")
+        + folders
         + ("- `foreground/%04d.png`: the source frame as RGB with the subject mask (upscaled SAM mask) as alpha.\n"
-           if has_fg else "- No `foreground/` folder: this render had no subject masks.\n")
+           if has_fg else "- No `foreground/` folder: " + ("the subject is not drawn over the effect in Blink Out.\n"
+                                                          if reveal else "this render had no subject masks.\n"))
         + "- `manifest.json`: frame count, fps, size, layer order, color handling.\n\n"
           "**The MP4 has no alpha channel**; use these PNGs to composite the effect yourself.\n\n"
           "**SAM masks are segmentation, not alpha matting**: the foreground alpha is a silhouette that is only "
@@ -264,9 +303,10 @@ def _layers_zip(run: JobRun, render: Job) -> str:
     window = effect_window(cfg_json["effect"], cfg.trim.duration_ms)
     work = fresh_work_clip(run, cfg, cfg_json)
     composer = FrameComposer(run, cfg, cfg_json, plan, window, w, h, n)
-    has_fg = composer.masks is not None
-    mode = cfg.effect.layer_order
-    order = layer_order(mode, has_fg)
+    reveal = composer.clean_plate is not None
+    has_fg = composer.masks is not None and not reveal
+    mode = composer.layer_order
+    order = layer_order(mode, has_fg, reveal)
     roi_boxes = json_asset(run, res["roi_qa_asset_id"])["frame_stats"]["roi_bbox"]
     path = run.work_dir / "layers.zip"
     count = 0
@@ -277,9 +317,12 @@ def _layers_zip(run: JobRun, render: Job) -> str:
             inp, subject = composer.inputs(i, frame)
             rgba = effect_rgba([x for x in (inp.plate, inp.effect) if x is not None], subject, w, h)
             glow = effect_rgba([inp.front_glow], None, w, h) if inp.front_glow is not None else None
-            for img in (rgba, glow):
+            rev = reveal_rgba(composer.clean_plate, inp.dissolve) if reveal else None
+            for img in (rgba, glow, rev):
                 if img is not None and _outside_roi(img, roi_boxes[i]):
                     raise StageFailed("layers_outside_roi", f"Effect alpha lies outside the render's ROI at frame {i}.")
+            if rev is not None:
+                z.writestr(f"reveal/{i:04d}.png", _png(rev))
             z.writestr(f"effect/{i:04d}.png", _png(rgba))
             if mode == "split_glow":
                 z.writestr(f"glow/{i:04d}.png", _png(glow if glow is not None else np.zeros((h, w, 4), np.uint8)))
@@ -289,15 +332,19 @@ def _layers_zip(run: JobRun, render: Job) -> str:
             count += 1
         if count != n:
             raise StageFailed("frame_count_mismatch", f"Exported {count} frames, expected {n}.")
-        folders = ["effect", *(["glow"] if mode == "split_glow" else []), *(["foreground"] if has_fg else [])]
+        folders = [*(["reveal"] if reveal else []), "effect", *(["glow"] if mode == "split_glow" else []),
+                   *(["foreground"] if has_fg else [])]
         manifest = {"schema_version": 1, "frame_count": n, "fps": 24, "size": [w, h], "layer_order": order,
                     "layer_order_mode": mode, "premultiplied": False, "color": "sRGB", "folders": folders,
                     "foreground": ("subject mask as alpha over the source RGB" if has_fg else
+                                   "omitted: Blink Out draws nothing behind the subject" if reveal else
                                    "omitted: the render had no subject masks"),
+                    **({"reveal": "your empty-background photo (clean plate) with the dissolve as straight alpha; "
+                                  "not a restored background"} if reveal else {}),
                     "alpha_floor": ALPHA_FLOOR, "render_job_id": str(render.id), "revision": render.input_revision,
                     "note": LAYERS_NOTE}
         z.writestr("manifest.json", json.dumps(manifest, indent=2))
-        z.writestr("README.md", _layers_readme(order, mode, has_fg, _is_mock(render, plan["subject_masks"])))
+        z.writestr("README.md", _layers_readme(order, mode, has_fg, _is_mock(render, plan["subject_masks"]), reveal))
     return run.store_asset("layers_export", path, "application/zip", source_asset_id=_render_video_id(render),
                            meta={"revision": render.input_revision, "render_job_id": str(render.id),
                                  "frame_count": n, "foreground": has_fg})

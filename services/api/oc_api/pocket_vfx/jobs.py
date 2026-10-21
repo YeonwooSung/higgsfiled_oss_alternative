@@ -11,6 +11,11 @@ plate (``plate.bundled_id`` or the default; ``plate.asset_id`` is ignored). ``ge
 by a succeeded vfx.generate_plate job (``plate_mismatch``). A plate of P frames covers an effect window of W frames by
 trim/retime when ``W <= 2P``; beyond that only a loopable bundled plate may loop (``plate_length`` otherwise), so a
 render that cannot place its plate is refused before any job runs.
+
+Blink Out (preset ``input_requirements.clean_plate``) needs the user's empty-background photo
+(``clean_plate_required``) and a fixed camera: when the analysis' camera motion report of the work clip is not
+``fixed`` the render is refused up front with ``clean_plate_mismatch`` (no CPU spent). Whether the photo lines up
+with the clip is only known once the worker compares them (the render's ``layers`` stage fails with the same code).
 """
 
 from __future__ import annotations
@@ -190,6 +195,42 @@ def _asset(db: DbSession, project: Project, asset_id, role: str) -> Asset | None
     return a if a is not None and a.project_id == project.id and a.role == role else None
 
 
+def camera_motion_status(db: DbSession, work: Asset) -> str | None:
+    """``status`` of the newest motion report vfx.analyze stored for ``work`` (None: no report)."""
+    report = db.scalar(select(Asset).where(Asset.project_id == work.project_id, Asset.source_asset_id == work.id,
+                                           Asset.role == "motion_report", Asset.state == "ready")
+                       .order_by(Asset.created_at.desc()).limit(1))
+    return (report.meta_json or {}).get("status") if report is not None else None
+
+
+_CAMERA_MESSAGES = {
+    "handheld": "Blink Out needs a fixed camera, and this clip's camera shakes. Choose another effect or use a clip "
+                "shot from a fixed camera.",
+    "moving": "Blink Out needs a fixed camera, and this clip's camera moves. Choose another effect or use a clip shot "
+              "from a fixed camera.",
+}
+_CAMERA_UNKNOWN = ("Blink Out needs a fixed camera, and this clip's camera could not be confirmed as fixed. Choose "
+                   "another effect or use a clip shot from a fixed camera.")
+
+
+def _clean_plate_errors(db: DbSession, project: Project, cfg: PocketVfxConfig) -> list[dict]:
+    errors = []
+    plate = _asset(db, project, cfg.clean_plate_asset_id, "clean_plate")
+    if plate is None:
+        errors.append(_err("clean_plate_required", "config.clean_plate_asset_id",
+                           "Blink Out needs an empty background frame from the same camera position."))
+    elif plate.state != "ready":
+        errors.append(_err("asset_not_ready", "config.clean_plate_asset_id",
+                           "The background frame has not passed inspection yet."))
+    work = _asset(db, project, cfg.work_asset_id, "work_clip")
+    if work is not None and work.state == "ready" and analysis_matches(work, cfg.model_dump(mode="json")):
+        status = camera_motion_status(db, work)
+        if status is not None and status != "fixed":
+            errors.append(_err("clean_plate_mismatch", "config.effect.preset_id",
+                               _CAMERA_MESSAGES.get(status, _CAMERA_UNKNOWN)))
+    return errors
+
+
 def _input_errors(db: DbSession, project: Project, cfg: PocketVfxConfig) -> tuple[list[dict], Asset | None]:
     """Clip, trim and analysis checks; returns the errors and the ready clip (if any)."""
     errors: list[dict] = []
@@ -277,13 +318,7 @@ def validate(db: DbSession, project: Project, cfg: PocketVfxConfig, *, track: Jo
     if differs:
         warnings.append(differs)
     if preset["input_requirements"].get("clean_plate"):
-        plate = _asset(db, project, cfg.clean_plate_asset_id, "clean_plate")
-        if plate is None:
-            blocking.append(_err("clean_plate_required", "config.clean_plate_asset_id",
-                                 "Blink Out needs an empty background frame from the same camera position."))
-        elif plate.state != "ready":
-            blocking.append(_err("asset_not_ready", "config.clean_plate_asset_id",
-                                 "The background frame has not passed inspection yet."))
+        blocking += _clean_plate_errors(db, project, cfg)
     return {"valid": not blocking, "blocking_errors": blocking, "warnings": warnings}
 
 
@@ -344,7 +379,8 @@ def plan_job(db: DbSession, storage, project: Project, cfg: PocketVfxConfig, kin
             # exist, or to replace a mismatching/too short plate, is fine
             blocking = [e for e in report["blocking_errors"]
                         if kind == "vfx.render" or e["code"] not in ("mask_required", *PLATE_CODES)]
-            _raise_first(blocking, PLATE_CODES, details={"blocking_errors": blocking})  # a render that cannot place its plate: its own 422 code
+            # a render that cannot place its plate, or a Blink Out on a camera that is not fixed: its own 422 code
+            _raise_first(blocking, (*PLATE_CODES, "clean_plate_mismatch"), details={"blocking_errors": blocking})
             if blocking:
                 raise ApiError(422, "validation_failed", blocking[0]["message"], field=blocking[0]["field"],
                                details={"blocking_errors": blocking})

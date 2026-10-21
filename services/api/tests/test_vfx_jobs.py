@@ -3,12 +3,12 @@ import uuid
 import pytest
 from sqlalchemy import func, select
 
-from helpers import configure, set_job_state
+from helpers import configure, put_asset, set_job_state
 from oc_api.models import Asset, Job, JobCost, Project, ProjectRevision
 from oc_api.pocket_vfx import jobs as vfx_jobs
 from oc_api.pocket_vfx.config import MaskEdit, PocketVfxConfig, SubjectPrompt
 from open_creative.pocket_vfx.keys import masks_key, model_rev, track_key
-from test_vfx_config import CLIP_SHA, codes, make_ready, put_clip, validate, vproject  # noqa: F401
+from test_vfx_config import CLIP_SHA, codes, make_ready, put_clip, put_motion, validate, vproject  # noqa: F401
 
 
 @pytest.fixture
@@ -330,6 +330,21 @@ def test_render_blink_without_clean_plate(app, session_client, ready):
     r = render(session_client, p, rev, make_track(app, p, rev))
     assert r.status_code == 422 and err(r)["code"] == "validation_failed"
     assert [x["code"] for x in err(r)["details"]["blocking_errors"]] == ["clean_plate_required"]
+
+
+def test_render_blink_on_a_moving_camera_is_clean_plate_mismatch(app, session_client, vproject):  # noqa: F811
+    proj, _, work = make_ready(app, session_client, vproject, effect__preset_id="blink_out_v1",
+                               anchor__follow=False)
+    put_motion(app, vproject["id"], work, "moving")
+    plate = put_asset(app, vproject["id"], "clean_plate", b"x", "image/png", 4, 4)
+    proj = configure(session_client, vproject, clean_plate_asset_id=plate)
+    rev = proj["current_revision"]
+    r = render(session_client, vproject, rev, make_track(app, vproject, rev))
+    assert r.status_code == 422 and err(r)["code"] == "clean_plate_mismatch"
+    assert err(r)["field"] == "config.effect.preset_id"
+    assert [x["code"] for x in err(r)["details"]["blocking_errors"]] == ["clean_plate_mismatch"]
+    with app.state.db() as db:
+        assert db.scalar(select(func.count()).select_from(Job).where(Job.kind == "vfx.render")) == 0
 
 
 # --- plates (Ruling R3) ---------------------------------------------------------------------------------------

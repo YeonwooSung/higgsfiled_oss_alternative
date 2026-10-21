@@ -1,6 +1,8 @@
 """Layer assembly over the untouched source frame (spec §8 레이어 순서, §14 원본 보존).
 
-Order: Source -> behind layers (plate, then effect) -> subject restored -> optional front glow.
+Order: Source [-> Blink Out reveal] -> behind layers (plate, then effect) -> subject restored -> optional front glow.
+- Blink Out reveal (``clean_plate`` + ``dissolve``): the base becomes ``lerp(source, clean_plate, dissolve)`` in
+  linear; it replaces the source everywhere below, also as the "subject restored" of an occluding layer order.
 - ``behind_subject``: after the behind layers, the source is re-blended inside the subject mask
   (``out = out * (1 - M) + source * M`` in linear), so the subject core is never touched.
 - ``in_front``: no masking at all (``front_glow`` is not drawn).
@@ -9,8 +11,9 @@ Order: Source -> behind layers (plate, then effect) -> subject restored -> optio
   subject occlusion (so the glow can sit in front of the subject there), and to ``roi_limit``.
 
 Blending is premultiplied in linear RGB; sRGB conversion happens once at the end.
-``roi = dilate(drawn alpha > 1/1024, 2 px)`` with the behind alpha after occlusion; every pixel outside it is a verbatim
-copy of the source bytes (never round-tripped), which is what guarantees the outside-ROI check.
+``roi = dilate(drawn alpha > 1/1024 or dissolve > 1/1024, 2 px)`` with the behind alpha after occlusion; every pixel
+outside it is a verbatim copy of the source bytes (never round-tripped), which is what guarantees the outside-ROI
+check.
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ import cv2
 import numpy as np
 
 from .color import linear_to_srgb, over_premult, srgb_to_linear
+from .masks import mask_box
 from .procedural import EffectLayer
 
 LAYER_ORDERS = ("behind_subject", "in_front", "split_glow")
@@ -39,6 +43,8 @@ class FrameInputs:
     subject_mask: np.ndarray | None  # float32 HxW in [0, 1] at output resolution
     front_glow: EffectLayer | None  # split_glow only
     roi_limit: np.ndarray | None  # bool HxW: where the front glow is allowed
+    clean_plate: np.ndarray | None = None  # Blink Out: uint8 HxWx3 sRGB empty background at output size
+    dissolve: np.ndarray | None = None  # Blink Out: float32 HxW in [0, 1], how much clean plate replaces the source
 
 
 def split_glow(effect: EffectLayer | None) -> EffectLayer | None:
@@ -67,18 +73,26 @@ def composite_frame(inp: FrameInputs, layer_order: str) -> tuple[np.ndarray, np.
     if glow is not None and inp.roi_limit is not None and np.shape(inp.roi_limit) != (h, w):
         raise ValueError(f"roi_limit shape {np.shape(inp.roi_limit)} != {(h, w)}")
 
+    reveal_box = _reveal_box(inp, w, h)
+
     out = src.copy()
     roi = np.zeros((h, w), bool)
-    if not behind:  # the front glow lives inside the behind-effect ROI, so nothing to draw
+    if not behind and reveal_box is None:  # the front glow lives inside the behind-effect ROI: nothing to draw
         return out, roi
     # the glow is clipped to the dilated behind footprint and the ROI dilates once more
-    box = _union_box([layer.bbox for layer in behind], 2 * ROI_DILATE_PX, w, h)
+    boxes = [layer.bbox for layer in behind] + ([reveal_box] if reveal_box is not None else [])
+    box = _union_box(boxes, 2 * ROI_DILATE_PX, w, h)
     if box is None:
         return out, roi
     x0, y0, x1, y1 = box
     sl = (slice(y0, y1), slice(x0, x1))
 
     src_lin = srgb_to_linear(src[sl])
+    revealed = np.zeros((y1 - y0, x1 - x0), bool)
+    if reveal_box is not None:
+        d = np.clip(np.asarray(inp.dissolve, np.float32)[sl], 0.0, 1.0)
+        src_lin = src_lin + (srgb_to_linear(np.asarray(inp.clean_plate)[sl]) - src_lin) * d[..., None]
+        revealed = d > ALPHA_FLOOR
     lin = src_lin
     keep = np.ones((y1 - y0, x1 - x0), np.float32)  # prod(1 - a): alpha union = 1 - keep
     for layer in behind:
@@ -90,9 +104,9 @@ def composite_frame(inp: FrameInputs, layer_order: str) -> tuple[np.ndarray, np.
     if masked:
         m = np.clip(np.asarray(inp.subject_mask, np.float32)[sl], 0.0, 1.0)
         lin = lin * (1.0 - m)[..., None]  # lin is a fresh array here (over_premult returns one)
-        lin += src_lin * m[..., None]  # M == 1 restores the source exactly
+        lin += src_lin * m[..., None]  # M == 1 restores the source (after the reveal) exactly
         a_eff = a_union * (1.0 - m)
-    hit = a_eff > ALPHA_FLOOR
+    hit = (a_eff > ALPHA_FLOOR) | revealed
     if glow is not None:
         # the effect's own footprint (before occlusion): the glow may cross the subject there
         allowed = _dilate(a_union > ALPHA_FLOOR)
@@ -117,6 +131,16 @@ def composite_sequence(
     if layer_order not in LAYER_ORDERS:  # fail at call time, not on the first next()
         raise ValueError(f"unknown layer_order {layer_order!r}")
     return (composite_frame(per_frame_fn(i, frame), layer_order) for i, frame in enumerate(frames_iter))
+
+
+def _reveal_box(inp: FrameInputs, w: int, h: int) -> tuple[int, int, int, int] | None:
+    """Tight box of the Blink Out dissolve (``dissolve > ALPHA_FLOOR``), None when nothing is revealed."""
+    if inp.dissolve is None or inp.clean_plate is None:
+        return None
+    if np.shape(inp.dissolve) != (h, w) or np.shape(inp.clean_plate) != (h, w, 3):
+        raise ValueError(f"clean_plate/dissolve shape {np.shape(inp.clean_plate)}/{np.shape(inp.dissolve)} "
+                         f"!= {(h, w)}")
+    return mask_box(np.asarray(inp.dissolve) > ALPHA_FLOOR)
 
 
 def _check_layer(layer: EffectLayer, w: int, h: int) -> None:

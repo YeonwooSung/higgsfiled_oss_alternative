@@ -138,9 +138,17 @@ function EffectSection({ preset }: { preset: VfxPreset | undefined }) {
   );
 }
 
-function DepthSection() {
+function DepthSection({ preset }: { preset: VfxPreset | undefined }) {
   const { t } = useI18n();
   const order = useEditor((s) => s.config!.effect.layer_order);
+  if (preset?.input_requirements.clean_plate) {
+    // Blink Out: the subject is what disappears; the worker always draws the particles over it
+    return (
+      <Section title={t("secDepth")}>
+        <p className="text-xs text-muted">{t("layerBlink")}</p>
+      </Section>
+    );
+  }
   return (
     <Section title={t("secDepth")}>
       <Segmented<VfxLayerOrder> label={t("secDepth")} value={order}
@@ -355,7 +363,7 @@ export function Inspector({ n, tracking }: { n: number; tracking?: ReactNode }) 
       <TimingSection n={n} />
       <PositionSection />
       <EffectSection preset={preset} />
-      <DepthSection />
+      <DepthSection preset={preset} />
       {tracking && <section className="border-b border-border px-4 py-4">{tracking}</section>}
       <PlateSection preset={preset} />
       <AudioSection />

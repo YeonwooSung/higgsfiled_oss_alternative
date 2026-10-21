@@ -61,6 +61,20 @@ def gray_frames(path: Path, limit: int = MAX_TRACK_FRAMES) -> list[np.ndarray]:
     return frames
 
 
+def gray_frames_at(path: Path, indices: list[int]) -> list[np.ndarray]:
+    """Gray uint8 frames ``indices`` (ascending) of a clip, decoded in one pass keeping only those frames."""
+    wanted, frames = set(indices), {}
+    for i, f in enumerate(decode_frames(path)):
+        if i in wanted:
+            frames[i] = cv2.cvtColor(f, cv2.COLOR_RGB2GRAY)
+        if len(frames) == len(wanted):
+            break
+    if len(frames) != len(wanted):
+        raise StageFailed("frame_count_mismatch", f"The clip has fewer frames than expected ({len(frames)} of "
+                          f"{len(wanted)} sampled frames decoded).")
+    return [frames[i] for i in indices]
+
+
 def store_json(run: JobRun, role: str, data: dict, *, meta: dict | None = None, source_asset_id=None) -> str:
     path = run.work_dir / f"{role}.json"
     path.write_text(json.dumps(data, separators=(",", ":")))

@@ -18,8 +18,8 @@ router = APIRouter()
 _PUBLIC_FIELDS = ("id", "version", "label_en", "label_ko", "input_requirements", "plate_modes", "controls",
                   "defaults", "invalid_policy")
 _CLEAN_PLATE_CONDITION = {
-    "condition_en": "Needs an empty background frame shot from the same fixed camera position.",
-    "condition_ko": "같은 고정 카메라 위치에서 찍은 빈 배경 프레임이 필요합니다.",
+    "condition_en": "Needs a fixed camera and an empty background frame",
+    "condition_ko": "고정 카메라와 빈 배경 프레임이 필요합니다",
 }
 
 

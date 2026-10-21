@@ -187,7 +187,8 @@ def test_presets_endpoint(session_client):
     assert blink["input_requirements"]["clean_plate"] is True
     assert blink["availability"]["status"] == "requires_clean_plate"
     assert blink["availability"]["requires"] == ["clean_plate"]
-    assert blink["availability"]["condition_en"] and blink["availability"]["condition_ko"]
+    assert blink["availability"]["condition_en"] == "Needs a fixed camera and an empty background frame"
+    assert blink["availability"]["condition_ko"]
     assert ps["impact_wave_v1"]["availability"] == {"status": "available", "requires": []}
     assert ps["impact_wave_v1"]["controls"]["squash"] == [0.2, 1.0]
     assert ps["impact_wave_v1"]["defaults"]["palette"] == "amber" and ps["impact_wave_v1"]["version"] == 1
@@ -251,6 +252,37 @@ def test_validate_blink_requires_clean_plate(app, session_client, vproject):
     v = validate(session_client, vproject, proj["current_revision"])
     assert [(e["code"], e["field"]) for e in v["blocking_errors"]] == [
         ("mask_required", "config.subject_prompts"), ("clean_plate_required", "config.clean_plate_asset_id")]
+    plate = put_asset(app, vproject["id"], "clean_plate", b"x", "image/png", 4, 4)
+    proj = configure(session_client, vproject, clean_plate_asset_id=plate)
+    assert codes(validate(session_client, vproject, proj["current_revision"])["blocking_errors"]) == ["mask_required"]
+
+
+def put_motion(app, project_id, work_id, status):
+    """The motion report vfx.analyze stores for a work clip."""
+    aid = put_asset(app, project_id, "motion_report", b"{}", "application/json", None, None, meta={"status": status})
+    with app.state.db() as db:
+        db.get(Asset, uuid.UUID(aid)).source_asset_id = uuid.UUID(work_id)
+        db.commit()
+    return aid
+
+
+@pytest.mark.parametrize("status,word", [("moving", "moves"), ("handheld", "shakes"), ("unknown", "confirmed")])
+def test_validate_blink_needs_a_fixed_camera(app, session_client, vproject, status, word):
+    proj, _, work = make_ready(app, session_client, vproject, effect__preset_id="blink_out_v1")
+    put_motion(app, vproject["id"], work, status)
+    v = validate(session_client, vproject, proj["current_revision"])
+    e = [x for x in v["blocking_errors"] if x["code"] == "clean_plate_mismatch"]
+    assert len(e) == 1 and e[0]["field"] == "config.effect.preset_id"
+    assert word in e[0]["message"] and "another effect" in e[0]["message"]
+    # the same clip with an Impact Wave: no clean plate checks at all
+    proj = configure(session_client, vproject, effect__preset_id="impact_wave_v1")
+    assert "clean_plate_mismatch" not in codes(validate(session_client, vproject, proj["current_revision"])
+                                               ["blocking_errors"])
+
+
+def test_validate_blink_on_a_fixed_camera_has_no_camera_error(app, session_client, vproject):
+    proj, _, work = make_ready(app, session_client, vproject, effect__preset_id="blink_out_v1")
+    put_motion(app, vproject["id"], work, "fixed")
     plate = put_asset(app, vproject["id"], "clean_plate", b"x", "image/png", 4, 4)
     proj = configure(session_client, vproject, clean_plate_asset_id=plate)
     assert codes(validate(session_client, vproject, proj["current_revision"])["blocking_errors"]) == ["mask_required"]
