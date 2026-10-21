@@ -89,3 +89,25 @@ def test_clean_plate_uses_image_path_without_mask(ctx, db_factory, storage, pvfx
     assert job.state == "succeeded"
     assert "suggested_mask_asset_id" not in (job.result_json or {})
     assert load(db_factory, Asset, aid).state == "ready"
+
+
+def test_clip_turns_ready_only_after_its_preview_and_filmstrip_exist(ctx, db_factory, storage, pvfx_project,
+                                                                     monkeypatch):
+    """The client stops polling once the clip is ready, so the preview and filmstrip must already be stored (a crash
+    between the two leaves the clip `uploaded` and the retry makes them again)."""
+    from oc_worker.stages import JobRun
+
+    aid = upload_clip(db_factory, storage, pvfx_project, (FIX / "stomp_landscape.mp4").read_bytes())
+    seen = []
+    store = JobRun.store_asset
+
+    def spy(self, role, *a, **kw):
+        out = store(self, role, *a, **kw)
+        seen.append((role, load(db_factory, Asset, aid).state))  # committed state seen by another session
+        return out
+
+    monkeypatch.setattr(JobRun, "store_asset", spy)
+    job = inspect(ctx, db_factory, pvfx_project, aid)
+    assert job.state == "succeeded", (job.error_code, job.error_message)
+    assert seen == [("clip_preview", "uploaded"), ("clip_filmstrip", "uploaded")]
+    assert load(db_factory, Asset, aid).state == "ready"

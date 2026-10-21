@@ -36,6 +36,8 @@ export const ko: Dict = {
   reject_multiple_video_streams: "파일에 비디오 스트림이 둘 이상 있습니다.",
   reject_too_large_dims: "영상의 긴 변이 4096 px보다 큽니다.",
   reject_too_long: "영상이 60초보다 깁니다. 먼저 줄여 주세요.",
+  reject_too_large: "영상이 100 MB보다 큽니다.",
+  reject_unsupported_format: "지원하지 않는 파일 형식입니다. MP4, MOV, WebM을 사용하세요.",
   reject_unknown: "영상이 검사를 통과하지 못했습니다.",
   uploadAnother: "다른 영상 업로드",
   clipTooShort: "영상이 1초보다 짧아 자를 수 없습니다.",

@@ -1,6 +1,6 @@
 import type { Asset, Job, PocketVfxConfig } from "@oc/contracts";
 import { describe, expect, it } from "vitest";
-import { applyClipSettings, clipPhase, clipToLink, derivedAsset, latestJob, linkClip, matchingWork, workToLink } from "../src/flow/clip";
+import { applyClipSettings, clipPhase, clipToLink, derivativesPending, derivedAsset, latestJob, linkClip, matchingWork, workToLink } from "../src/flow/clip";
 
 let seq = 0;
 const asset = (p: Partial<Asset>): Asset => ({
@@ -99,3 +99,33 @@ describe("prepared work clip", () => {
 function timingFits(c: PocketVfxConfig): boolean {
   return c.effect.end_ms <= c.trim.duration_ms && c.anchor.frame < Math.floor((c.trim.duration_ms * 24) / 1000 + 0.5);
 }
+
+describe("frame-indexed edits after a shorter trim", () => {
+  it("drops corrections, subject prompts and mask edits at or past the new frame count", () => {
+    const clip = asset({ duration_ms: 10_000 });
+    const cfg = config({
+      video_asset_id: clip.id,
+      corrections: [{ frame: 10, x: 0.5, y: 0.5 }, { frame: 23, x: 0.5, y: 0.5 }, { frame: 24, x: 0.5, y: 0.5 }],
+      subject_prompts: [{ frame: 5, points: [] }, { frame: 100, points: [] }],
+      mask_edits: [{ frame: 24, asset_id: "m1" }, { frame: 0, asset_id: "m0" }],
+    });
+    const c = applyClipSettings(cfg, { trim: { source_start_ms: 0, duration_ms: 1000 }, aspect: "16:9" }, [clip]); // N = 24
+    expect(c.corrections.map((x) => x.frame)).toEqual([10, 23]);
+    expect(c.subject_prompts.map((x) => x.frame)).toEqual([5]);
+    expect(c.mask_edits.map((x) => x.frame)).toEqual([0]);
+    expect(applyClipSettings(cfg, { trim: { source_start_ms: 0, duration_ms: 5000 }, aspect: "16:9" }, [clip]).corrections).toHaveLength(3);
+  });
+});
+
+describe("inspection derivatives", () => {
+  it("reports a ready clip whose preview or filmstrip is not stored yet", () => {
+    const clip = asset({});
+    const preview = asset({ role: "clip_preview", source_asset_id: clip.id });
+    const strip = asset({ role: "clip_filmstrip", source_asset_id: clip.id });
+    expect(derivativesPending([clip])).toBe(true);
+    expect(derivativesPending([clip, preview])).toBe(true);
+    expect(derivativesPending([clip, preview, strip])).toBe(false);
+    expect(derivativesPending([asset({ state: "uploaded" })])).toBe(false);
+    expect(derivativesPending([])).toBe(false);
+  });
+});

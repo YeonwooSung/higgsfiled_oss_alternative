@@ -5,7 +5,7 @@
  * `matchingWork` applies the same rule so the client never sends a link the server would reject.
  */
 import type { Aspect, Asset, AssetRole, Job, JobKind, PocketVfxConfig, VfxAnalyzeResult, VfxClipSource, VfxTrim } from "@oc/contracts";
-import { fitTiming } from "../model/timeline";
+import { fitTiming, frameCount } from "../model/timeline";
 import { defaultAspect, defaultTrim, normalizeTrim } from "../model/trim";
 
 const newest = <T extends { created_at: string }>(xs: T[]): T | undefined =>
@@ -29,6 +29,16 @@ export function clipPhase(assets: Asset[]): ClipPhase {
   return ({ pending_upload: "uploading", uploaded: "inspecting", rejected: "rejected", ready: "ready" } as const)[clip.state];
 }
 
+/**
+ * The newest clip is ready but its `clip_preview` / `clip_filmstrip` are not in the project yet (an older worker
+ * stored them after flipping the clip to ready): keep polling a little longer.
+ */
+export function derivativesPending(assets: Asset[]): boolean {
+  const clip = newest(assets.filter((a) => a.role === "clip"));
+  return !!clip && clip.state === "ready"
+    && (!derivedAsset(assets, "clip_preview", clip.id) || !derivedAsset(assets, "clip_filmstrip", clip.id));
+}
+
 /** Newest ready clip to link into the config, or null (already linked, or older than the linked one). */
 export function clipToLink(assets: Asset[], config: Pick<PocketVfxConfig, "video_asset_id">): string | null {
   const clip = newest(assets.filter((a) => a.role === "clip" && a.state === "ready"));
@@ -47,10 +57,18 @@ export function clipDurationMs(clip: Asset | undefined): number | null {
   return clip?.duration_ms ?? clipSource(clip)?.duration_ms ?? null;
 }
 
-/** Fit effect timing and the anchor into the trimmed length (a shorter trim must not leave them outside). */
+/**
+ * Fit effect timing and the anchor into the trimmed length, and drop corrections, subject prompts and mask edits on
+ * frames the shorter clip no longer has (the server would report `frame_range`).
+ */
 function withTrim(config: PocketVfxConfig, trim: VfxTrim): PocketVfxConfig {
   const { timing, anchorFrame } = fitTiming(config.effect, config.anchor.frame, trim.duration_ms);
-  return { ...config, trim, effect: { ...config.effect, ...timing }, anchor: { ...config.anchor, frame: anchorFrame } };
+  const n = frameCount(trim.duration_ms);
+  const inside = <E extends { frame: number }>(xs: E[]) => xs.filter((x) => x.frame < n);
+  return {
+    ...config, trim, effect: { ...config.effect, ...timing }, anchor: { ...config.anchor, frame: anchorFrame },
+    corrections: inside(config.corrections), subject_prompts: inside(config.subject_prompts), mask_edits: inside(config.mask_edits),
+  };
 }
 
 /** Config after linking a newly inspected clip: default trim, aspect of the displayed orientation, no work clip. */

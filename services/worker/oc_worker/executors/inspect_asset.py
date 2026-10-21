@@ -125,15 +125,17 @@ def _clip(run: JobRun, asset):
         raise MediaError("unsupported_codec") from e
     strip = run.work_dir / "clip_filmstrip.png"
     indices = filmstrip(preview, strip)
+    # Derivatives first, then `ready`: a client stops polling at `ready` and must find the preview and filmstrip; a
+    # crash in between leaves the clip `uploaded`, so the retry makes them again (the early `ready` return is safe).
+    preview_id = run.store_asset("clip_preview", preview, "video/mp4", source_asset_id=asset.id,
+                                 meta={"fps": 24, "rotation_applied": info.rotation})
+    strip_id = run.store_asset("clip_filmstrip", strip, "image/png", source_asset_id=asset.id,
+                               meta={"frame_indices": indices})
     asset.meta_json = {"source": asdict(info), "original_sha256": asset.sha256 or _sha256_file(src)}
     asset.width, asset.height = info.display_w, info.display_h
     asset.duration_ms, asset.frame_count = info.duration_ms, info.frame_count
     asset.state = "ready"
     run.db.commit()
-    preview_id = run.store_asset("clip_preview", preview, "video/mp4", source_asset_id=asset.id,
-                                 meta={"fps": 24, "rotation_applied": info.rotation})
-    strip_id = run.store_asset("clip_filmstrip", strip, "image/png", source_asset_id=asset.id,
-                               meta={"frame_indices": indices})
     return [str(asset.id), preview_id, strip_id], {"preview_asset_id": preview_id, "filmstrip_asset_id": strip_id}
 
 

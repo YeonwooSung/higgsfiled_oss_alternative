@@ -4,9 +4,9 @@ import { TERMINAL_JOB_STATES, type Aspect, type Asset, type Job, type PocketVfxP
 import { Badge, Button, cx, Segmented } from "@oc/ui";
 import { Check, CircleAlert, Clapperboard, Loader2, Pause, Play, Volume2, VolumeX } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "../api/client";
-import { applyClipSettings, clipDurationMs, clipPhase, clipSource, clipToLink, derivedAsset, latestJob, linkClip, workToLink } from "../flow/clip";
+import { applyClipSettings, clipDurationMs, clipPhase, clipSource, clipToLink, derivativesPending, derivedAsset, latestJob, linkClip, workToLink } from "../flow/clip";
 import { useAssetUrl } from "../hooks/assets";
 import { mergeJobs, useConfigSaver, useJobs, useProject, type SaveState } from "../hooks/project";
 import { useI18n } from "../i18n";
@@ -41,23 +41,48 @@ export function TrimScreen({ projectId }: { projectId: string }) {
   const { jobs, follow } = useJobs(projectId);
   const phase = project ? clipPhase(project.assets) : "none";
 
-  // Poll while the upload is being inspected (asset.inspect makes the preview and filmstrip).
+  // Poll while the upload is being inspected (asset.inspect makes the preview and filmstrip), and for a bounded
+  // while longer if the clip is ready but those derivatives are not listed yet.
   const refetch = query.refetch;
+  const pending = project ? derivativesPending(project.assets) : false;
+  const inspecting = phase === "uploading" || phase === "inspecting";
   useEffect(() => {
-    if (phase !== "uploading" && phase !== "inspecting") return;
-    const id = setInterval(() => void refetch(), 1500);
+    if (!inspecting && !pending) return;
+    let left = DERIVATIVE_POLLS;
+    const id = setInterval(() => {
+      if (!inspecting && --left < 0) return clearInterval(id);
+      void refetch();
+    }, 1500);
     return () => clearInterval(id);
-  }, [phase, refetch]);
+  }, [inspecting, pending, refetch]);
+
+  // Automatic config links (clip after inspection, work clip after analysis). An id counts as linked only after its
+  // PATCH succeeded; a failed one shows its error and is retried once the project revision changes (not per render).
+  const linked = useRef(new Set<string>());
+  const linking = useRef(new Set<string>());
+  const failedAt = useRef(new Map<string, number>());
+  const [linkError, setLinkError] = useState<string | null>(null);
+  const tRef = useRef(t);
+  tRef.current = t;
+  const revision = project?.current_revision ?? 0;
+  const autoLink = useCallback((id: string, mutate: Parameters<typeof save>[0]) => {
+    if (linked.current.has(id) || linking.current.has(id) || failedAt.current.get(id) === revision) return;
+    linking.current.add(id);
+    save(mutate).then(
+      () => { linked.current.add(id); failedAt.current.delete(id); setLinkError(null); },
+      (e) => { failedAt.current.set(id, revision); setLinkError(errorText(e, tRef.current)); },
+    ).finally(() => linking.current.delete(id));
+  }, [save, revision]);
 
   // Link the inspected clip once: default trim, aspect from the displayed orientation.
   const clipId = project ? clipToLink(project.assets, project.config) : null;
   useEffect(() => {
     if (!clipId) return;
-    void save((c, p) => {
+    autoLink(clipId, (c, p) => {
       const clip = p.assets.find((a) => a.id === clipId);
       return clip && clipToLink(p.assets, c) === clipId ? linkClip(c, clip) : c;
-    }).catch(() => {});
-  }, [clipId, save]);
+    });
+  }, [clipId, autoLink]);
 
   const allJobs = project ? mergeJobs(project.recent_jobs, jobs) : [];
   const analyze = latestJob(allJobs, "vfx.analyze");
@@ -69,12 +94,10 @@ export function TrimScreen({ projectId }: { projectId: string }) {
 
   // The executor never writes the config: link the work clip of a succeeded analysis while it still matches.
   const workId = project ? workToLink(project.assets, project.config, analyze) : null;
-  const linked = useRef(new Set<string>());
   useEffect(() => {
-    if (!workId || !analyze || linked.current.has(workId)) return;
-    linked.current.add(workId);
-    void save((c, p) => (workToLink(p.assets, c, analyze) === workId ? { ...c, work_asset_id: workId } : c)).catch(() => {});
-  }, [workId, analyze, save]);
+    if (!workId || !analyze) return;
+    autoLink(workId, (c, p) => (workToLink(p.assets, c, analyze) === workId ? { ...c, work_asset_id: workId } : c));
+  }, [workId, analyze, autoLink]);
 
   const status = saveStatus(saveState, t);
   if (query.isError) return <Shell status={status}><Message icon={<CircleAlert className="h-6 w-6 text-danger" aria-hidden />} title={t("projectError")} action /></Shell>;
@@ -93,10 +116,13 @@ export function TrimScreen({ projectId }: { projectId: string }) {
   }
   const sourceMs = clipDurationMs(clip) ?? 0;
   if (sourceMs < 1000) return shell(<Message icon={<CircleAlert className="h-6 w-6 text-danger" aria-hidden />} title={t("rejectedTitle")} hint={t("clipTooShort")} action />);
-  return shell(<TrimEditor project={project} clip={clip} sourceMs={sourceMs} analyze={analyze} save={save} follow={follow} />);
+  return shell(<TrimEditor project={project} clip={clip} sourceMs={sourceMs} analyze={analyze} save={save} follow={follow} linkError={linkError} />);
 }
 
-const REJECT_KEYS = { reject_unsupported_codec: 1, reject_multiple_video_streams: 1, reject_too_large_dims: 1, reject_too_long: 1 };
+/** Refetches (1.5 s apart) while a ready clip still lacks its preview / filmstrip. */
+const DERIVATIVE_POLLS = 20;
+const REJECT_KEYS = { reject_unsupported_codec: 1, reject_multiple_video_streams: 1, reject_too_large_dims: 1, reject_too_long: 1,
+  reject_too_large: 1, reject_unsupported_format: 1 };
 
 function saveStatus(state: SaveState, t: T): ReactNode {
   if (state === "saving") return <><Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />{t("saving")}</>;
@@ -145,13 +171,14 @@ function Steps() {
   );
 }
 
-function TrimEditor({ project, clip, sourceMs, analyze, save, follow }: {
+function TrimEditor({ project, clip, sourceMs, analyze, save, follow, linkError }: {
   project: PocketVfxProject;
   clip: Asset;
   sourceMs: number;
   analyze: Job | undefined;
   save: ReturnType<typeof useConfigSaver>["save"];
   follow: (job: Job) => void;
+  linkError: string | null;
 }) {
   const { t } = useI18n();
   const config = project.config;
@@ -328,6 +355,7 @@ function TrimEditor({ project, clip, sourceMs, analyze, save, follow }: {
           {!prepared && <p className="text-xs text-muted">{t("prepareNoCost")}</p>}
           {failed && !error && <ErrorLine text={`${t("prepareFailed")}${analyze?.error?.message ? ` ${analyze.error.message}` : ""}`} />}
           {error && <ErrorLine text={error} />}
+          {linkError && !error && <ErrorLine text={linkError} />}
         </div>
       </aside>
     </main>

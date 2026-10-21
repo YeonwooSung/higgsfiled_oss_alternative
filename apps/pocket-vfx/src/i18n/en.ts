@@ -34,6 +34,8 @@ export const en = {
   reject_multiple_video_streams: "The file has more than one video stream.",
   reject_too_large_dims: "The video is larger than 4096 px on its long side.",
   reject_too_long: "The clip is longer than 60 seconds. Shorten it first.",
+  reject_too_large: "The clip is larger than 100 MB.",
+  reject_unsupported_format: "This file type is not supported. Use MP4, MOV or WebM.",
   reject_unknown: "The clip did not pass inspection.",
   uploadAnother: "Upload another clip",
   clipTooShort: "The clip is shorter than 1 second, which is too short to trim.",
