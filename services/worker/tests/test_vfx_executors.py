@@ -392,7 +392,7 @@ def test_track_masks_stage_stores_masks_and_preview(proj):
     assert zip_asset.role == "masks_zip" and zip_asset.mime == "application/zip"
     assert preview.role == "mask_preview" and (preview.width, preview.height, preview.frame_count) == (640, 360, 120)
     assert {m["masks_zip_asset_id"], m["mask_preview_asset_id"]} <= set(map(str, track.output_asset_ids))
-    seq = _masks(proj, m | {"masks": m}) if False else _masks(proj, {"masks": m, "frame_count": 120})
+    seq = _masks(proj, {"masks": m, "frame_count": 120})
     from open_creative.pocket_vfx.masks import upscale_mask
 
     scores = [_iou(upscale_mask(seq.masks[f], 1280, 720) >= 0.5, _gt_stomp(f)) for f in range(0, 120, 17)]
@@ -514,9 +514,11 @@ def _load_make_fixtures():
 
 
 def test_portrait_masks_align_with_gt_at_output_size(proj):
-    """Rotated 30 fps portrait source -> 24 fps 9:16 work clip -> 360x640 proxy masks (the mock serves the fixture's
-    display-orientation GT through the PTS map) -> upscaled to 720x1280: aligned with the scene, never transposed or
-    shifted in time."""
+    """Fixture-GT path: rotated 30 fps portrait source -> 24 fps 9:16 work clip; the mock serves the fixture's
+    display-orientation GT resampled through the work clip's PTS map at the 360x640 proxy size, upscaled to 720x1280.
+    Checks the timing (30 -> 24 fps, a wrong mapping scores 0.46-0.81) and the proxy/output size order. It does not
+    check that masks computed from the decoded proxy frames are upright; ``test_portrait_grabcut_masks_are_upright``
+    does."""
     mf = _load_make_fixtures()
     analyze = proj.prepare("rotated_portrait.mp4", trim={"source_start_ms": 0, "duration_ms": 2000},
                            output={"aspect": "9:16", "fps": 24})
@@ -528,7 +530,7 @@ def test_portrait_masks_align_with_gt_at_output_size(proj):
     proj.revise(anchor__follow=False, subject_prompts=[{"frame": f0, "points": [
         {"x": p["cx"] / dw, "y": (p["hip"] - 0.12 * p["u"]) / dh, "label": 1}]}])
     m = proj.run("vfx.track").result_json["masks"]
-    assert m["source"] == "fixture_gt" and m["size"] == [360, 640]  # portrait proxy, never transposed
+    assert m["source"] == "fixture_gt" and m["size"] == [360, 640]  # width x height of the portrait proxy
     seq = _masks(proj, {"masks": m, "frame_count": 48})
     from open_creative.pocket_vfx.masks import upscale_mask
 
@@ -540,3 +542,36 @@ def test_portrait_masks_align_with_gt_at_output_size(proj):
         assert up.shape == gt.shape
         scores[f] = _iou(up, gt)
     assert min(scores.values()) >= 0.9, scores
+
+
+def test_portrait_grabcut_masks_are_upright(proj, tmp_path, monkeypatch):
+    """GrabCut path (fixture lookup disabled): masks computed from the real decoded proxy of the rotated portrait
+    (rotation applied by analyze) match the upright scene. Lenient (GrabCut is a stand-in), but a 90/180 deg rotation
+    or a mirror of the proxy frames or the masks scores far below it."""
+    empty = tmp_path / "no_fixtures"
+    empty.mkdir()
+    monkeypatch.setenv("OC_VFX_FIXTURES", str(empty))
+    mf = _load_make_fixtures()
+    analyze = proj.prepare("rotated_portrait.mp4", trim={"source_start_ms": 0, "duration_ms": 2000},
+                           output={"aspect": "9:16", "fps": 24})
+    work = proj.asset(analyze.result_json["work_asset_id"])
+    dw, dh, f0 = 720, 1280, 24
+    p = mf.pose(work.meta_json["pts_map"][f0] / 1000, dw, dh)
+    u = p["u"]
+    clicks = [(p["cx"], p["hip"] - 0.12 * u), (p["cx"], p["hip"] - 0.31 * u), p["hand"],
+              (p["cx"] + 0.06 * u, p["ground"] - 0.02 * u)]
+    proj.revise(anchor__follow=False, subject_prompts=[{"frame": f0, "points": [
+        {"x": x / dw, "y": y / dh, "label": 1} for x, y in clicks]}])
+    m = proj.run("vfx.track").result_json["masks"]
+    assert m["source"] == "grabcut" and m["size"] == [360, 640]
+    seq = _masks(proj, {"masks": m, "frame_count": 48})
+    from open_creative.pocket_vfx.masks import upscale_mask
+
+    bg = mf.background(dw, dh, 11)
+    for f in (0, f0, 47):
+        gt = mf.draw(bg, work.meta_json["pts_map"][f] / 1000)[1].astype(bool)
+        up = upscale_mask(seq.masks[f], dw, dh) >= 0.5
+        score = _iou(up, gt)
+        assert score >= 0.6, (f, score)
+        for wrong in (gt[::-1, ::-1], gt[:, ::-1], gt[::-1]):  # 180 deg, horizontal and vertical mirror
+            assert _iou(up, wrong) < score - 0.2, f

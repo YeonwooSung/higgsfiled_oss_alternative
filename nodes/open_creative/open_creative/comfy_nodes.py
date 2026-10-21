@@ -68,6 +68,40 @@ def _locked(product, alpha, core, placement_json: str) -> LockedProduct:
                          placement=Placement(p["x0"], p["y0"], p["w"], p["h"]))
 
 
+
+SAM2_FOLDER = "sam2"  # models/sam2/ of the Comfy install (registered below; Comfy has no built-in "sam2" folder)
+
+
+def _register_sam2_folder() -> None:
+    try:
+        import os
+
+        import folder_paths  # Comfy runtime module; absent outside Comfy
+    except ImportError:
+        return
+    try:
+        folder_paths.add_model_folder_path(SAM2_FOLDER, os.path.join(folder_paths.models_dir, SAM2_FOLDER))
+    except AttributeError:  # an old Comfy without add_model_folder_path / models_dir: _sam2_checkpoint reports it
+        pass
+
+
+_register_sam2_folder()
+
+
+def _sam2_checkpoint(name: str) -> str:
+    """Full path of a SAM 2 checkpoint in models/sam2. Comfy returns None for a missing file; SAM 2 would then build
+    the model with random weights and 'succeed' with garbage masks, so a missing checkpoint is an error."""
+    import folder_paths  # Comfy runtime module
+
+    try:
+        path = folder_paths.get_full_path(SAM2_FOLDER, name)
+    except KeyError:  # folder not registered
+        path = None
+    if not path:
+        raise RuntimeError(f"{name} not found in models/{SAM2_FOLDER}")
+    return path
+
+
 class PLProductMask:
     CATEGORY = CATEGORY
     FUNCTION = "run"
@@ -94,9 +128,7 @@ class PLProductMask:
             from sam2.sam2_image_predictor import SAM2ImagePredictor
         except ImportError as e:
             raise RuntimeError("SAM 2 is not installed in this Comfy build; provide an alpha mask instead") from e
-        import folder_paths  # Comfy runtime module
-
-        ckpt = folder_paths.get_full_path("sam2", "sam2.1_hiera_small.pt")
+        ckpt = _sam2_checkpoint("sam2.1_hiera_small.pt")
         predictor = SAM2ImagePredictor(build_sam2("configs/sam2.1/sam2.1_hiera_s.yaml", ckpt))
         rgb = _u8(image[0])
         h, w = rgb.shape[:2]
@@ -482,7 +514,7 @@ class PVSubjectMasks:
         p = json.loads(prompts or "{}")
         rgb = _frames_u8(frames)
         n = len(rgb)
-        predictor = build_sam2_video_predictor(SAM2_CONFIG, folder_paths.get_full_path("sam2", SAM2_CHECKPOINT))
+        predictor = build_sam2_video_predictor(SAM2_CONFIG, _sam2_checkpoint(SAM2_CHECKPOINT))
         try:
             import torch
 
@@ -545,7 +577,7 @@ class PVProceduralEffect:
     def run(self, preset_id, params, window, frame, anchor_x, anchor_y, width, height, seed, mask=None):
         win = json.loads(window)
         anchor = (anchor_x, anchor_y) if anchor_x >= 0 and anchor_y >= 0 else None
-        m = _mask_at(_np(mask) if mask is not None else None, 0, width, height) if mask is not None else None
+        m = _mask_at(_np(mask), 0, width, height) if mask is not None else None
         layer = render_effect(preset_id, json.loads(params), EffectWindow(win["start"], win["peak"], win["end"]),
                               frame, anchor, width, height, seed, m)
         if layer is None:

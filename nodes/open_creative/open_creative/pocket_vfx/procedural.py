@@ -228,8 +228,9 @@ def _aura_inner(size: float) -> int:
 
 def _outside_keep(m: np.ndarray, box, inner: int) -> np.ndarray:
     """Weight in [0, 1] over ``box``: 1 outside the silhouette, fading to 0 within ``2 * inner`` px inside it, so a
-    glow never fills the silhouette. The crop is edge-replicated before the distance transform: a frame edge is
-    not background (the subject continues past it), so edge rows inside the silhouette stay at 0."""
+    glow never fills the silhouette. A frame edge is not background (the subject continues past it): OpenCV's
+    distanceTransform already treats out-of-image pixels as foreground; the edge-replicated padding states that
+    explicitly and keeps it true for the crop edges that are frame edges."""
     x0, y0, x1, y1 = box
     p = 2 * inner + 1
     crop = cv2.copyMakeBorder(np.ascontiguousarray(m[y0:y1, x0:x1]), p, p, p, p, cv2.BORDER_REPLICATE)

@@ -206,6 +206,9 @@ def test_aura_mask_band_not_filled_inside_silhouette():
 
 
 def test_aura_band_does_not_leak_inside_a_silhouette_touching_the_frame_edge():
+    """Pins the behaviour at the frame edge: no glow inside the eroded silhouette on the edge rows. OpenCV's erode and
+    distanceTransform already treat out-of-image pixels as foreground, so this guards against a regression (e.g. a
+    zero-padded crop), not a current leak."""
     mask = np.zeros((H, W), np.float32)
     cv2.ellipse(mask, (640, 690), (120, 260), 0, 0, 360, 1.0, -1)  # cut by the bottom edge
     assert mask[-1].any()

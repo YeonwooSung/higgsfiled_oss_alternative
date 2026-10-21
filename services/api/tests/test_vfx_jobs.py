@@ -115,6 +115,15 @@ def test_masks_need_and_stage():
     assert vfx_jobs.masks_stage_runs(cfg, impact) is False
     cfg.subject_prompts = [SubjectPrompt.model_validate(SUBJECT[0])]
     assert vfx_jobs.masks_stage_runs(cfg, impact) is True and vfx_jobs.masks_stage_runs(cfg, no_mask) is False
+    # a render that needs masks always gets them from a track with a selection, even for a preset without
+    # subject_mask (else mask_required would never clear)
+    for order in ("behind_subject", "split_glow", "in_front"):
+        cfg.effect.layer_order = order
+        for preset in (impact, blink, no_mask):
+            assert not vfx_jobs.masks_needed(cfg, preset) or vfx_jobs.masks_stage_runs(cfg, preset), (order, preset)
+    cfg.effect.layer_order = "behind_subject"
+    assert vfx_jobs.masks_stage_runs(cfg, no_mask) is True
+    cfg.effect.layer_order = "in_front"
     cfg.subject_prompts = []
     cfg.mask_edits = [MaskEdit(frame=3, asset_id=uuid.uuid4())]
     assert vfx_jobs.masks_stage_runs(cfg, impact) is True

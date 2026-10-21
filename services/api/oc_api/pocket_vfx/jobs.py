@@ -79,10 +79,12 @@ def masks_needed(cfg: PocketVfxConfig, preset: dict) -> bool:
 
 
 def masks_stage_runs(cfg: PocketVfxConfig, preset: dict) -> bool:
-    """Whether vfx.track runs its (GPU) masks stage: the preset uses a subject mask and the config says which
-    subject (subject prompts or mask edits). Without a selection the track job tracks only and a render that
-    needs masks reports ``mask_required``."""
-    return bool(preset["input_requirements"].get("subject_mask")) and bool(cfg.subject_prompts or cfg.mask_edits)
+    """Whether vfx.track runs its (GPU) masks stage: a subject is selected (subject prompts or mask edits) and the
+    render needs masks (``masks_needed``) or the preset can use them (``subject_mask``: Energy Aura's contour band
+    in front). Every config with ``masks_needed`` and a selection gets masks, so ``mask_required`` always clears
+    after a track with a selection. Without a selection the track job tracks only."""
+    uses = masks_needed(cfg, preset) or bool(preset["input_requirements"].get("subject_mask"))
+    return uses and bool(cfg.subject_prompts or cfg.mask_edits)
 
 
 def source_sha(clip: Asset) -> str | None:

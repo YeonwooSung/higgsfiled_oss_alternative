@@ -256,3 +256,43 @@ def test_subject_masks_video_predictor_per_call_state(tmp_path, monkeypatch):
     with zipfile.ZipFile(tmp_path / files[0]["subfolder"] / files[0]["filename"]) as z:
         assert Image.open(io.BytesIO(z.read("mask_0000.png"))).mode == "L"
     assert out2["ui"]["masks"][0]["filename"] != files[0]["filename"]
+
+
+def _fake_sam2(monkeypatch, tmp_path, full_path):
+    built = []
+    sam2 = types.ModuleType("sam2")
+    build = types.ModuleType("sam2.build_sam")
+    build.build_sam2_video_predictor = lambda cfg, ckpt, **kw: built.append(ckpt)
+    folder_paths = types.ModuleType("folder_paths")
+    folder_paths.get_full_path = full_path
+    folder_paths.get_output_directory = lambda: str(tmp_path)
+    monkeypatch.setitem(sys.modules, "sam2", sam2)
+    monkeypatch.setitem(sys.modules, "sam2.build_sam", build)
+    monkeypatch.setitem(sys.modules, "folder_paths", folder_paths)
+    return built
+
+
+@pytest.mark.parametrize("full_path", [lambda kind, name: None, lambda kind, name: (_ for _ in ()).throw(KeyError(kind))],
+                         ids=["missing_file", "unregistered_folder"])
+def test_subject_masks_refuses_a_missing_checkpoint(tmp_path, monkeypatch, full_path):
+    """Comfy's get_full_path returns None for a missing file: building SAM 2 with ckpt=None would run random weights
+    and 'succeed' with garbage masks, so the node must fail before building the predictor."""
+    from open_creative.comfy_nodes import PVSubjectMasks
+
+    built = _fake_sam2(monkeypatch, tmp_path, full_path)
+    prompts = build_prompts([{"frame": 0, "points": [{"x": 0.5, "y": 0.5, "label": 1}]}], {}, 32, 18, 2)
+    with pytest.raises(RuntimeError, match=r"sam2\.1_hiera_small\.pt not found in models/sam2"):
+        PVSubjectMasks().run(np.zeros((2, 18, 32, 3), np.float32), json.dumps(prompts), 32, 18)
+    assert built == []
+
+
+def test_sam2_model_folder_is_registered_inside_comfy(monkeypatch):
+    from open_creative import comfy_nodes
+
+    calls = []
+    folder_paths = types.ModuleType("folder_paths")
+    folder_paths.models_dir = "/comfy/models"
+    folder_paths.add_model_folder_path = lambda name, path: calls.append((name, path))
+    monkeypatch.setitem(sys.modules, "folder_paths", folder_paths)
+    comfy_nodes._register_sam2_folder()
+    assert calls == [("sam2", "/comfy/models/sam2")]
