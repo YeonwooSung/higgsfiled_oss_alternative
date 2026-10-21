@@ -461,6 +461,25 @@ def test_behind_subject_render_never_covers_the_subject_core(proj):
     assert layers["subject_masks"]["masks_zip_asset_id"] == track.result_json["masks"]["masks_zip_asset_id"]
 
 
+def test_split_glow_draws_a_front_glow_over_the_subject_inside_the_roi(proj):
+    proj.prepare("stomp_landscape.mp4")
+    proj.revise(anchor__follow=False, subject_prompts=BODY_PROMPT)
+    track = proj.run("vfx.track")
+    opts = {"track_job_id": str(track.id), "render_profile": "quick"}
+    behind = proj.run("vfx.render", opts).result_json
+    proj.revise(effect__layer_order="split_glow")
+    split = proj.run("vfx.render", opts).result_json
+    assert behind["occlusion_qa"] == 0
+    assert split["occlusion_qa"] > 0  # the glow lands on subject-core pixels
+    assert split["roi_qa"]["status"] == "pass" and split["roi_qa"]["max_err"] <= 1
+    sa, sb = (proj.json(r["roi_qa_asset_id"])["frame_stats"] for r in (behind, split))  # pre-encode statistics
+    # the front glow only ever adds changed pixels, inside the ROI; frames without an ROI are untouched
+    assert all(y >= x for x, y in zip(sa["changed_px"], sb["changed_px"], strict=True))
+    assert sum(sb["changed_px"]) > sum(sa["changed_px"])
+    assert all(c == 0 for c, box in zip(sb["changed_px"], sb["roi_bbox"], strict=True) if box is None)
+    assert max(sb["core_cover"]) > 0 and max(sa["core_cover"]) == 0
+
+
 def test_energy_aura_render_draws_the_contour_band_behind_the_subject(proj):
     proj.prepare("stomp_landscape.mp4")
     eff = dict(proj.cfg["effect"], preset_id="energy_aura_v1", layer_order="behind_subject", palette="violet")

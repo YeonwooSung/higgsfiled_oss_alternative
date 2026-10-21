@@ -3,11 +3,11 @@ import time
 import cv2
 import numpy as np
 import pytest
-
 from open_creative.pocket_vfx.composite import (
     FrameInputs,
     composite_frame,
     composite_sequence,
+    split_glow,
 )
 from open_creative.pocket_vfx.integrity import (
     IntegrityAccumulator,
@@ -255,3 +255,10 @@ def test_full_frame_composite_speed():
     for _ in range(3):
         composite_frame(_inp(src, effect, subject_mask=m), "behind_subject")
     assert (time.perf_counter() - t0) / 3 < 0.05
+
+
+def test_split_glow_layer_is_the_effect_at_35_percent():
+    ring = _covering_ring()
+    g = split_glow(ring)
+    assert np.allclose(g.alpha, ring.alpha * 0.35) and np.allclose(g.rgb_premult, ring.rgb_premult * 0.35)
+    assert g.bbox == ring.bbox and split_glow(None) is None

@@ -18,7 +18,8 @@ Stages (each stores durable assets; a restarted job resumes after the last finis
 - ``composite``: streams the work-clip frames (one in flight) through ``composite_frame`` into ``Mp4Writer`` and an
   ``IntegrityAccumulator``; per-frame ROI size/box and changed pixel count (pre-encode, vs the source frame) are kept.
   The proxy masks (<= 120 x 640x360 bytes) are held in memory and upscaled per frame with ``upscale_mask`` (soft):
-  ``behind_subject``/``split_glow`` restore the subject inside it, Energy Aura draws its contour band from the
+  ``behind_subject``/``split_glow`` restore the subject inside it (``split_glow`` then draws the effect again as a
+  0.35-strength front glow, ``split_glow(effect)``, clipped to the effect footprint), Energy Aura draws its contour band from the
   temporally smoothed masks (``smooth_masks``) plus the anchor glow. Occlusion QA = max over frames of
   ``subject_core_cover`` (fraction of subject-core pixels changed > 2/255; core = ``masks.subject_core``).
   The plate is matted on the fly (``PlateFrames``, one plate frame decoded at a time, ``config.plate.matte``), a
@@ -44,7 +45,7 @@ from oc_api.pocket_vfx.jobs import (
 )
 from open_creative.media.video import Mp4Writer, decode_frames, probe
 from open_creative.pocket_vfx.audio import mux, plan_audio
-from open_creative.pocket_vfx.composite import FrameInputs, composite_frame
+from open_creative.pocket_vfx.composite import FrameInputs, composite_frame, split_glow
 from open_creative.pocket_vfx.integrity import IntegrityAccumulator, subject_core_cover
 from open_creative.pocket_vfx.masks import (
     CORE_ERODE_PX,
@@ -240,8 +241,9 @@ class FrameComposer:
             effect = render_effect(self.cfg.effect.preset_id, self.params, self.window, i,
                                    tuple(anchor) if anchor is not None else None, self.w, self.h,
                                    self.cfg.plate.seed, band)
+        glow = split_glow(effect) if self.cfg.effect.layer_order == "split_glow" else None
         inp = FrameInputs(source=frame, effect=effect, plate=self.plates.at(i, anchor, band), subject_mask=subject,
-                          front_glow=None, roi_limit=None)
+                          front_glow=glow, roi_limit=None)
         return inp, subject
 
 

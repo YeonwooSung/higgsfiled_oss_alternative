@@ -20,10 +20,16 @@ from .camera_sketch.path import SceneInfo, compile_path
 from .camera_sketch.qa import motion_report
 from .camera_sketch.render import hole_ratio, rasterize, render_sequence
 from .camera_sketch.scene import (
-    DAV2_SMALL, DepthConvention, build_mesh, decode_depth_png16, depth_to_z, encode_depth_png16, prepare_z,
+    DAV2_SMALL,
+    DepthConvention,
+    build_mesh,
+    decode_depth_png16,
+    depth_to_z,
+    encode_depth_png16,
+    prepare_z,
 )
 from .pocket_vfx import masks as pv_masks
-from .pocket_vfx.composite import FrameInputs
+from .pocket_vfx.composite import FrameInputs, split_glow
 from .pocket_vfx.composite import composite_frame as pv_composite_frame
 from .pocket_vfx.integrity import IntegrityAccumulator, subject_core_cover
 from .pocket_vfx.matte import MatteConfig, MatteStats, matte_qa, matte_sequence
@@ -31,7 +37,12 @@ from .pocket_vfx.presets import load_presets as load_pv_presets
 from .pocket_vfx.procedural import render_effect
 from .pocket_vfx.timeline import EffectWindow
 from .pocket_vfx.track import (
-    SMOOTH_MAX_SHIFT_PX, SMOOTH_SIGMA_FRAMES, anchor_positions, smooth_track, static_track, track_to_json,
+    SMOOTH_MAX_SHIFT_PX,
+    SMOOTH_SIGMA_FRAMES,
+    anchor_positions,
+    smooth_track,
+    static_track,
+    track_to_json,
     track_with_corrections,
 )
 from .product_lock.composite import LayerConfig, composite_sequence
@@ -623,8 +634,9 @@ class PVTrackedComposite:
                 effect = render_effect(cfg["preset_id"], cfg.get("params", {}), win, i,
                                        tuple(anchors[i]) if anchors[i] is not None else None, w, h,
                                        int(cfg.get("seed", 0)), m)
+            glow = split_glow(effect) if cfg["layer_order"] == "split_glow" else None
             frame, roi = pv_composite_frame(FrameInputs(source=src[i], effect=effect, plate=None, subject_mask=m,
-                                                        front_glow=None, roi_limit=None), cfg["layer_order"])
+                                                        front_glow=glow, roi_limit=None), cfg["layer_order"])
             out[i] = frame.astype(np.float32) / 255.0
             roi_out[i] = roi
             roi_px.append(int(roi.sum()))

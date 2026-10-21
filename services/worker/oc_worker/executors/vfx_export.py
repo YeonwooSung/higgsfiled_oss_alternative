@@ -22,7 +22,7 @@ from oc_api.settings import REPO_ROOT
 from open_creative.comfy.profiles import PROFILES
 from open_creative.media.video import decode_frames
 from open_creative.pocket_vfx.color import linear_to_srgb, over_premult
-from open_creative.pocket_vfx.composite import ALPHA_FLOOR, composite_frame
+from open_creative.pocket_vfx.composite import ALPHA_FLOOR
 from open_creative.pocket_vfx.presets import load_presets
 from open_creative.pocket_vfx.procedural import EffectLayer
 from open_creative.pocket_vfx.timeline import effect_window
@@ -36,8 +36,8 @@ from .vfx_render import FrameComposer
 
 MODEL_MANIFEST = REPO_ROOT / "models" / "pocket-vfx.manifest.json"
 WORKFLOW_APP_DIR = "pocket-vfx"
-LAYER_ORDER = ["plate", "effect"]  # bottom -> top, over the (untouched) source; the subject is restored after them
-LAYERS_NOTE = ("effect = plate + procedural effect after subject occlusion, straight alpha, sRGB. foreground = the "
+LAYERS_NOTE = ("effect = plate + procedural effect (after subject occlusion unless the layer order is in_front), "
+              "straight alpha, sRGB. foreground = the "
                "source RGB with the SAM subject mask as alpha. The MP4 has no alpha channel.")
 
 
@@ -179,8 +179,9 @@ def _recipe(run: JobRun, render: Job) -> str:
 
 
 def effect_rgba(layers: list[EffectLayer], subject: np.ndarray | None, w: int, h: int) -> np.ndarray:
-    """Straight-alpha sRGB RGBA (uint8 HxWx4) of the behind layers (plate, then effect) over transparency, after the
-    subject occlusion the composite applies (``alpha * (1 - subject)``). Blending is premultiplied in linear."""
+    """Straight-alpha sRGB RGBA (uint8 HxWx4) of ``layers`` (bottom first) over transparency, after the subject
+    occlusion the composite applies (``alpha * (1 - subject)``; ``subject`` None = unoccluded). Blending is
+    premultiplied in linear."""
     out = np.zeros((h, w, 4), np.uint8)
     if not layers:
         return out
@@ -206,17 +207,45 @@ def effect_rgba(layers: list[EffectLayer], subject: np.ndarray | None, w: int, h
     return out
 
 
+def layer_order(mode: str, has_foreground: bool) -> list[str]:
+    """Bottom -> top stacking of the exported layers over the source, from the config's ``layer_order``."""
+    fg = ["foreground"] if has_foreground else []
+    if mode == "in_front":  # no occlusion: the effect is drawn over the subject
+        return [*fg, "plate", "effect"]
+    return ["plate", "effect", *fg, *(["glow"] if mode == "split_glow" else [])]
+
+
 def _png(rgba: np.ndarray) -> bytes:
     buf = io.BytesIO()
     Image.fromarray(rgba, "RGBA").save(buf, "PNG", compress_level=3)
     return buf.getvalue()
 
 
-def _layers_readme(has_fg: bool, mock: bool) -> str:
+def _outside_roi(rgba: np.ndarray, box: list[int] | None) -> bool:
+    """Alpha lies outside the render's recorded ROI box of this frame (``roi_qa.frame_stats.roi_bbox``)."""
+    ys, xs = np.nonzero(rgba[..., 3])
+    if not len(xs):
+        return False
+    if box is None:
+        return True
+    x0, y0, x1, y1 = box
+    return bool(xs.min() < x0 or xs.max() >= x1 or ys.min() < y0 or ys.max() >= y1)
+
+
+def _layers_readme(order: list[str], mode: str, has_fg: bool, mock: bool) -> str:
+    stack = {
+        "behind_subject": "The effect is drawn behind the subject: the subject is restored on top of plate + effect.",
+        "in_front": "The effect is drawn over the subject (no occlusion): the stack is foreground, plate, effect.",
+        "split_glow": ("The effect is drawn behind the subject and a weaker front glow (`glow/`, the effect at 35 %) "
+                       "is drawn on top of the subject, inside the effect's footprint."),
+    }[mode]
     return (
         "# Pocket VFX layers\n\n" + ("**Mock profile**: stand-in masks/plates, not SAM/LTX output.\n\n" if mock else "")
-        + "- `effect/%04d.png`: the effect layers combined (plate + procedural effect, after the subject occlusion "
-          "of the render), straight (un-premultiplied) alpha, sRGB, RGBA, one PNG per frame.\n"
+        + f"Layer order, bottom to top: {' -> '.join(order)} (render layer order `{mode}`). {stack}\n\n"
+        + "- `effect/%04d.png`: plate + procedural effect combined"
+        + (" after the subject occlusion of the render" if mode != "in_front" else " (not occluded)")
+        + ", straight (un-premultiplied) alpha, sRGB, RGBA, one PNG per frame.\n"
+        + ("- `glow/%04d.png`: the front glow, straight alpha sRGB RGBA, not occluded.\n" if mode == "split_glow" else "")
         + ("- `foreground/%04d.png`: the source frame as RGB with the subject mask (upscaled SAM mask) as alpha.\n"
            if has_fg else "- No `foreground/` folder: this render had no subject masks.\n")
         + "- `manifest.json`: frame count, fps, size, layer order, color handling.\n\n"
@@ -236,7 +265,9 @@ def _layers_zip(run: JobRun, render: Job) -> str:
     work = fresh_work_clip(run, cfg, cfg_json)
     composer = FrameComposer(run, cfg, cfg_json, plan, window, w, h, n)
     has_fg = composer.masks is not None
-    order = cfg.effect.layer_order
+    mode = cfg.effect.layer_order
+    order = layer_order(mode, has_fg)
+    roi_boxes = json_asset(run, res["roi_qa_asset_id"])["frame_stats"]["roi_bbox"]
     path = run.work_dir / "layers.zip"
     count = 0
     with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as z:
@@ -245,25 +276,28 @@ def _layers_zip(run: JobRun, render: Job) -> str:
                 break
             inp, subject = composer.inputs(i, frame)
             rgba = effect_rgba([x for x in (inp.plate, inp.effect) if x is not None], subject, w, h)
-            _, roi = composite_frame(inp, order)  # the render's own ROI of this frame
-            if ((rgba[..., 3] > 0) & ~roi).any():
-                raise StageFailed("layers_outside_roi", f"Effect alpha lies outside the render's ROI at frame {i}.")
+            glow = effect_rgba([inp.front_glow], None, w, h) if inp.front_glow is not None else None
+            for img in (rgba, glow):
+                if img is not None and _outside_roi(img, roi_boxes[i]):
+                    raise StageFailed("layers_outside_roi", f"Effect alpha lies outside the render's ROI at frame {i}.")
             z.writestr(f"effect/{i:04d}.png", _png(rgba))
+            if mode == "split_glow":
+                z.writestr(f"glow/{i:04d}.png", _png(glow if glow is not None else np.zeros((h, w, 4), np.uint8)))
             if has_fg:
                 fg = np.dstack([frame, np.rint(np.clip(composer.subject_at(i), 0.0, 1.0) * 255.0).astype(np.uint8)])
                 z.writestr(f"foreground/{i:04d}.png", _png(fg))
             count += 1
         if count != n:
             raise StageFailed("frame_count_mismatch", f"Exported {count} frames, expected {n}.")
-        manifest = {"schema_version": 1, "frame_count": n, "fps": 24, "size": [w, h], "layer_order": LAYER_ORDER,
-                    "layer_order_mode": order, "premultiplied": False, "color": "sRGB",
-                    "folders": ["effect", *(["foreground"] if has_fg else [])],
+        folders = ["effect", *(["glow"] if mode == "split_glow" else []), *(["foreground"] if has_fg else [])]
+        manifest = {"schema_version": 1, "frame_count": n, "fps": 24, "size": [w, h], "layer_order": order,
+                    "layer_order_mode": mode, "premultiplied": False, "color": "sRGB", "folders": folders,
                     "foreground": ("subject mask as alpha over the source RGB" if has_fg else
                                    "omitted: the render had no subject masks"),
                     "alpha_floor": ALPHA_FLOOR, "render_job_id": str(render.id), "revision": render.input_revision,
                     "note": LAYERS_NOTE}
         z.writestr("manifest.json", json.dumps(manifest, indent=2))
-        z.writestr("README.md", _layers_readme(has_fg, _is_mock(render, plan["subject_masks"])))
+        z.writestr("README.md", _layers_readme(order, mode, has_fg, _is_mock(render, plan["subject_masks"])))
     return run.store_asset("layers_export", path, "application/zip", source_asset_id=_render_video_id(render),
                            meta={"revision": render.input_revision, "render_job_id": str(render.id),
                                  "frame_count": n, "foreground": has_fg})

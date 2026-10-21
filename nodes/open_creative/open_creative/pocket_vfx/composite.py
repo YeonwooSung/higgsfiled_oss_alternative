@@ -27,6 +27,7 @@ from .procedural import EffectLayer
 LAYER_ORDERS = ("behind_subject", "in_front", "split_glow")
 ALPHA_FLOOR = 1.0 / 1024
 ROI_DILATE_PX = 2
+SPLIT_GLOW_STRENGTH = 0.35  # split_glow: the front glow is the effect layer at this fraction of its alpha/colour
 _DISK = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * ROI_DILATE_PX + 1, 2 * ROI_DILATE_PX + 1))
 
 
@@ -38,6 +39,14 @@ class FrameInputs:
     subject_mask: np.ndarray | None  # float32 HxW in [0, 1] at output resolution
     front_glow: EffectLayer | None  # split_glow only
     roi_limit: np.ndarray | None  # bool HxW: where the front glow is allowed
+
+
+def split_glow(effect: EffectLayer | None) -> EffectLayer | None:
+    """The ``front_glow`` of a ``split_glow`` frame: the procedural effect (not the plate) scaled by
+    ``SPLIT_GLOW_STRENGTH`` (premultiplied, so alpha and colour scale together), drawn unoccluded."""
+    if effect is None:
+        return None
+    return EffectLayer(effect.rgb_premult * SPLIT_GLOW_STRENGTH, effect.alpha * SPLIT_GLOW_STRENGTH, effect.bbox)
 
 
 def composite_frame(inp: FrameInputs, layer_order: str) -> tuple[np.ndarray, np.ndarray]:

@@ -7,7 +7,13 @@ import zipfile
 import numpy as np
 import pytest
 from oc_api.models import Job, JobStage
+from oc_worker.executors.vfx_export import effect_rgba
+from open_creative.media.video import decode_frames
+from open_creative.pocket_vfx.color import linear_to_srgb, srgb_to_linear
+from open_creative.pocket_vfx.composite import FrameInputs, composite_frame
 from open_creative.pocket_vfx.masks import read_masks_zip, upscale_mask
+from open_creative.pocket_vfx.procedural import EffectLayer, render_effect
+from open_creative.pocket_vfx.timeline import EffectWindow
 from PIL import Image
 from sqlalchemy import select
 from test_vfx_audio import audio_streams, prepared
@@ -117,7 +123,8 @@ def test_layers_zip_has_every_frame_with_alpha_only_inside_the_roi(masked):
     manifest = json.loads(z.read("manifest.json"))
     assert manifest["frame_count"] == 120 and manifest["fps"] == 24 and manifest["size"] == [1280, 720]
     assert manifest["premultiplied"] is False and manifest["color"] == "sRGB"
-    assert manifest["layer_order"] == ["plate", "effect"] and "no alpha" in manifest["note"]
+    assert manifest["layer_order"] == ["plate", "effect", "foreground"] and "no alpha" in manifest["note"]
+    assert "plate -> effect -> foreground" in z.read("README.md").decode()
     readme = z.read("README.md").decode()
     assert "MP4 has no alpha" in readme and "segmentation, not alpha matting" in readme
     stats = proj.json(r["roi_qa_asset_id"])["frame_stats"]
@@ -159,22 +166,82 @@ def test_layers_zip_without_masks_omits_the_foreground(proj):
 
 
 def test_effect_layers_composite_back_to_the_render(proj):
-    """Straight-alpha sRGB over the source equals the render inside the ROI (within rounding)."""
+    """A quick render with a bundled plate: the straight-alpha sRGB layer blended over the source in linear light
+    reproduces the rendered frame (max error <= 2/255 after the 8-bit alpha / sRGB round trip)."""
     prepared(proj, "stomp_landscape.mp4")
     render = proj.run("vfx.render", QUICK)
+    assert proj.json(render.result_json["layers_asset_id"])["plate"]["source"] == "bundled"  # PlateLayers in play
     z = open_zip(proj, export(proj, render, "layers_zip"))
-    from open_creative.media.video import decode_frames
-
-    out = list(decode_frames(proj.path(render.result_json["render_video_asset_id"])))
     work = list(decode_frames(proj.path(proj.cfg["work_asset_id"])))
-    peak = max(range(48), key=lambda i: int((out[i].astype(int) != work[i]).any(axis=2).sum()))
-    eff = png(z, f"effect/{peak:04d}.png").astype(np.float64)
-    a = eff[..., 3:] / 255.0
-    ref = work[peak].astype(np.float64)
-    over = eff[..., :3] * a + ref * (1 - a)  # gamma-space approximation of the linear blend
-    mask = a[..., 0] > 0.5
-    assert mask.any()
-    assert np.abs(over[mask] - out[peak].astype(np.float64)[mask]).mean() < 12
+    silent = list(decode_frames(proj.path(_stage_assets(proj, render, "composite")[0])))
+    peak = max(range(48), key=lambda i: int((silent[i].astype(int) != work[i]).any(axis=2).sum()))
+    eff = png(z, f"effect/{peak:04d}.png")
+    a = eff[..., 3:].astype(np.float32) / 255.0
+    lin = srgb_to_linear(eff[..., :3]) * a + srgb_to_linear(work[peak]) * (1.0 - a)
+    err = np.abs(linear_to_srgb(lin).astype(int) - silent[peak].astype(int))
+    # the silent composite is H.264: lossy, so only a statistical bound here; the exact bound is the unit test below
+    assert (a[..., 0] > 0.5).sum() > 1000 and err.mean() < 2 and np.percentile(err, 99.9) <= 12
+
+
+def test_effect_rgba_blend_matches_composite_frame_exactly():
+    """Pre-encode: straight-alpha sRGB RGBA over the source in linear light == composite_frame (max 2/255)."""
+    w, h = 1280, 720
+    window = EffectWindow(10, 20, 40)
+    params = {"scale": 1.0, "intensity": 0.9, "palette": "amber", "rotation_deg": 0, "squash": 0.5}
+    effect = render_effect("impact_wave_v1", params, window, 26, (600.0, 400.0), w, h, 7, None)
+    alpha = np.zeros((h, w), np.float32)
+    alpha[300:500, 400:900] = 0.4
+    plate = EffectLayer(alpha[..., None] * np.asarray((0.2, 0.5, 0.9), np.float32), alpha, (400, 300, 900, 500))
+    src = np.random.default_rng(3).integers(0, 256, (h, w, 3), dtype=np.uint8)
+    out, _ = composite_frame(FrameInputs(src, effect, plate, None, None, None), "in_front")
+    rgba = effect_rgba([plate, effect], None, w, h)
+    a = rgba[..., 3:].astype(np.float32) / 255.0
+    lin = srgb_to_linear(rgba[..., :3]) * a + srgb_to_linear(src) * (1.0 - a)
+    err = np.abs(linear_to_srgb(lin).astype(int) - out.astype(int))
+    assert (rgba[..., 3] > 0).sum() > 10000 and err.max() <= 2, err.max()
+
+
+def _layers(proj, render):
+    z = open_zip(proj, export(proj, render, "layers_zip"))
+    return z, json.loads(z.read("manifest.json"))
+
+
+@pytest.mark.parametrize("mode", ["in_front", "split_glow"])
+def test_layers_zip_follows_the_layer_order(proj, mode):
+    proj.prepare("stomp_landscape.mp4")
+    proj.revise(anchor__follow=False, subject_prompts=BODY_PROMPT)
+    track = proj.run("vfx.track")
+    proj.revise(effect__layer_order=mode)
+    render = proj.run("vfx.render", {"track_job_id": str(track.id), "render_profile": "quick"})
+    z, manifest = _layers(proj, render)
+    names = z.namelist()
+    glow = [n for n in names if n.startswith("glow/")]
+    assert manifest["layer_order_mode"] == mode and manifest["premultiplied"] is False
+    assert len([n for n in names if n.startswith("foreground/")]) == 120
+    readme = z.read("README.md").decode()
+    if mode == "in_front":
+        assert manifest["layer_order"] == ["foreground", "plate", "effect"] and not glow
+        assert "foreground -> plate -> effect" in readme and "over the subject" in readme
+        return
+    assert manifest["layer_order"] == ["plate", "effect", "foreground", "glow"] and manifest["folders"][1] == "glow"
+    assert len(glow) == 120 and "glow/%04d.png" in readme
+    stats = proj.json(render.result_json["roi_qa_asset_id"])["frame_stats"]
+    peak = max(range(120), key=lambda i: stats["roi_px"][i])
+    g, e = png(z, f"glow/{peak:04d}.png"), png(z, f"effect/{peak:04d}.png")
+    assert g[..., 3].max() > 0 and g[..., 3].max() <= round(0.35 * 255) + 1  # the effect at 35 %
+    assert (g[..., 3] > 0).sum() > 0 and e[..., 3].max() > 0
+
+
+def test_recipe_of_a_following_render_includes_the_track(proj):
+    proj.prepare("stomp_landscape.mp4")
+    proj.revise(anchor__follow=True, effect__layer_order="in_front")
+    track = proj.run("vfx.track")
+    render = proj.run("vfx.render", {"track_job_id": str(track.id), "render_profile": "quick"})
+    z = open_zip(proj, export(proj, render, "recipe_zip"))
+    assert "track.json" in z.namelist() and "masks.json" not in z.namelist()
+    doc = json.loads(z.read("track.json"))
+    assert doc["track_key"] == track.result_json["track_key"] and len(doc["points"]) == 120
+    assert json.loads(z.read("plate.json"))["plate"]["source"] == "bundled"
 
 
 def test_unknown_format_and_unfinished_render_fail(masked):
