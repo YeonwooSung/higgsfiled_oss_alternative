@@ -45,3 +45,17 @@ def test_local_read_url_supports_range_requests(app):
     part = c.get(url, headers={"Range": "bytes=10-19"})
     assert part.status_code == 206 and part.content == bytes(range(10, 20))
     assert part.headers["content-range"] == "bytes 10-19/100"
+
+
+def test_concurrent_writes_to_one_key_use_separate_temp_files(tmp_path):
+    """Two PUTs of the same key stream into distinct temp files (same directory); each commit is an atomic rename."""
+    s = LocalStorage(tmp_path, "secret-123")
+    a, b = s.begin_write("s/p/a/clip.mp4"), s.begin_write("s/p/a/clip.mp4")
+    assert a != b and a.parent == b.parent == tmp_path / "s/p/a"
+    a.write_bytes(b"first")
+    b.write_bytes(b"second")
+    s.commit_write("s/p/a/clip.mp4", a)
+    assert s.get_bytes("s/p/a/clip.mp4") == b"first" and b.read_bytes() == b"second"  # b is untouched by a's commit
+    s.commit_write("s/p/a/clip.mp4", b)
+    assert s.get_bytes("s/p/a/clip.mp4") == b"second"
+    assert sorted(p.name for p in (tmp_path / "s/p/a").iterdir()) == ["clip.mp4"]  # no temp file left behind

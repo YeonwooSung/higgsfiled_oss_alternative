@@ -12,6 +12,7 @@ import hmac
 import json
 import shutil
 import time
+import uuid
 from datetime import UTC, datetime
 from collections.abc import Iterator
 from pathlib import Path
@@ -104,7 +105,7 @@ class LocalStorage:
     def put_bytes(self, key: str, data: bytes, mime: str | None = None) -> None:
         p = self._path(key)
         p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(p.suffix + ".part")
+        tmp = _temp_path(p)
         tmp.write_bytes(data)
         tmp.replace(p)
 
@@ -125,7 +126,7 @@ class LocalStorage:
         """Temp path (same directory) to stream an upload into; ``commit_write`` publishes it atomically."""
         p = self._path(key)
         p.parent.mkdir(parents=True, exist_ok=True)
-        return p.with_suffix(p.suffix + ".part")
+        return _temp_path(p)
 
     def commit_write(self, key: str, tmp: Path) -> None:
         tmp.replace(self._path(key))
@@ -147,6 +148,12 @@ class LocalStorage:
             shutil.rmtree(target)
         elif target.exists():
             target.unlink()
+
+
+def _temp_path(p: Path) -> Path:
+    """A temp file next to ``p``, unique per write, so concurrent writers of one key never share it (rename = atomic
+    publish; the last commit wins)."""
+    return p.with_name(f"{p.name}.{uuid.uuid4().hex}.part")
 
 
 class S3Storage:
