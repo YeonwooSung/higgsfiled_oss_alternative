@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "app": "pocket-vfx",
+  "profile": "open_weights_v1",
+  "note": "Weights are not included. sha256 values are filled in from the files actually deployed in the Comfy build; null means not yet verified. Encoder/VAE files follow the official ComfyUI-LTXVideo example graph of the same release.",
+  "models": [
+    {
+      "role": "subject_masks",
+      "id": "facebook/sam2.1-hiera-small (SAM 2.1 hiera small, video predictor)",
+      "source": "https://github.com/facebookresearch/sam2",
+      "config": "configs/sam2.1/sam2.1_hiera_s.yaml",
+      "files": [{"name": "sam2.1_hiera_small.pt", "sha256": null}],
+      "used_by": ["vfx_masks_v1 (PVSubjectMasks)"],
+      "license": "Apache-2.0",
+      "verified": false
+    },
+    {
+      "role": "effect_plate",
+      "id": "Lightricks/LTX-2.3 (distilled v1.1)",
+      "source": "https://huggingface.co/Lightricks/LTX-2.3",
+      "comfy_nodes": "https://github.com/Lightricks/ComfyUI-LTXVideo",
+      "files": [{"name": null, "sha256": null}],
+      "used_by": ["vfx_plate_v1"],
+      "license": "LTX community license (model weights; distinct from this repository's MIT code license)",
+      "verified": false
+    },
+    {
+      "role": "text_encoder",
+      "id": "Gemma text encoder of the official LTX-2.3 ComfyUI example (exact file per that example)",
+      "source": "https://github.com/Lightricks/ComfyUI-LTXVideo",
+      "files": [{"name": null, "sha256": null}],
+      "used_by": ["vfx_plate_v1"],
+      "license": "Gemma Terms of Use (Google; distinct from the LTX community license and this repository's MIT license)",
+      "verified": false
+    }
+  ]
+}

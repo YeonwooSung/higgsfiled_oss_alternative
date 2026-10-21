@@ -6,8 +6,8 @@ from sqlalchemy import select
 from helpers import configure, set_job_state
 from oc_api.models import Job, JobCost, Project, ProjectRevision
 from oc_api.pocket_vfx import jobs as vfx_jobs
-from oc_api.pocket_vfx.config import PocketVfxConfig
-from open_creative.pocket_vfx.keys import model_rev, track_key
+from oc_api.pocket_vfx.config import MaskEdit, PocketVfxConfig, SubjectPrompt
+from open_creative.pocket_vfx.keys import masks_key, model_rev, track_key
 from test_vfx_config import CLIP_SHA, codes, make_ready, put_clip, validate, vproject  # noqa: F401
 
 
@@ -34,15 +34,21 @@ def job_row(app, job_id):
         return j, c
 
 
-def make_track(app, project, revision, state="succeeded", key=None, result=None):
-    """A vfx.track job for ``revision`` whose result carries the key the worker would compute."""
+SUBJECT = [{"frame": 43, "points": [{"x": 0.5, "y": 0.4, "label": 1}]}]
+
+
+def make_track(app, project, revision, state="succeeded", key=None, result=None, masks=True):
+    """A vfx.track job for ``revision`` whose result carries the keys the worker would compute (with masks unless
+    ``masks=False``)."""
     with app.state.db() as db:
         p = db.get(Project, uuid.UUID(project["id"]))
         cfg = db.get(ProjectRevision, (p.id, revision)).config_json
-        k = key or track_key(cfg, CLIP_SHA, model_rev(cfg["model_profile"]))
+        rev = model_rev(cfg["model_profile"])
+        k = key or track_key(cfg, CLIP_SHA, rev)
+        m = {"masks_key": masks_key(cfg, CLIP_SHA, rev), "masks_zip_asset_id": str(uuid.uuid4())} if masks else None
         j = Job(project_id=p.id, session_id=p.session_id, input_revision=revision, kind="vfx.track",
                 options_json={}, model_profile=cfg["model_profile"], state=state,
-                result_json={"track_key": k, "invalid_intervals": [], **(result or {})})
+                result_json={"track_key": k, "invalid_intervals": [], "masks": m, **(result or {})})
         db.add(j)
         db.commit()
         return str(j.id)
@@ -87,32 +93,36 @@ def test_analyze_trim_past_clip_end(app, session_client, vproject):  # noqa: F81
 # --- vfx.track -----------------------------------------------------------------------------------------------
 
 def test_track_gpu_with_masks_stage(app, session_client, ready):
-    p, rev = ready
-    r = post(session_client, p, "vfx.track", revision=rev)
+    p, _ = ready
+    proj = configure(session_client, p, subject_prompts=SUBJECT)
+    r = post(session_client, p, "vfx.track", revision=proj["current_revision"])
     assert r.status_code == 202, r.text
     j, c = job_row(app, r.json()["id"])
     assert j.uses_gpu is True and c.reserved_units == 120
     assert stages(app, r.json()["id"]) == ["track", "masks"]
 
 
-def test_masks_stage_only_when_needed():
+def test_masks_need_and_stage():
     cfg = PocketVfxConfig()
+    impact = {"input_requirements": {"subject_mask": True, "clean_plate": False}}
+    blink = {"input_requirements": {"subject_mask": True, "clean_plate": True}}
     no_mask = {"input_requirements": {"subject_mask": False}}
-    with_mask = {"input_requirements": {"subject_mask": True}}
-    assert vfx_jobs.masks_needed(cfg, with_mask) is True
-    assert vfx_jobs.masks_needed(cfg, no_mask) is True  # behind_subject needs the subject mask
-    cfg.effect.layer_order = "split_glow"
-    assert vfx_jobs.masks_needed(cfg, no_mask) is True
-    cfg.effect.layer_order = "in_front"
-    assert vfx_jobs.masks_needed(cfg, no_mask) is False
-    assert vfx_jobs.masks_needed(cfg, with_mask) is True
+    for order, needed in (("behind_subject", True), ("split_glow", True), ("in_front", False)):
+        cfg.effect.layer_order = order
+        assert vfx_jobs.masks_needed(cfg, impact) is needed, order
+        assert vfx_jobs.masks_needed(cfg, blink) is True  # drawn inside the mask
+    # the stage runs only when a subject is selected (prompts or mask edits) for a preset that uses masks
+    assert vfx_jobs.masks_stage_runs(cfg, impact) is False
+    cfg.subject_prompts = [SubjectPrompt.model_validate(SUBJECT[0])]
+    assert vfx_jobs.masks_stage_runs(cfg, impact) is True and vfx_jobs.masks_stage_runs(cfg, no_mask) is False
+    cfg.subject_prompts = []
+    cfg.mask_edits = [MaskEdit(frame=3, asset_id=uuid.uuid4())]
+    assert vfx_jobs.masks_stage_runs(cfg, impact) is True
 
 
-def test_track_without_masks_is_cpu(monkeypatch, app, session_client, ready):
-    p, _ = ready
-    proj = configure(session_client, p, effect__layer_order="in_front")
-    monkeypatch.setattr(vfx_jobs, "masks_needed", lambda cfg, preset: False)
-    r = post(session_client, p, "vfx.track", revision=proj["current_revision"])
+def test_track_without_subject_is_cpu(app, session_client, ready):
+    p, rev = ready  # behind_subject, but no subject selected: track only
+    r = post(session_client, p, "vfx.track", revision=rev)
     assert r.status_code == 202, r.text
     j, c = job_row(app, r.json()["id"])
     assert j.uses_gpu is False and c.reserved_units == 0 and stages(app, r.json()["id"]) == ["track"]
@@ -198,8 +208,41 @@ def test_render_follow_requires_track(app, session_client, ready):
     p, rev = ready
     r = render(session_client, p, rev)
     assert r.status_code == 422 and err(r)["code"] == "track_required" and err(r)["field"] == "options.track_job_id"
-    proj = configure(session_client, p, anchor__follow=False)
-    assert render(session_client, p, proj["current_revision"]).status_code == 202
+    proj = configure(session_client, p, anchor__follow=False, effect__layer_order="in_front")
+    assert render(session_client, p, proj["current_revision"]).status_code == 202  # fixed anchor, in front
+
+
+def test_render_behind_subject_requires_a_track_with_masks(app, session_client, ready):
+    p, _ = ready
+    proj = configure(session_client, p, anchor__follow=False)  # fixed anchor, behind the subject
+    rev = proj["current_revision"]
+    r = render(session_client, p, rev)
+    assert r.status_code == 422 and err(r)["code"] == "track_required" and "subject" in err(r)["message"]
+    r = render(session_client, p, rev, make_track(app, p, rev, masks=False))
+    assert r.status_code == 422 and err(r)["code"] == "validation_failed"
+    assert codes(err(r)["details"]["blocking_errors"]) == ["mask_required"]
+    assert render(session_client, p, rev, make_track(app, p, rev)).status_code == 202
+
+
+def test_validate_mask_required_follows_the_masks_key(app, session_client, ready):
+    p, rev = ready
+    assert codes(validate(session_client, p, rev)["blocking_errors"]) == ["mask_required"]
+    make_track(app, p, rev, masks=False)  # tracked without a subject
+    assert codes(validate(session_client, p, rev)["blocking_errors"]) == ["mask_required"]
+    make_track(app, p, rev)
+    assert validate(session_client, p, rev)["valid"] is True
+    # a correction changes the track key but not the masks key: the masks stay usable
+    proj = configure(session_client, p, corrections=[{"frame": 60, "x": 0.4, "y": 0.4}])
+    assert validate(session_client, p, proj["current_revision"])["valid"] is True
+    # a new subject prompt changes the masks key: the old masks are stale
+    proj = configure(session_client, p, subject_prompts=SUBJECT)
+    assert codes(validate(session_client, p, proj["current_revision"])["blocking_errors"]) == ["mask_required"]
+
+
+def test_generate_plate_is_not_blocked_by_missing_masks(app, session_client, ready):
+    p, rev = ready
+    assert codes(validate(session_client, p, rev)["blocking_errors"]) == ["mask_required"]
+    assert post(session_client, p, "vfx.generate_plate", revision=rev).status_code == 202
 
 
 def test_render_track_from_older_anchor_is_stale(app, session_client, ready):
@@ -255,7 +298,7 @@ def test_render_track_job_checks(app, session_client, ready):
 
 def test_render_validation_failed(app, session_client, ready):
     p, _ = ready
-    proj = configure(session_client, p, effect__peak_ms=1200, anchor__follow=False)
+    proj = configure(session_client, p, effect__peak_ms=1200, anchor__follow=False, effect__layer_order="in_front")
     r = render(session_client, p, proj["current_revision"])
     e = err(r)
     assert r.status_code == 422 and e["code"] == "validation_failed"
@@ -264,7 +307,7 @@ def test_render_validation_failed(app, session_client, ready):
 
 def test_second_concurrent_render_is_render_busy(app, session_client, ready):
     p, _ = ready
-    proj = configure(session_client, p, anchor__follow=False)
+    proj = configure(session_client, p, anchor__follow=False, effect__layer_order="in_front")
     rev = proj["current_revision"]
     assert render(session_client, p, rev).status_code == 202
     r = render(session_client, p, rev)
@@ -274,7 +317,8 @@ def test_second_concurrent_render_is_render_busy(app, session_client, ready):
 def test_render_blink_without_clean_plate(app, session_client, ready):
     p, _ = ready
     proj = configure(session_client, p, effect__preset_id="blink_out_v1", anchor__follow=False)
-    r = render(session_client, p, proj["current_revision"])
+    rev = proj["current_revision"]
+    r = render(session_client, p, rev, make_track(app, p, rev))
     assert r.status_code == 422 and err(r)["code"] == "validation_failed"
     assert [x["code"] for x in err(r)["details"]["blocking_errors"]] == ["clean_plate_required"]
 
@@ -312,7 +356,7 @@ def test_stale_track_is_ignored_by_validate(app, session_client, ready):
 
 def test_export_kind_only_via_exports(app, session_client, ready):
     p, _ = ready
-    proj = configure(session_client, p, anchor__follow=False)
+    proj = configure(session_client, p, anchor__follow=False, effect__layer_order="in_front")
     rev = proj["current_revision"]
     r = post(session_client, p, "vfx.export", {"render_job_id": str(uuid.uuid4())}, rev)
     assert r.status_code == 422 and err(r)["code"] == "invalid_kind"

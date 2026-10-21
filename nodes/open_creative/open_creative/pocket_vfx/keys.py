@@ -9,7 +9,9 @@ import hashlib
 import json
 
 # Algorithm revision of the track + masks stages; bump when either changes its output for the same inputs.
-TRACK_MODEL_REV = "lk_fb_median_v1+sam2.1_hiera_small"
+# The ``smooth_s<sigma>_b<max shift>`` part names ``track.SMOOTH_SIGMA_FRAMES`` / ``SMOOTH_MAX_SHIFT_PX``
+# (test_pv_keys pins them together).
+TRACK_MODEL_REV = "lk_fb_median_v1+smooth_s1_b0.5+sam2.1_hiera_small"
 
 _ANCHOR_FIELDS = ("frame", "x", "y", "follow", "track_window_frames")
 

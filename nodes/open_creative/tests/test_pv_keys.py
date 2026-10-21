@@ -26,7 +26,7 @@ def changed(path, value):
 
 
 def test_model_rev_combines_constant_and_profile():
-    assert TRACK_MODEL_REV == "lk_fb_median_v1+sam2.1_hiera_small"
+    assert TRACK_MODEL_REV == "lk_fb_median_v1+smooth_s1_b0.5+sam2.1_hiera_small"
     assert model_rev("mock_v1") != model_rev("open_weights_v1") and TRACK_MODEL_REV in model_rev("mock_v1")
 
 
@@ -62,3 +62,11 @@ def test_masks_key_ignores_corrections_only():
     assert masks_key(changed(("anchor", "frame"), 44), SHA, REV) != base
     assert masks_key(changed(("mask_edits",), [{"frame": 50, "asset_id": "0" * 32}]), SHA, REV) != base
     assert masks_key(CFG, SHA, REV) != track_key(CFG, SHA, REV)
+
+
+def test_track_model_rev_names_the_track_smoothing():
+    """Changing the smoothing constants changes the track output, so the revision (and every track key) must change
+    with them; this pins the revision string to the constants the worker and the node use."""
+    from open_creative.pocket_vfx.track import ALGORITHM, SMOOTH_MAX_SHIFT_PX, SMOOTH_SIGMA_FRAMES
+
+    assert TRACK_MODEL_REV.startswith(f"{ALGORITHM}+smooth_s{SMOOTH_SIGMA_FRAMES:g}_b{SMOOTH_MAX_SHIFT_PX:g}+")

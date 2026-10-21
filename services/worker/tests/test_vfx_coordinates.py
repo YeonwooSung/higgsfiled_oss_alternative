@@ -71,7 +71,9 @@ def test_gt_point_tracks_and_renders_in_output_space(ctx, db_factory, storage, p
 
     u, v = gt[ANCHOR_FRAME] / (w, h)  # the user's click, in uv of the (proxy) frame
     proj.revise(anchor={**proj.cfg["anchor"], "frame": ANCHOR_FRAME, "x": float(u), "y": float(v), "follow": True},
-                effect={**proj.cfg["effect"], "start_ms": 1400, "peak_ms": 1800, "end_ms": 3400})
+                # in front: the centroid measures the effect itself (the hand is part of the subject mask)
+                effect={**proj.cfg["effect"], "start_ms": 1400, "peak_ms": 1800, "end_ms": 3400,
+                        "layer_order": "in_front"})
     track = proj.run("vfx.track")
     doc = proj.json(track.result_json["track_asset_id"])
     assert all(doc["points"][f]["valid"] for f in case["frames"])

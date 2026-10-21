@@ -214,23 +214,30 @@ def test_validate_default_project_reports_missing_inputs(session_client, vprojec
 
 
 def test_validate_ready_project_is_valid(app, session_client, vproject):
-    proj, *_ = make_ready(app, session_client, vproject)
+    proj, *_ = make_ready(app, session_client, vproject, effect__layer_order="in_front")
     assert validate(session_client, vproject, proj["current_revision"]) == {
         "valid": True, "blocking_errors": [], "warnings": []}
 
 
+@pytest.mark.parametrize("layer_order", ["behind_subject", "split_glow"])
+def test_validate_occluding_layer_order_requires_masks(app, session_client, vproject, layer_order):
+    proj, *_ = make_ready(app, session_client, vproject, effect__layer_order=layer_order)
+    v = validate(session_client, vproject, proj["current_revision"])
+    assert [(e["code"], e["field"]) for e in v["blocking_errors"]] == [("mask_required", "config.subject_prompts")]
+
+
 def test_validate_timing_order(app, session_client, vproject):
-    proj, *_ = make_ready(app, session_client, vproject, effect__peak_ms=1200)
+    proj, *_ = make_ready(app, session_client, vproject, effect__peak_ms=1200, effect__layer_order="in_front")
     v = validate(session_client, vproject, proj["current_revision"])
     assert v["valid"] is False
     assert [(e["code"], e["field"]) for e in v["blocking_errors"]] == [("timing_order", "config.effect.start_ms")]
 
 
 def test_validate_trim_and_frame_ranges(app, session_client, vproject):
-    proj, *_ = make_ready(app, session_client, vproject, duration_ms=4500)
+    proj, *_ = make_ready(app, session_client, vproject, duration_ms=4500, effect__layer_order="in_front")
     v = validate(session_client, vproject, proj["current_revision"])
     assert [(e["code"], e["field"]) for e in v["blocking_errors"]] == [("trim_range", "config.trim.duration_ms")]
-    proj, *_ = make_ready(app, session_client, vproject, anchor__frame=120,
+    proj, *_ = make_ready(app, session_client, vproject, anchor__frame=120, effect__layer_order="in_front",
                           corrections=[{"frame": 200, "x": 0.5, "y": 0.5}])
     v = validate(session_client, vproject, proj["current_revision"])
     assert [(e["code"], e["field"]) for e in v["blocking_errors"]] == [
@@ -238,17 +245,20 @@ def test_validate_trim_and_frame_ranges(app, session_client, vproject):
 
 
 def test_validate_blink_requires_clean_plate(app, session_client, vproject):
-    proj, *_ = make_ready(app, session_client, vproject, effect__preset_id="blink_out_v1")
+    # Blink Out dissolves inside the subject mask: masks are required even in front
+    proj, *_ = make_ready(app, session_client, vproject, effect__preset_id="blink_out_v1",
+                          effect__layer_order="in_front")
     v = validate(session_client, vproject, proj["current_revision"])
     assert [(e["code"], e["field"]) for e in v["blocking_errors"]] == [
-        ("clean_plate_required", "config.clean_plate_asset_id")]
+        ("mask_required", "config.subject_prompts"), ("clean_plate_required", "config.clean_plate_asset_id")]
     plate = put_asset(app, vproject["id"], "clean_plate", b"x", "image/png", 4, 4)
     proj = configure(session_client, vproject, clean_plate_asset_id=plate)
-    assert validate(session_client, vproject, proj["current_revision"])["valid"] is True
+    assert codes(validate(session_client, vproject, proj["current_revision"])["blocking_errors"]) == ["mask_required"]
 
 
 def test_validate_bundled_plate_must_belong_to_preset(app, session_client, vproject):
-    proj, *_ = make_ready(app, session_client, vproject, plate__bundled_id="energy_wisps_v1")
+    proj, *_ = make_ready(app, session_client, vproject, plate__bundled_id="energy_wisps_v1",
+                          effect__layer_order="in_front")
     v = validate(session_client, vproject, proj["current_revision"])
     assert [(e["code"], e["field"]) for e in v["blocking_errors"]] == [("plate_mismatch", "config.plate.bundled_id")]
 

@@ -205,6 +205,28 @@ def test_aura_mask_band_not_filled_inside_silhouette():
     assert layer.alpha[420, 640 + 90 + 200] == 0
 
 
+def test_aura_band_does_not_leak_inside_a_silhouette_touching_the_frame_edge():
+    mask = np.zeros((H, W), np.float32)
+    cv2.ellipse(mask, (640, 690), (120, 260), 0, 0, 360, 1.0, -1)  # cut by the bottom edge
+    assert mask[-1].any()
+    layer = render_effect("energy_aura_v1", AURA, WIN, 50, None, W, H, 1, mask)
+    _check_layer(layer, palette="violet")
+    core = cv2.erode((mask > 0.5).astype(np.uint8), np.ones((31, 31), np.uint8)).astype(bool)
+    assert core[-1].any()  # the eroded silhouette reaches the edge rows (erode does not erode at the border)
+    assert layer.alpha[core].max() == 0
+    assert layer.alpha[690, 640 - 120 - 4] > 0.1  # the glow still hugs the visible contour
+
+
+def test_aura_anchor_glow_is_masked_out_inside_the_silhouette():
+    mask = _body_mask()
+    layer = render_effect("energy_aura_v1", AURA, WIN, 50, (640, 420), W, H, 1, mask)  # anchor on the torso
+    _check_layer(layer, palette="violet")
+    core = cv2.erode((mask > 0.5).astype(np.uint8), np.ones((31, 31), np.uint8)).astype(bool)
+    assert layer.alpha[core].max() == 0
+    free = render_effect("energy_aura_v1", AURA, WIN, 50, (640, 420), W, H, 1, None)
+    assert free.alpha[420, 640] > 0.3  # without a mask the local glow sits on the anchor
+
+
 def test_aura_flickers_and_is_deterministic():
     mask = _body_mask()
     a = render_effect("energy_aura_v1", AURA, WIN, 50, None, W, H, 1, mask)

@@ -3,11 +3,16 @@
 Stages (each stores durable assets; a restarted job resumes after the last finished stage):
 - ``layers``: per-frame effect anchor in output px. ``follow=false`` -> the config anchor (uv x canvas) on every
   frame; ``follow=true`` -> the track job's points (uv01 x canvas). Invalid track frames follow the preset's
-  ``invalid_policy``: ``hide`` draws no effect that frame, ``freeze`` holds the last valid position. Plate and subject
-  masks are resolved here too; neither exists yet (plates: Task 12, masks: Task 10), so the effect is procedural only
-  and is composited without occlusion (Ruling R2).
+  ``invalid_policy``: ``hide`` draws no effect that frame, ``freeze`` holds the last valid position. Subject masks
+  come from the track job (Ruling R2): when the render needs them (``masks_needed``: ``behind_subject``,
+  ``split_glow``) the track job is required even with ``follow=false`` and its masks must carry the config's
+  ``masks_key`` (else ``mask_required``). The plate is resolved here too (Task 12; procedural only until then).
 - ``composite``: streams the work-clip frames (one in flight) through ``composite_frame`` into ``Mp4Writer`` and an
   ``IntegrityAccumulator``; per-frame ROI size/box and changed pixel count (pre-encode, vs the source frame) are kept.
+  The proxy masks (<= 120 x 640x360 bytes) are held in memory and upscaled per frame with ``upscale_mask`` (soft):
+  ``behind_subject``/``split_glow`` restore the subject inside it, Energy Aura draws its contour band from the
+  temporally smoothed masks (``smooth_masks``) plus the anchor glow. Occlusion QA = max over frames of
+  ``subject_core_cover`` (fraction of subject-core pixels changed > 2/255; core = ``masks.subject_core``).
   An outside-ROI integrity failure fails the job (``roi_integrity``, Ruling R13): no video is stored.
 - ``encode``: final video (audio mux plugs in here, Task 13), output contract probe, ``cover`` PNG of the peak frame
   and the ``roi_qa`` JSON.
@@ -16,13 +21,27 @@ Stages (each stores durable assets; a restarted job resumes after the last finis
 from __future__ import annotations
 
 import numpy as np
-from oc_api.pocket_vfx.jobs import config_track_key
+from oc_api.pocket_vfx.jobs import (
+    config_masks_key,
+    config_track_key,
+    masks_needed,
+    track_masks,
+)
 from open_creative.media.video import Mp4Writer, decode_frames, probe
 from open_creative.pocket_vfx.composite import FrameInputs, composite_frame
-from open_creative.pocket_vfx.integrity import IntegrityAccumulator
+from open_creative.pocket_vfx.integrity import IntegrityAccumulator, subject_core_cover
+from open_creative.pocket_vfx.masks import (
+    CORE_ERODE_PX,
+    MaskFormatError,
+    read_masks_zip,
+    smooth_masks,
+    subject_core,
+    upscale_mask,
+)
 from open_creative.pocket_vfx.presets import load_presets
 from open_creative.pocket_vfx.procedural import render_effect
 from open_creative.pocket_vfx.timeline import EffectWindow, effect_window
+from open_creative.pocket_vfx.track import anchor_positions
 from PIL import Image
 
 from ..stages import JobRun, StageFailed
@@ -55,18 +74,7 @@ def final_video(run: JobRun, cfg, video_id: str) -> tuple[str, bool]:
 
 
 def _anchors(track: dict | None, cfg, w: int, h: int, n: int, policy: str) -> list[list[float] | None]:
-    if track is None:  # follow=false: the config anchor on every frame
-        return [[cfg.anchor.x * w, cfg.anchor.y * h]] * n
-    points = {p["frame"]: p for p in track["points"]}
-    out, last = [], None
-    for i in range(n):
-        p = points.get(i)
-        if p is not None and p["valid"]:
-            last = [p["x"] * w, p["y"] * h]
-            out.append(last)
-        else:
-            out.append(last if policy == "freeze" else None)
-    return out
+    return anchor_positions(track, (cfg.anchor.x, cfg.anchor.y), w, h, n, policy)
 
 
 def _runs(frames: list[int]) -> list[list[int]]:
@@ -109,17 +117,28 @@ def vfx_render(run: JobRun) -> tuple[list[str], dict]:
     if cfg.effect.preset_id == "blink_out_v1":
         raise StageFailed("mask_required", "Blink Out needs subject masks; track the subject first.")
 
+    needs_masks = masks_needed(cfg, preset)
+
     def layers_stage(stage):
         run.transition("running", "layers")
-        track, track_job = None, None
-        if cfg.anchor.follow:
+        track, track_job, subject = None, None, None
+        if cfg.anchor.follow or needs_masks or opts.get("track_job_id"):
             track_job = source_job(run, opts.get("track_job_id"), ("vfx.track",), "track_required",
-                                   "Track the anchor before rendering a following effect.")
+                                   "Track the anchor before rendering a following effect." if cfg.anchor.follow
+                                   else "Track the subject before rendering an effect behind it.")
             clip = ready_asset(run, cfg.video_asset_id, "clip", "video_required")
             if (track_job.result_json or {}).get("track_key") != config_track_key(cfg, clip):
                 raise StageFailed("track_stale", "The clip, anchor, corrections or subject prompts changed after "
                                   "tracking. Track again.")
-            track = json_asset(run, track_job.result_json["track_asset_id"])
+            if cfg.anchor.follow:
+                track = json_asset(run, track_job.result_json["track_asset_id"])
+            m = track_masks(track_job, config_masks_key(cfg, clip))
+            if m is not None:
+                subject = {"masks_zip_asset_id": m["masks_zip_asset_id"], "size": m["size"],
+                           "masks_key": m["masks_key"], "diagnostics": m.get("diagnostics") or []}
+        if needs_masks and subject is None:
+            raise StageFailed("mask_required", "This effect needs a subject mask. Select the subject and track "
+                              "again.")
         motion_asset = derived_asset(run, work, "motion_report")
         motion = json_asset(run, motion_asset.id) if motion_asset else None
         plate = resolve_plate(run, cfg, w, h)
@@ -127,20 +146,34 @@ def vfx_render(run: JobRun) -> tuple[list[str], dict]:
                "window": {"start": window.start, "peak": window.peak, "end": window.end},
                "follow": cfg.anchor.follow, "invalid_policy": policy,
                "track_job_id": str(track_job.id) if track_job else None,
-               "anchors": _anchors(track, cfg, w, h, n, policy), "plate": plate, "subject_masks": None,
+               "anchors": _anchors(track, cfg, w, h, n, policy), "plate": plate, "subject_masks": subject,
                "tracking_warnings": _tracking_warnings(track, window, policy, motion, preset)}
         return [store_json(run, "render_layers", doc, source_asset_id=work.id,
                            meta={"revision": run.job.input_revision})]
 
     (layers_id,) = run.ensure_stage("layers", layers_stage)
 
+    def load_masks(subject: dict | None) -> list | None:
+        if subject is None:
+            return None
+        try:
+            seq = read_masks_zip(run.fetch(run.asset(subject["masks_zip_asset_id"]), "masks.zip"), expect_frames=n,
+                                 expect_size=tuple(subject["size"]))
+        except (MaskFormatError, OSError, ValueError) as e:
+            raise StageFailed("mask_required", "The subject masks could not be read. Track again.") from e
+        return seq.masks
+
     def composite_stage(stage):
         run.transition("running", "composite")
         plan = json_asset(run, layers_id)
         anchors = plan["anchors"]
         params = {k: cfg_json["effect"][k] for k in EFFECT_PARAMS}
+        masks = load_masks(plan["subject_masks"])
+        occlude = masks is not None and cfg.effect.layer_order != "in_front"
+        aura = cfg.effect.preset_id == "energy_aura_v1"
+        band_masks = smooth_masks(masks, radius=1) if masks is not None and aura else None
         acc = IntegrityAccumulator()
-        roi_px, roi_bbox, changed_px = [], [], []
+        roi_px, roi_bbox, changed_px, cover = [], [], [], []
         out_path = run.work_dir / "render.mp4"
         src = run.fetch(work, "work.mp4")
         with Mp4Writer(out_path, w, h, fps=24) as writer:
@@ -148,15 +181,19 @@ def vfx_render(run: JobRun) -> tuple[list[str], dict]:
                 if i >= n:
                     break
                 anchor = anchors[i]
+                subject = upscale_mask(masks[i], w, h) if occlude else None
+                band = upscale_mask(band_masks[i], w, h) if band_masks is not None else None
                 effect = None
-                if anchor is not None:
-                    effect = render_effect(cfg.effect.preset_id, params, window, i, tuple(anchor), w, h,
-                                           cfg.plate.seed, None)
+                if anchor is not None or band is not None:
+                    effect = render_effect(cfg.effect.preset_id, params, window, i,
+                                           tuple(anchor) if anchor is not None else None, w, h, cfg.plate.seed, band)
                 inp = FrameInputs(source=frame, effect=effect, plate=plate_layer(plan["plate"], i),
-                                  subject_mask=None, front_glow=None, roi_limit=None)
+                                  subject_mask=subject, front_glow=None, roi_limit=None)
                 out, roi = composite_frame(inp, cfg.effect.layer_order)
                 writer.write(out)
                 acc.add(frame, out, roi)
+                if occlude:
+                    cover.append(subject_core_cover(out, frame, subject_core(subject)))
                 roi_px.append(int(np.count_nonzero(roi)))
                 ys, xs = np.nonzero(roi)
                 roi_bbox.append([int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1]
@@ -168,11 +205,14 @@ def vfx_render(run: JobRun) -> tuple[list[str], dict]:
         if integrity["status"] != "pass":  # Ruling R13: never deliver a render that changed pixels outside the ROI
             raise StageFailed("roi_integrity", f"The composite changed pixels outside the effect area (max error "
                               f"{integrity['max_err']}/255 at frame {integrity['worst_frame']}).")
+        occlusion_qa = ({"max": max(cover), "worst_frame": int(np.argmax(cover)), "frames": len(cover),
+                         "core_erode_px": CORE_ERODE_PX} if cover else None)
         meta = {"revision": run.job.input_revision, "render_profile": profile, "label": RENDER_PROFILE_LABEL,
                 "plate_source": "procedural", "preset_id": cfg.effect.preset_id,
-                "layer_order": cfg.effect.layer_order, "occlusion": False, "has_audio": False, "mock": False,
-                "integrity": integrity,
-                "frame_stats": {"roi_px": roi_px, "roi_bbox": roi_bbox, "changed_px": changed_px}}
+                "layer_order": cfg.effect.layer_order, "occlusion": occlude, "occlusion_qa": occlusion_qa,
+                "has_audio": False, "mock": False, "integrity": integrity,
+                "frame_stats": {"roi_px": roi_px, "roi_bbox": roi_bbox, "changed_px": changed_px,
+                                "core_cover": cover or None}}
         return [run.store_asset("render_video", out_path, "video/mp4", source_asset_id=work.id, meta=meta)]
 
     (composite_id,) = run.ensure_stage("composite", composite_stage)
@@ -192,7 +232,7 @@ def vfx_render(run: JobRun) -> tuple[list[str], dict]:
                 break
         meta = run.asset(composite_id).meta_json
         qa = {"schema_version": 1, "integrity": meta["integrity"], "frame_stats": meta["frame_stats"],
-              "layer_order": meta["layer_order"], "occlusion_qa": None, "max_outside_err_allowed": 1}
+              "layer_order": meta["layer_order"], "occlusion_qa": meta["occlusion_qa"], "max_outside_err_allowed": 1}
         return [video_id, run.store_asset("cover", cover, "image/png", source_asset_id=video_id,
                                           meta={"frame": window.peak, "revision": run.job.input_revision}),
                 store_json(run, "roi_qa", qa, source_asset_id=video_id,
@@ -202,7 +242,9 @@ def vfx_render(run: JobRun) -> tuple[list[str], dict]:
     plan, meta = json_asset(run, layers_id), run.asset(composite_id).meta_json
     return [layers_id, video_id, cover_id, qa_id], {
         "render_profile": profile, "label": RENDER_PROFILE_LABEL, "roi_qa": meta["integrity"],
-        "occlusion_qa": None, "tracking_warnings": plan["tracking_warnings"], "plate_source": meta["plate_source"],
+        "occlusion_qa": (meta["occlusion_qa"] or {}).get("max"), "occlusion": meta["occlusion"],
+        "mask_warnings": (plan["subject_masks"] or {}).get("diagnostics") or [],
+        "tracking_warnings": plan["tracking_warnings"], "plate_source": meta["plate_source"],
         "frame_count": n, "mock": meta["mock"], "has_audio": bool(run.asset(qa_id).meta_json["has_audio"]),
         "render_video_asset_id": video_id, "cover_asset_id": cover_id, "roi_qa_asset_id": qa_id,
         "layers_asset_id": layers_id, "track_job_id": plan["track_job_id"], "revision": run.job.input_revision,

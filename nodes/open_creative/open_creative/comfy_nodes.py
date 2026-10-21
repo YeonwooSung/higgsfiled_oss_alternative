@@ -1,4 +1,5 @@
-"""Product Lock (PL*) and Camera Sketch (CS*) custom nodes for ComfyUI (new nodes; none exist upstream).
+"""Product Lock (PL*), Camera Sketch (CS*) and Pocket VFX (PV*) custom nodes for ComfyUI (new nodes; none exist
+upstream).
 
 Conventions: IMAGE is [B,H,W,C] float 0..1 (RGB only — alpha travels as a separate MASK,
 never as a 4th IMAGE channel); MASK is [B,H,W] float 0..1. Comfy's LoadImage emits its
@@ -20,6 +21,17 @@ from .camera_sketch.qa import motion_report
 from .camera_sketch.render import hole_ratio, rasterize, render_sequence
 from .camera_sketch.scene import (
     DAV2_SMALL, DepthConvention, build_mesh, decode_depth_png16, depth_to_z, encode_depth_png16, prepare_z,
+)
+from .pocket_vfx import masks as pv_masks
+from .pocket_vfx.composite import FrameInputs
+from .pocket_vfx.composite import composite_frame as pv_composite_frame
+from .pocket_vfx.integrity import IntegrityAccumulator, subject_core_cover
+from .pocket_vfx.presets import load_presets as load_pv_presets
+from .pocket_vfx.procedural import render_effect
+from .pocket_vfx.timeline import EffectWindow
+from .pocket_vfx.track import (
+    SMOOTH_MAX_SHIFT_PX, SMOOTH_SIGMA_FRAMES, anchor_positions, smooth_track, static_track, track_to_json,
+    track_with_corrections,
 )
 from .product_lock.composite import LayerConfig, composite_sequence
 from .product_lock.geometry import Placement, output_size, place_product
@@ -377,10 +389,249 @@ class CSGeneratedMotionReport:
         return (json.dumps(motion_report(iter(gen), iter(geo), (target_x_px, target_y_px))),)
 
 
+# ---- Pocket VFX -------------------------------------------------------------------------------------------------
+# Thin wrappers over open_creative.pocket_vfx (the CPU worker runs the same code). IMAGE is [B,H,W,3] float 0..1
+# sRGB; masks are MASK [B,H,W] float 0..1 at the proxy or the output size (upscaled with ``upscale_mask``).
+# Coordinates in JSON are uv01 of the work clip unless stated otherwise.
+
+PV_CATEGORY = "open_creative/pocket_vfx"
+SAM2_CONFIG = "configs/sam2.1/sam2.1_hiera_s.yaml"
+SAM2_CHECKPOINT = "sam2.1_hiera_small.pt"
+SAM2_MODEL = "sam2.1_hiera_small"
+
+
+def _gray_frames(frames) -> list[np.ndarray]:
+    import cv2
+
+    return [cv2.cvtColor(f, cv2.COLOR_RGB2GRAY) for f in _frames_u8(frames)]
+
+
+def _mask_at(masks: np.ndarray | None, i: int, w: int, h: int) -> np.ndarray | None:
+    if masks is None:
+        return None
+    m = masks[min(i, len(masks) - 1)]
+    return m.astype(np.float32) if m.shape == (h, w) else pv_masks.upscale_mask(m, w, h)
+
+
+class PVTrackAnchor:
+    """LK point track of the anchor (+ corrections) on the proxy frames -> track JSON (``track_to_json``)."""
+
+    CATEGORY = PV_CATEGORY
+    FUNCTION = "run"
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("track",)
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+            "frames": ("IMAGE",),
+            "anchor": ("STRING", {"default": '{"frame":0,"x":0.5,"y":0.7,"follow":true,"track_window_frames":null}'}),
+            "corrections": ("STRING", {"default": "[]", "multiline": True}),
+            "out_width": ("INT", {"default": 1280, "min": 64, "max": 4096}),
+            "out_height": ("INT", {"default": 720, "min": 64, "max": 4096}),
+        }}
+
+    def run(self, frames, anchor, corrections, out_width, out_height):
+        gray = _gray_frames(frames)
+        a, corr = json.loads(anchor), json.loads(corrections or "[]")
+        h, w = gray[0].shape[:2]
+        if not a.get("follow", True):
+            points = static_track((a["x"] * w, a["y"] * h), len(gray))
+        else:
+            points = smooth_track(track_with_corrections(gray, a, corr, a.get("track_window_frames")),
+                                  SMOOTH_SIGMA_FRAMES, SMOOTH_MAX_SHIFT_PX)
+        return (json.dumps(track_to_json(points, (w, h), (out_width, out_height))),)
+
+
+class PVSubjectMasks:
+    """SAM 2.1 hiera small VIDEO predictor -> mask sequence (MASK [N,H,W]) + manifest; writes the ``masks`` ZIP.
+
+    ``prompts`` is ``pocket_vfx.masks.build_prompts`` JSON (proxy px). The video state is created per call
+    (``init_state`` on a per-call temporary frame directory) and never shared. SAM 2 / torch import lazily."""
+
+    CATEGORY = PV_CATEGORY
+    FUNCTION = "run"
+    RETURN_TYPES = ("MASK", "STRING")
+    RETURN_NAMES = ("masks", "manifest")
+    OUTPUT_NODE = True
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+            "frames": ("IMAGE",),
+            "prompts": ("STRING", {"default": "{}", "multiline": True}),
+            "width": ("INT", {"default": 640, "min": 16, "max": 4096}),
+            "height": ("INT", {"default": 360, "min": 16, "max": 4096}),
+        }, "optional": {"filename_prefix": ("STRING", {"default": "pocket_vfx_masks"})}}
+
+    def run(self, frames, prompts, width, height, filename_prefix="pocket_vfx_masks"):
+        try:
+            from sam2.build_sam import build_sam2_video_predictor
+        except ImportError as e:
+            raise RuntimeError("SAM 2 is not installed in this Comfy build (vfx_masks_v1 needs the video "
+                               "predictor)") from e
+        import contextlib
+        import tempfile
+        import uuid as _uuid
+        from pathlib import Path
+
+        import cv2
+        import folder_paths  # Comfy runtime module
+        from PIL import Image
+
+        p = json.loads(prompts or "{}")
+        rgb = _frames_u8(frames)
+        n = len(rgb)
+        predictor = build_sam2_video_predictor(SAM2_CONFIG, folder_paths.get_full_path("sam2", SAM2_CHECKPOINT))
+        try:
+            import torch
+
+            no_grad = torch.inference_mode()
+        except ImportError:
+            no_grad = contextlib.nullcontext()
+        out = np.zeros((n, height, width), np.float32)
+        with tempfile.TemporaryDirectory(prefix="pv_sam2_") as tmp, no_grad:
+            for i, f in enumerate(rgb):
+                if f.shape[:2] != (height, width):
+                    f = cv2.resize(f, (width, height), interpolation=cv2.INTER_AREA)
+                Image.fromarray(f).save(Path(tmp) / f"{i:05d}.jpg", quality=95)
+            state = predictor.init_state(video_path=tmp, offload_video_to_cpu=True)
+            try:
+                obj = int(p.get("obj_id", 1))
+                for pf in p.get("point_frames") or []:
+                    pts = np.array([[q["x"], q["y"]] for q in pf["points"]], np.float32)
+                    labels = np.array([q["label"] for q in pf["points"]], np.int32)
+                    predictor.add_new_points_or_box(inference_state=state, frame_idx=int(pf["frame"]), obj_id=obj,
+                                                    points=pts, labels=labels)
+                for mf in p.get("mask_frames") or []:
+                    m = pv_masks.decode_prompt_mask(mf["png_b64"], width, height) > 0
+                    predictor.add_new_mask(inference_state=state, frame_idx=int(mf["frame"]), obj_id=obj, mask=m)
+                for reverse in (False, True):
+                    for idx, _ids, logits in predictor.propagate_in_video(state, reverse=reverse):
+                        out[int(idx)] = (_np(logits)[0, 0] > 0.0).astype(np.float32)
+            finally:
+                predictor.reset_state(state)
+        seq = pv_masks.MaskSequence(masks=[(m * 255).astype(np.uint8) for m in out],
+                                    prompts_hash=pv_masks.prompts_hash(p), model=SAM2_MODEL)
+        out_dir = Path(folder_paths.get_output_directory())
+        name = f"{filename_prefix}_{_uuid.uuid4().hex[:12]}.zip"
+        doc = pv_masks.write_masks_zip(seq, out_dir / name)
+        return {"ui": {"masks": [{"filename": name, "subfolder": "", "type": "output"}]},
+                "result": (_out(out), json.dumps(doc))}
+
+
+class PVProceduralEffect:
+    """One frame of a procedural effect layer: linear premultiplied RGB (IMAGE) + alpha (MASK)."""
+
+    CATEGORY = PV_CATEGORY
+    FUNCTION = "run"
+    RETURN_TYPES = ("IMAGE", "MASK")
+    RETURN_NAMES = ("rgb_premult_linear", "alpha")
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+            "preset_id": (sorted(load_pv_presets()),),
+            "params": ("STRING", {"default": '{"scale":1.0,"intensity":0.8,"palette":"amber"}', "multiline": True}),
+            "window": ("STRING", {"default": '{"start":34,"peak":43,"end":82}'}),
+            "frame": ("INT", {"default": 43, "min": 0, "max": 10_000}),
+            "anchor_x": ("FLOAT", {"default": 640.0, "min": -1.0, "max": 8192.0}),  # output px; < 0 = none
+            "anchor_y": ("FLOAT", {"default": 500.0, "min": -1.0, "max": 8192.0}),
+            "width": ("INT", {"default": 1280, "min": 16, "max": 4096}),
+            "height": ("INT", {"default": 720, "min": 16, "max": 4096}),
+            "seed": ("INT", {"default": 12345, "min": 0, "max": 2**31 - 1}),
+        }, "optional": {"mask": ("MASK",)}}
+
+    def run(self, preset_id, params, window, frame, anchor_x, anchor_y, width, height, seed, mask=None):
+        win = json.loads(window)
+        anchor = (anchor_x, anchor_y) if anchor_x >= 0 and anchor_y >= 0 else None
+        m = _mask_at(_np(mask) if mask is not None else None, 0, width, height) if mask is not None else None
+        layer = render_effect(preset_id, json.loads(params), EffectWindow(win["start"], win["peak"], win["end"]),
+                              frame, anchor, width, height, seed, m)
+        if layer is None:
+            return _out(np.zeros((1, height, width, 3), np.float32)), _out(np.zeros((1, height, width), np.float32))
+        return _out(layer.rgb_premult[None]), _out(layer.alpha[None])
+
+
+class PVTrackedComposite:
+    """Source frames + track + (optional) subject masks + effect config -> composited frames, ROI and stats.
+
+    ``config``: ``{preset_id, params, window{start,peak,end}, layer_order, seed}`` (+ optional ``invalid_policy``,
+    default the preset's). The effect follows the track (uv01); invalid frames follow the invalid policy."""
+
+    CATEGORY = PV_CATEGORY
+    FUNCTION = "run"
+    RETURN_TYPES = ("IMAGE", "MASK", "STRING")
+    RETURN_NAMES = ("frames", "roi", "manifest")
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+            "source": ("IMAGE",), "track": ("STRING", {"forceInput": True}),
+            "config": ("STRING", {"default": "{}", "multiline": True}),
+        }, "optional": {"masks": ("MASK",)}}
+
+    def run(self, source, track, config, masks=None):
+        src = _frames_u8(source)
+        n, h, w = src.shape[:3]
+        cfg = json.loads(config)
+        preset = load_pv_presets()[cfg["preset_id"]]
+        win = EffectWindow(**{k: int(cfg["window"][k]) for k in ("start", "peak", "end")})
+        anchors = anchor_positions(json.loads(track), None, w, h, n,
+                                   cfg.get("invalid_policy", preset.get("invalid_policy", "hide")))
+        ms = _np(masks) if masks is not None else None
+        out = np.empty((n, h, w, 3), np.float32)
+        roi_out = np.empty((n, h, w), np.float32)
+        roi_px = []
+        for i in range(n):
+            m = _mask_at(ms, i, w, h)
+            effect = None
+            if anchors[i] is not None or (m is not None and cfg["preset_id"] == "energy_aura_v1"):
+                effect = render_effect(cfg["preset_id"], cfg.get("params", {}), win, i,
+                                       tuple(anchors[i]) if anchors[i] is not None else None, w, h,
+                                       int(cfg.get("seed", 0)), m)
+            frame, roi = pv_composite_frame(FrameInputs(source=src[i], effect=effect, plate=None, subject_mask=m,
+                                                        front_glow=None, roi_limit=None), cfg["layer_order"])
+            out[i] = frame.astype(np.float32) / 255.0
+            roi_out[i] = roi
+            roi_px.append(int(roi.sum()))
+        manifest = {"frames": n, "width": w, "height": h, "layer_order": cfg["layer_order"], "roi_px": roi_px,
+                    "occlusion": ms is not None and cfg["layer_order"] != "in_front"}
+        return _out(out), _out(roi_out), json.dumps(manifest)
+
+
+class PVOutsideROIIntegrity:
+    """Outside-ROI integrity (max channel error <= 1/255 outside the ROI) and, with a subject mask, Occlusion QA
+    (max fraction of subject-core pixels changed by > 2/255; ``masks.subject_core``)."""
+
+    CATEGORY = PV_CATEGORY
+    FUNCTION = "run"
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("qa",)
+    OUTPUT_NODE = True
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"source": ("IMAGE",), "frames": ("IMAGE",), "roi": ("MASK",)},
+                "optional": {"subject_mask": ("MASK",)}}
+
+    def run(self, source, frames, roi, subject_mask=None):
+        src, out, r = _frames_u8(source), _frames_u8(frames), _np(roi) >= 0.5
+        h, w = src.shape[1:3]
+        ms = _np(subject_mask) if subject_mask is not None else None
+        acc, cover = IntegrityAccumulator(), []
+        for i in range(len(src)):
+            acc.add(src[i], out[i], r[i])
+            if ms is not None:
+                cover.append(subject_core_cover(out[i], src[i], pv_masks.subject_core(_mask_at(ms, i, w, h))))
+        return (json.dumps({"integrity": acc.result(), "occlusion_qa": max(cover) if cover else None}),)
+
+
 NODE_CLASS_MAPPINGS = {cls.__name__: cls for cls in
                        (PLProductMask, PLLockedProduct, PLBackgroundPrompt, PLCompositeSequence, PLCoreIntegrityCheck,
                         CSDepthToScene, CSCompileCameraPath, CSRenderGuides, CSPathDiagnostics,
-                        CSGeneratedMotionReport)}
+                        CSGeneratedMotionReport, PVTrackAnchor, PVSubjectMasks, PVProceduralEffect,
+                        PVTrackedComposite, PVOutsideROIIntegrity)}
 NODE_DISPLAY_NAME_MAPPINGS = {
     "PLProductMask": "Product Lock · Product Mask",
     "PLLockedProduct": "Product Lock · Locked Product",
@@ -392,4 +643,9 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "CSRenderGuides": "Camera Sketch · Render Guides",
     "CSPathDiagnostics": "Camera Sketch · Path Diagnostics",
     "CSGeneratedMotionReport": "Camera Sketch · Generated Motion Report",
+    "PVTrackAnchor": "Pocket VFX · Track Anchor",
+    "PVSubjectMasks": "Pocket VFX · Subject Masks (SAM 2.1 video)",
+    "PVProceduralEffect": "Pocket VFX · Procedural Effect",
+    "PVTrackedComposite": "Pocket VFX · Tracked Composite",
+    "PVOutsideROIIntegrity": "Pocket VFX · Outside-ROI Integrity",
 }

@@ -1,4 +1,10 @@
-"""Pocket VFX job kinds: option schemas, pre-submit validation (spec §11) and the track reuse key."""
+"""Pocket VFX job kinds: option schemas, pre-submit validation (spec §11) and the track / masks reuse keys.
+
+Subject masks (Ruling R2): a render whose layer order occludes the subject (``behind_subject``, ``split_glow``) or
+whose preset is drawn inside the mask (Blink Out) needs fresh masks: a succeeded ``vfx.track`` whose ``masks``
+result carries the config's ``masks_key``. Such a render always names its track job (``track_required``), also with
+``follow=false``. ``in_front`` Impact Wave / Energy Aura render without masks.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
 
 from open_creative.comfy.profiles import GPU_SECONDS_CAP
-from open_creative.pocket_vfx.keys import model_rev, track_key
+from open_creative.pocket_vfx.keys import masks_key, model_rev, track_key
 from open_creative.pocket_vfx.presets import load_presets
 from open_creative.pocket_vfx.timeline import frame_count, frame_index, timing_errors
 
@@ -67,8 +73,16 @@ def parse_options(kind: str, options: dict) -> _Opts:
 
 
 def masks_needed(cfg: PocketVfxConfig, preset: dict) -> bool:
-    """Whether vfx.track runs its (GPU) masks stage."""
-    return cfg.effect.layer_order != "in_front" or bool(preset["input_requirements"].get("subject_mask"))
+    """Whether a render of ``cfg`` needs fresh subject masks: the layer order occludes the subject, or the preset
+    draws inside the mask (Blink Out dissolves the subject over the clean plate)."""
+    return cfg.effect.layer_order != "in_front" or bool(preset["input_requirements"].get("clean_plate"))
+
+
+def masks_stage_runs(cfg: PocketVfxConfig, preset: dict) -> bool:
+    """Whether vfx.track runs its (GPU) masks stage: the preset uses a subject mask and the config says which
+    subject (subject prompts or mask edits). Without a selection the track job tracks only and a render that
+    needs masks reports ``mask_required``."""
+    return bool(preset["input_requirements"].get("subject_mask")) and bool(cfg.subject_prompts or cfg.mask_edits)
 
 
 def source_sha(clip: Asset) -> str | None:
@@ -78,6 +92,17 @@ def source_sha(clip: Asset) -> str | None:
 def config_track_key(cfg: PocketVfxConfig, clip: Asset) -> str | None:
     sha = source_sha(clip)
     return track_key(cfg.model_dump(mode="json"), sha, model_rev(cfg.model_profile)) if sha else None
+
+
+def config_masks_key(cfg: PocketVfxConfig, clip: Asset) -> str | None:
+    sha = source_sha(clip)
+    return masks_key(cfg.model_dump(mode="json"), sha, model_rev(cfg.model_profile)) if sha else None
+
+
+def track_masks(track: Job | None, key: str | None) -> dict | None:
+    """The ``masks`` result of ``track`` when it was produced for masks key ``key`` (else None)."""
+    m = ((track.result_json or {}).get("masks") if track is not None else None) or None
+    return m if m is not None and key is not None and m.get("masks_key") == key else None
 
 
 def analysis_matches(work: Asset, config: dict) -> bool:
@@ -143,10 +168,18 @@ _TIMING_MESSAGES = {"timing_order": "Effect start, peak and end must be in order
                     "timing_range": "The effect must stay inside the trimmed clip."}
 
 
-def latest_fresh_track(db: DbSession, project: Project, key: str) -> Job | None:
-    jobs = db.scalars(select(Job).where(Job.project_id == project.id, Job.kind == "vfx.track",
+def _succeeded_tracks(db: DbSession, project: Project):
+    return db.scalars(select(Job).where(Job.project_id == project.id, Job.kind == "vfx.track",
                                         Job.state == "succeeded").order_by(Job.created_at.desc()).limit(50))
-    return next((j for j in jobs if (j.result_json or {}).get("track_key") == key), None)
+
+
+def latest_fresh_track(db: DbSession, project: Project, key: str) -> Job | None:
+    return next((j for j in _succeeded_tracks(db, project) if (j.result_json or {}).get("track_key") == key), None)
+
+
+def latest_track_with_masks(db: DbSession, project: Project, key: str) -> Job | None:
+    """The newest succeeded track whose masks were made for masks key ``key`` (its corrections may differ)."""
+    return next((j for j in _succeeded_tracks(db, project) if track_masks(j, key) is not None), None)
 
 
 def invalid_at(track: Job, frame: int) -> bool:
@@ -157,6 +190,7 @@ def invalid_at(track: Job, frame: int) -> bool:
 def validate(db: DbSession, project: Project, cfg: PocketVfxConfig, *, track: Job | None = None) -> dict:
     """Pre-render checks (spec §11). ``track`` is the track the render will use; default: the newest fresh one."""
     preset = load_presets()[cfg.effect.preset_id]
+    explicit_track = track is not None
     blocking, clip = _input_errors(db, project, cfg)
     warnings: list[dict] = []
     blocking += [_err(e["code"], f"config.effect.{e['field']}", _TIMING_MESSAGES[e["code"]])
@@ -169,6 +203,13 @@ def validate(db: DbSession, project: Project, cfg: PocketVfxConfig, *, track: Jo
         e = _err("track_invalid_at_peak", "config.effect.peak_ms",
                  "Tracking is lost at the peak frame. Add a correction or move the peak.")
         (blocking if cfg.anchor.follow else warnings).append(e)
+    if masks_needed(cfg, preset) and clip is not None:
+        mkey = config_masks_key(cfg, clip)
+        fresh = (track_masks(track, mkey) if explicit_track else
+                 (mkey is not None and latest_track_with_masks(db, project, mkey) is not None))
+        if not fresh:
+            blocking.append(_err("mask_required", "config.subject_prompts",
+                                 "This effect needs a subject mask. Select the subject and track again."))
     bundled = {p["id"] for p in preset["bundled_plates"]}
     if cfg.plate.bundled_id is not None and cfg.plate.bundled_id not in bundled:
         blocking.append(_err("plate_mismatch", "config.plate.bundled_id", "This plate belongs to another effect."))
@@ -213,7 +254,7 @@ def plan_job(db: DbSession, storage, project: Project, cfg: PocketVfxConfig, kin
     data = opts.model_dump(mode="json")
     stages, uses_gpu = list(STAGES[kind]), kind == "vfx.generate_plate"
     if kind == "vfx.track":
-        uses_gpu = masks_needed(cfg, load_presets()[cfg.effect.preset_id])
+        uses_gpu = masks_stage_runs(cfg, load_presets()[cfg.effect.preset_id])
         stages = stages if uses_gpu else ["track"]
     if kind == "vfx.generate_plate" and opts.seed is None:
         data["seed"] = cfg.plate.seed
@@ -228,14 +269,17 @@ def plan_job(db: DbSession, storage, project: Project, cfg: PocketVfxConfig, kin
         else:
             track = None
             if kind == "vfx.render":
-                if cfg.anchor.follow and opts.track_job_id is None:
-                    raise ApiError(422, "track_required", "Track the anchor before rendering a following effect.",
-                                   field="options.track_job_id")
+                if opts.track_job_id is None and (cfg.anchor.follow or
+                                                  masks_needed(cfg, load_presets()[cfg.effect.preset_id])):
+                    msg = ("Track the anchor before rendering a following effect." if cfg.anchor.follow else
+                           "Track the subject before rendering an effect behind it.")
+                    raise ApiError(422, "track_required", msg, field="options.track_job_id")
                 if opts.track_job_id is not None:
                     track = _check_track_job(db, project, cfg, opts.track_job_id)
             report = validate(db, project, cfg, track=track)
-            if not report["valid"]:
-                raise ApiError(422, "validation_failed", report["blocking_errors"][0]["message"],
-                               field=report["blocking_errors"][0]["field"],
-                               details={"blocking_errors": report["blocking_errors"]})
+            # the plate does not depend on the subject: generating it before masks exist is fine
+            blocking = [e for e in report["blocking_errors"] if kind == "vfx.render" or e["code"] != "mask_required"]
+            if blocking:
+                raise ApiError(422, "validation_failed", blocking[0]["message"], field=blocking[0]["field"],
+                               details={"blocking_errors": blocking})
     return JobPlan(kind, data, stages, uses_gpu, reserved)

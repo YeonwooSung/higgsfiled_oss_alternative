@@ -9,7 +9,8 @@ Writes (all silent unless noted):
                         GT binary subject masks -> stomp_masks.zip (mask_0000.png..., 1-bit PNG)
   occluded_hand.mp4     same scene, a dark bar covers the hand on frames 50..62 (inclusive)
   rotated_portrait.mp4  720x1280 portrait scene stored as a 1280x720 stream + display matrix
-                        (ffprobe rotation -90 = player rotates 90 deg clockwise, like a phone), 30 fps
+                        (ffprobe rotation -90 = player rotates 90 deg clockwise, like a phone), 30 fps;
+                        GT subject masks in DISPLAY orientation per source frame -> portrait_masks.zip
   vfr.mp4               1280x720, mixed 30/15 fps timestamps (each 2 s block: 1 s @30, 1 s @15), 6 s
   frame_numbers.mp4     640x360, same VFR timing, source frame index burned in as a 9-bit block code
   with_audio.mp4        640x360, 24 fps, 5 s + AAC 440 Hz tone whose stream starts at +200 ms
@@ -149,6 +150,21 @@ def hand_records(path, times, positions, w, h):
 # ---------------------------------------------------------------------------- clips
 
 
+def write_masks(path, masks):
+    """GT masks (uint8 0/1) -> zip of mask_%04d.png, 1-bit PNG, 255 = subject."""
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as z:
+        for f, m in enumerate(masks):
+            buf = BytesIO()
+            Image.fromarray(m * 255).convert("1").save(buf, format="PNG", optimize=True)
+            info = zipfile.ZipInfo(f"mask_{f:04d}.png", date_time=(1980, 1, 1, 0, 0, 0))
+            z.writestr(info, buf.getvalue())
+
+
+def portrait_masks(bg, times):
+    """GT masks of rotated_portrait, display orientation (720x1280), one per source frame."""
+    write_masks(OUT / "portrait_masks.zip", [draw(bg, t)[1] for t in times])
+
+
 def stomp_clips():
     w, h, fps, n = 1280, 720, 24, 120
     bg = background(w, h, 7)
@@ -173,12 +189,7 @@ def stomp_clips():
     (OUT / "tracks.json").write_text(json.dumps(
         {"clip": "stomp_landscape.mp4", "also": "occluded_hand.mp4", "space": "display px of 1280x720",
          "fps": fps, "hand": track}, indent=1) + "\n")
-    with zipfile.ZipFile(OUT / "stomp_masks.zip", "w", zipfile.ZIP_STORED) as z:
-        for f, m in enumerate(masks):
-            buf = BytesIO()
-            Image.fromarray(m * 255).convert("1").save(buf, format="PNG", optimize=True)
-            info = zipfile.ZipInfo(f"mask_{f:04d}.png", date_time=(1980, 1, 1, 0, 0, 0))
-            z.writestr(info, buf.getvalue())
+    write_masks(OUT / "stomp_masks.zip", masks)
     return {"fps": fps, "frames": n, "size": [w, h], "tracks": "tracks.json", "masks": "stomp_masks.zip",
             "masks_format": "zip of mask_%04d.png, 1-bit, 255 = subject (body + arm + hand), per output frame",
             "hand_radius_px": round(0.022 * 720, 3), "occluded_hand": {"frames": [occluded[0], occluded[-1]],
@@ -203,7 +214,10 @@ def rotated_portrait():
         subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-display_rotation", "-90",
                         "-i", str(raw), "-c", "copy", *BITEXACT, "-movflags", "+faststart",
                         str(OUT / "rotated_portrait.mp4")], check=True)
+    portrait_masks(bg, times)
     return {"stored_size": [dh, dw], "display_size": [dw, dh], "rotation_cw": 90, "fps": fps, "frames": n,
+            "masks": "portrait_masks.zip",
+            "masks_format": "zip of mask_%04d.png, 1-bit, 255 = subject, display orientation, per source frame",
             "hand_display_px": hand_records(OUT / "rotated_portrait.mp4", times, positions, dw, dh)}
 
 
@@ -261,7 +275,7 @@ def main():
             "stomp_landscape": stomp_clips(), "rotated_portrait": rotated_portrait(), "vfr": vfr(),
             "frame_numbers": frame_numbers(), "with_audio": with_audio()}
     names = ["stomp_landscape.mp4", "occluded_hand.mp4", "rotated_portrait.mp4", "vfr.mp4", "frame_numbers.mp4",
-             "with_audio.mp4", "clean_plate.png", "tracks.json", "stomp_masks.zip"]
+             "with_audio.mp4", "clean_plate.png", "tracks.json", "stomp_masks.zip", "portrait_masks.zip"]
     meta["files"] = {n: {"sha256": hashlib.sha256((OUT / n).read_bytes()).hexdigest(),
                          "bytes": (OUT / n).stat().st_size} for n in names}
     (OUT / "manifest.json").write_text(json.dumps(meta, indent=1) + "\n")

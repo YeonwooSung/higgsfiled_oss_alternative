@@ -23,6 +23,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
+from .masks import binary, contour_band_patch, mask_box
 from .presets import load_palettes, load_presets
 from .timeline import EffectWindow
 
@@ -212,45 +213,48 @@ def _aura(p, pal, window, frame, anchor, w, h, seed, m) -> list[_Patch | None]:
     patches: list[_Patch | None] = []
     if mask is not None:
         patches.append(_aura_band(mask, amp, waves, frame, size, pal, w, h))
+    glows: list[_Patch | None] = []
     if anchor is not None:
-        patches.append(_aura_local(float(anchor[0]), float(anchor[1]), amp, waves, frame, size, pal, w, h))
-    patches += _aura_particles(p, window, frame, env, anchor, mask, rng, jitter, size, pal, w, h)
-    return patches
+        glows.append(_aura_local(float(anchor[0]), float(anchor[1]), amp, waves, frame, size, pal, w, h))
+    glows += _aura_particles(p, window, frame, env, anchor, mask, rng, jitter, size, pal, w, h)
+    if mask is not None:  # the anchor glow and the particle halos stay out of the silhouette like the band
+        glows = [_mask_out(q, mask, _aura_inner(size)) for q in glows if q is not None]
+    return patches + glows
 
 
-def _contour_band(mask: np.ndarray, inner_px: int, outer_px: int) -> np.ndarray:
-    """``dilate(M, outer) - erode(M, inner)`` with a Gaussian feather, full-frame float32.
+def _aura_inner(size: float) -> int:
+    return max(1, round(0.008 * size))
 
-    Computed inside the mask's padded bbox. (Task 10 moves this to ``masks.contour_band``.)
-    """
-    m = (np.asarray(mask) > 0.5).astype(np.uint8)
-    out = np.zeros(m.shape, np.float32)
-    box = _mask_box(m)
-    if box is None:
-        return out
-    feather = max(1.0, (inner_px + outer_px) / 4.0)
-    pad = outer_px + math.ceil(4 * feather) + 1
-    x0, y0, x1, y1 = _pad_box(box, pad, m.shape[1], m.shape[0])
-    crop = m[y0:y1, x0:x1]
-    dil = cv2.dilate(crop, _disk(outer_px))
-    ero = cv2.erode(crop, _disk(inner_px)) if inner_px > 0 else crop
-    out[y0:y1, x0:x1] = cv2.GaussianBlur((dil - ero).astype(np.float32), (0, 0), feather)
-    return out
+
+def _outside_keep(m: np.ndarray, box, inner: int) -> np.ndarray:
+    """Weight in [0, 1] over ``box``: 1 outside the silhouette, fading to 0 within ``2 * inner`` px inside it, so a
+    glow never fills the silhouette. The crop is edge-replicated before the distance transform: a frame edge is
+    not background (the subject continues past it), so edge rows inside the silhouette stay at 0."""
+    x0, y0, x1, y1 = box
+    p = 2 * inner + 1
+    crop = cv2.copyMakeBorder(np.ascontiguousarray(m[y0:y1, x0:x1]), p, p, p, p, cv2.BORDER_REPLICATE)
+    depth = cv2.distanceTransform(crop, cv2.DIST_L2, 3)[p:-p, p:-p]
+    return np.clip(1.0 - depth / np.float32(2 * inner), 0.0, 1.0) ** 2
+
+
+def _mask_out(patch: _Patch, m: np.ndarray, inner: int) -> _Patch:
+    x0, y0, rgb, a = patch
+    keep = _outside_keep(m, (x0, y0, x0 + a.shape[1], y0 + a.shape[0]), inner)
+    return x0, y0, rgb * keep[..., None], a * keep
 
 
 def _aura_band(m, amp, waves, frame, size, pal, w, h) -> _Patch | None:
-    inner = max(1, round(0.008 * size))
+    inner = _aura_inner(size)
     outer = max(2, round(0.03 * size))
     sig_halo = 0.045 * size
-    band_full = _contour_band(m, inner, outer)
-    box = _mask_box(m)
-    x0, y0, x1, y1 = _pad_box(box, outer + math.ceil(4 * sig_halo) + 2, w, h)
-    band = band_full[y0:y1, x0:x1]
+    patch = contour_band_patch(m > 0, inner, outer, margin=outer + math.ceil(4 * sig_halo) + 2)
+    if patch is None:
+        return None
+    box, band = patch
+    x0, y0, x1, y1 = box
     halo = _wide_blur(band, sig_halo)
     halo = np.minimum(halo * np.float32(math.sqrt(2 * math.pi) * sig_halo / (inner + outer)), 1.0)
-    # the glow never fills the silhouette: it fades to 0 within 2*inner px inside the contour
-    depth = cv2.distanceTransform(m[y0:y1, x0:x1], cv2.DIST_L2, 3)
-    keep = np.clip(1.0 - depth / np.float32(2 * inner), 0.0, 1.0) ** 2
+    keep = _outside_keep(m, box, inner)
     n = _wave_field(waves, x0, y0, x1, y1, frame)
     alpha = np.float32(amp) * keep * (0.85 * band * (0.55 + 0.45 * n) + 0.45 * halo * (0.4 + 0.6 * n))
     heat = np.clip(0.95 * band * (0.5 + 0.5 * n) + 0.3 * halo, 0.0, 1.0)
@@ -268,6 +272,7 @@ def _wide_blur(img: np.ndarray, sigma: float) -> np.ndarray:
 
 
 def _aura_local(cx, cy, amp, waves, frame, size, pal, w, h) -> _Patch | None:
+    """Glow around the anchor (hand energy)."""
     r = 0.12 * size
     box = _box(cx - 3 * r, cy - 3 * r, cx + 3 * r, cy + 3 * r, w, h)
     if box is None or amp <= 0:
@@ -383,13 +388,7 @@ def _binary_mask(mask: np.ndarray, w: int, h: int) -> np.ndarray:
     a = np.asarray(mask)
     if a.shape != (h, w):
         raise ValueError(f"mask shape {a.shape} != {(h, w)}")
-    if a.dtype == np.bool_:
-        b = a
-    elif a.dtype == np.uint8:
-        b = a > 127
-    else:
-        b = a > 0.5
-    return b.astype(np.uint8)
+    return binary(a)
 
 
 def _box(x0: float, y0: float, x1: float, y1: float, w: int, h: int) -> tuple[int, int, int, int] | None:
@@ -397,22 +396,6 @@ def _box(x0: float, y0: float, x1: float, y1: float, w: int, h: int) -> tuple[in
     bx0, by0 = max(math.floor(x0), 0), max(math.floor(y0), 0)
     bx1, by1 = min(math.ceil(x1) + 1, w), min(math.ceil(y1) + 1, h)
     return (bx0, by0, bx1, by1) if bx0 < bx1 and by0 < by1 else None
-
-
-def _mask_box(m: np.ndarray) -> tuple[int, int, int, int] | None:
-    rows, cols = np.flatnonzero(m.any(axis=1)), np.flatnonzero(m.any(axis=0))
-    if rows.size == 0:
-        return None
-    return int(cols[0]), int(rows[0]), int(cols[-1]) + 1, int(rows[-1]) + 1
-
-
-def _pad_box(box, pad: int, w: int, h: int) -> tuple[int, int, int, int]:
-    x0, y0, x1, y1 = box
-    return max(x0 - pad, 0), max(y0 - pad, 0), min(x1 + pad, w), min(y1 + pad, h)
-
-
-def _disk(r: int) -> np.ndarray:
-    return cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
 
 
 def _radial2(cx: float, cy: float, r: float, box) -> np.ndarray:
@@ -508,7 +491,7 @@ def _particles(px, py, a, heat, big, sigma, pal, w, h) -> list[_Patch | None]:
 
 def _boundary_at(m: np.ndarray, theta: np.ndarray):
     """Outer-contour point of mask ``m`` at each angle around its centroid, + outward unit dir."""
-    box = _mask_box(m)
+    box = mask_box(m)
     x0, y0, x1, y1 = box
     contours, _ = cv2.findContours(np.ascontiguousarray(m[y0:y1, x0:x1]), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
     pts = np.concatenate([c.reshape(-1, 2) for c in contours]).astype(np.float64) + (

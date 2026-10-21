@@ -1,18 +1,21 @@
-"""Mock profile: deterministic, CPU-only stand-ins for the three provider workflows.
+"""Mock profile: deterministic, CPU-only stand-ins for the provider workflows.
 
-It is not generative. Outputs are synthetic studio backdrops and an OpenCV
-GrabCut mask, so the full product flow can be exercised without a GPU. The UI
-labels every result of this profile as "Mock".
+It is not generative. Outputs are synthetic studio backdrops, OpenCV GrabCut
+masks (single image and video) and fixture ground truth, so the full product
+flows can be exercised without a GPU. The UI labels every result of this
+profile as "Mock".
 """
 
 from __future__ import annotations
 
 import hashlib
+import io
 import itertools
 import json
 import os
 import shutil
 import uuid
+import zipfile
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -24,6 +27,7 @@ from open_creative.camera_sketch.scene import encode_depth_png16, rgb_pixel_hash
 from open_creative.comfy.bindings import REQUIRED_BINDINGS
 from open_creative.comfy.profiles import MOCK_PROFILE
 from open_creative.media.video import cover_fit, decode_frames, encode_mp4
+from open_creative.pocket_vfx.masks import MaskSequence, decode_prompt_mask, disk_kernel, prompts_hash, write_masks_zip
 
 from .runner import ProviderRejected, ProviderStatus, SubmissionKeyReused
 
@@ -144,6 +148,157 @@ def mock_cinematic_frame(guide: np.ndarray) -> np.ndarray:
     return np.clip(np.rint(f), 0, 255).astype(np.uint8)
 
 
+# ---- Pocket VFX masks (vfx_masks_v1) ---------------------------------------------------------------------------
+
+GRABCUT_PROPAGATE_DILATE_PX = 8  # a frame's GrabCut starts from the neighbouring frame's mask dilated by this
+GRABCUT_MIN_RECT = 0.3  # smallest prompt rect side, of the proxy short side
+_GC_MARGIN_PX = 24  # crop margin around the region GrabCut may label (enough background for its colour model)
+
+
+def _vfx_fixtures_dir() -> Path:
+    return Path(os.environ.get("OC_VFX_FIXTURES") or Path(__file__).resolve().parents[4] / "fixtures" / "pocket-vfx")
+
+
+def _fixture_masks(source_sha: str | None) -> tuple[Path, float] | None:
+    """(GT masks ZIP, clip fps) when ``source_sha`` is a Pocket VFX fixture clip that has GT masks."""
+    if not source_sha:
+        return None
+    d = _vfx_fixtures_dir()
+    try:
+        manifest = json.loads((d / "manifest.json").read_text())
+    except (OSError, ValueError):
+        return None
+    for name, f in manifest.get("files", {}).items():
+        entry = manifest.get(Path(name).stem)
+        if f.get("sha256") == source_sha and isinstance(entry, dict) and entry.get("masks"):
+            return d / entry["masks"], float(entry["fps"])
+    return None
+
+
+def mock_masks_from_gt(zip_path: Path, fps: float, pts_ms: list[float], w: int, h: int) -> list[np.ndarray]:
+    """GT masks resampled to the work timeline: work frame i shows GT frame ``round(pts_ms[i] * fps / 1000)``,
+    cover-fitted to the proxy size like the work clip (area resize of the soft mask, then threshold)."""
+    out = []
+    with zipfile.ZipFile(zip_path) as z:
+        names = sorted(n for n in z.namelist() if n.startswith("mask_") and n.endswith(".png"))
+        for t in pts_ms:
+            k = min(max(round(t * fps / 1000.0), 0), len(names) - 1)
+            m = np.asarray(Image.open(io.BytesIO(z.read(names[k]))).convert("L"), np.float32) / 255.0
+            out.append(np.where(cover_fit(m, w, h) > 0.5, 255, 0).astype(np.uint8))
+    return out
+
+
+def _grabcut(rgb: np.ndarray, gc: np.ndarray, region: tuple[int, int, int, int] | None, iters: int) -> np.ndarray:
+    """GrabCut (init with mask) inside ``region`` padded by a margin; uint8 0/255 full-frame result.
+
+    The colour models run on YCrCb, not RGB: separating chroma from luma keeps a saturated subject apart from a
+    similarly dark, desaturated background (on the portrait fixture RGB lets the wall next to the arm join the
+    subject)."""
+    h, w = gc.shape
+    out = np.zeros((h, w), np.uint8)
+    if region is None or not ((gc == cv2.GC_FGD) | (gc == cv2.GC_PR_FGD)).any():
+        return out
+    x0, y0, x1, y1 = region
+    x0, y0 = max(x0 - _GC_MARGIN_PX, 0), max(y0 - _GC_MARGIN_PX, 0)
+    x1, y1 = min(x1 + _GC_MARGIN_PX, w), min(y1 + _GC_MARGIN_PX, h)
+    crop = np.ascontiguousarray(gc[y0:y1, x0:x1])
+    if not ((crop == cv2.GC_BGD) | (crop == cv2.GC_PR_BGD)).any():  # the colour model needs background samples
+        crop[[0, -1], :] = np.where(crop[[0, -1], :] == cv2.GC_FGD, cv2.GC_FGD, cv2.GC_PR_BGD)
+        crop[:, [0, -1]] = np.where(crop[:, [0, -1]] == cv2.GC_FGD, cv2.GC_FGD, cv2.GC_PR_BGD)
+    bgd, fgd = np.zeros((1, 65), np.float64), np.zeros((1, 65), np.float64)
+    cv2.setRNGSeed(0)  # GrabCut's k-means init draws from the OpenCV RNG: seed it for deterministic masks
+    try:
+        cv2.grabCut(cv2.cvtColor(np.ascontiguousarray(rgb[y0:y1, x0:x1]), cv2.COLOR_RGB2YCrCb), crop, None, bgd, fgd,
+                    iters, cv2.GC_INIT_WITH_MASK)
+    except cv2.error:  # degenerate colour model (e.g. a flat crop): keep the initial labels
+        pass
+    out[y0:y1, x0:x1] = np.where((crop == cv2.GC_FGD) | (crop == cv2.GC_PR_FGD), 255, 0)
+    return out
+
+
+def _grabcut_points(rgb: np.ndarray, points: list[dict]) -> np.ndarray:
+    """Prompt frame: rect = bbox of the positive points padded by 30 % of its size per side (grown to at least
+    ``GRABCUT_MIN_RECT`` of the short side, centred, so a single click still has a region), positive points FG,
+    negative points BG."""
+    h, w = rgb.shape[:2]
+    pos = [(p["x"], p["y"]) for p in points if p["label"] == 1]
+    if not pos:
+        return np.zeros((h, w), np.uint8)
+    xs, ys = [p[0] for p in pos], [p[1] for p in pos]
+    short = min(w, h)
+    half_min = GRABCUT_MIN_RECT * short / 2
+    hx = max(0.8 * (max(xs) - min(xs)), half_min)  # half-size: extent / 2 + 30 % of the extent
+    hy = max(0.8 * (max(ys) - min(ys)), half_min)
+    mx, my = (max(xs) + min(xs)) / 2, (max(ys) + min(ys)) / 2
+    x0, y0 = max(int(mx - hx), 0), max(int(my - hy), 0)
+    x1, y1 = min(int(mx + hx) + 1, w), min(int(my + hy) + 1, h)
+    gc = np.full((h, w), cv2.GC_BGD, np.uint8)
+    gc[y0:y1, x0:x1] = cv2.GC_PR_FGD
+    r = max(2, short // 60)
+    for p in points:
+        c = (min(w - 1, max(0, int(p["x"]))), min(h - 1, max(0, int(p["y"]))))
+        cv2.circle(gc, c, r, cv2.GC_FGD if p["label"] == 1 else cv2.GC_BGD, -1)
+    return _grabcut(rgb, gc, (x0, y0, x1, y1), 5)
+
+
+def _grabcut_propagate(rgb: np.ndarray, prev: np.ndarray) -> np.ndarray:
+    """Next frame from the neighbouring mask: dilated by 8 px = probably FG (eroded core = FG), the rest BG."""
+    b = (prev > 127).astype(np.uint8)
+    if not b.any():
+        return np.zeros_like(prev)
+    k = disk_kernel(GRABCUT_PROPAGATE_DILATE_PX)
+    dil = cv2.dilate(b, k)
+    gc = np.full(b.shape, cv2.GC_BGD, np.uint8)
+    gc[dil > 0] = cv2.GC_PR_FGD
+    gc[cv2.erode(b, k) > 0] = cv2.GC_FGD
+    rows, cols = np.flatnonzero(dil.any(axis=1)), np.flatnonzero(dil.any(axis=0))
+    return _grabcut(rgb, gc, (int(cols[0]), int(rows[0]), int(cols[-1]) + 1, int(rows[-1]) + 1), 3)
+
+
+def mock_video_masks(frames: list[np.ndarray], prompts: dict) -> list[np.ndarray]:
+    """Deterministic stand-in for SAM 2.1 video propagation. Prompt frames: GrabCut from points (a mask frame is
+    taken as given and wins over points of the same frame). Other frames: GrabCut from the neighbouring frame's
+    mask, forward from each prompt frame up to the next one and backward before the first one."""
+    n = len(frames)
+    h, w = frames[0].shape[:2]
+    keys = {int(pf["frame"]): _grabcut_points(frames[int(pf["frame"])], pf["points"])
+            for pf in prompts.get("point_frames") or [] if 0 <= int(pf["frame"]) < n}
+    for mf in prompts.get("mask_frames") or []:
+        if 0 <= int(mf["frame"]) < n:
+            keys[int(mf["frame"])] = decode_prompt_mask(mf["png_b64"], w, h)
+    if not keys:
+        raise ProviderRejected("vfx_masks_v1 needs at least one prompt frame")
+    out: list[np.ndarray | None] = [None] * n
+    ks = sorted(keys)
+    for a, b in zip(ks, [*ks[1:], n], strict=True):
+        out[a] = keys[a]
+        for i in range(a + 1, b):
+            out[i] = _grabcut_propagate(frames[i], out[i - 1])
+    for i in range(ks[0] - 1, -1, -1):
+        out[i] = _grabcut_propagate(frames[i], out[i + 1])
+    return out
+
+
+def _mock_masks(b: dict, d: Path) -> list[str]:
+    p, w, h = b["prompts"], b["width"], b["height"]
+    n = int(p.get("frame_count", 0))
+    ctx = p.get("mock_context") or {}
+    frames = list(decode_frames(b["frames"]))  # proxy clip: <= 120 x 640x360 RGB
+    if len(frames) != n:
+        raise ProviderRejected(f"frames has {len(frames)} frames, prompts say {n}")
+    if frames and frames[0].shape[:2] != (h, w):
+        raise ProviderRejected(f"frames are {frames[0].shape[1]}x{frames[0].shape[0]}, expected {w}x{h}")
+    fixture = _fixture_masks(ctx.get("source_sha256"))
+    if fixture is not None and len(ctx.get("source_pts_ms") or []) == n:
+        masks, source, model = mock_masks_from_gt(*fixture, ctx["source_pts_ms"], w, h), "fixture_gt", "Mock (fixture GT)"
+    else:
+        masks, source, model = mock_video_masks(frames, p), "grabcut", "Mock (GrabCut, not SAM 2.1)"
+    write_masks_zip(MaskSequence(masks=masks, prompts_hash=prompts_hash(p), model=model), d / "masks_0.zip")
+    (d / "masks_0.json").write_text(json.dumps({"mock": True, "source": source, "model": model, "frames": n,
+                                                "width": w, "height": h, "label": "Mock"}))
+    return ["masks_0.zip", "masks_0.json"]
+
+
 def _guide_frames(src: str) -> Iterator[np.ndarray]:
     """Stream the guide frames (a directory of images or a video); never the whole guide in memory."""
     p = Path(src)
@@ -243,6 +398,8 @@ class MockRunner:
                 "mock": True, "frames": n, "width": w, "height": h, "label": "Mock",
                 "note": "geometry frames with holes inpainted + mild grade; not generative"}))
             return ["video_0.mp4", "video_0.json"]
+        if workflow == "vfx_masks_v1":
+            return _mock_masks(b, d)
         raise ProviderRejected(workflow)
 
     def inspect(self, provider_job_id: str) -> ProviderStatus:

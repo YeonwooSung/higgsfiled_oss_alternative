@@ -184,7 +184,7 @@ def _luma_gain(render_path, work_path) -> np.ndarray:
 
 def test_quick_render_with_static_anchor(proj):
     analyze = proj.prepare("stomp_landscape.mp4")
-    proj.revise(anchor__follow=False)
+    proj.revise(anchor__follow=False, effect__layer_order="in_front")
     render = proj.run("vfx.render", {"track_job_id": None, "render_profile": "quick"})
     r = render.result_json
     assert r["render_profile"] == "quick" and r["plate_source"] == "procedural" and r["occlusion_qa"] is None
@@ -214,7 +214,7 @@ def test_rotated_portrait_renders_portrait(proj):
     assert (work.width, work.height) == (720, 1280) and work.meta_json["aspect"] == "9:16"
     proxy = proj.asset(analyze.result_json["proxy_asset_id"])
     assert (proxy.width, proxy.height) == (360, 640)
-    proj.revise(anchor__follow=False)
+    proj.revise(anchor__follow=False, effect__layer_order="in_front")
     r = proj.run("vfx.render", {"track_job_id": None, "render_profile": "quick"}).result_json
     assert r["roi_qa"]["status"] == "pass" and (r["width"], r["height"]) == (720, 1280)
     _contract(proj.path(r["render_video_asset_id"]), 720, 1280, 96)
@@ -225,7 +225,7 @@ def test_rotated_portrait_renders_portrait(proj):
 
 def test_occluded_track_hides_effect_and_retrack_reuses_segments(proj):
     proj.prepare("occluded_hand.mp4")
-    proj.revise(anchor={**proj.cfg["anchor"], **_gt_uv(20), "follow": True})
+    proj.revise(anchor={**proj.cfg["anchor"], **_gt_uv(20), "follow": True}, effect__layer_order="in_front")
     first = proj.run("vfx.track").result_json
     assert first["invalid_intervals"] == [[50, 119]]  # lost behind the occluder, never filled
     assert first["segments_total"] == 2 and first["segments_reused"] == 0
@@ -276,7 +276,7 @@ def test_invalid_policy_hide_and_freeze_anchor_resolution():
 
 def test_render_fails_early_without_required_masks_or_plate(proj):
     proj.prepare("stomp_landscape.mp4")
-    proj.revise(anchor__follow=False)
+    proj.revise(anchor__follow=False, effect__layer_order="in_front")
     job = proj.run("vfx.render", {"track_job_id": None, "render_profile": "generated"}, expect="failed")
     assert job.error_code == "plate_required"
     proj.revise(effect={**proj.cfg["effect"], "preset_id": "blink_out_v1"})
@@ -287,7 +287,7 @@ def test_render_fails_early_without_required_masks_or_plate(proj):
 
 def test_outside_roi_change_fails_the_render(proj, monkeypatch):
     proj.prepare("stomp_landscape.mp4")
-    proj.revise(anchor__follow=False)
+    proj.revise(anchor__follow=False, effect__layer_order="in_front")
     real, calls = vfx_render_mod.composite_frame, {"n": 0}
 
     def leaky(inp, order):
@@ -321,7 +321,7 @@ def test_follow_render_needs_a_fresh_track(proj):
 def test_render_resumes_after_restart_from_stage_outputs(settings, db_factory, storage, mock_root, proj,
                                                          monkeypatch):
     proj.prepare("stomp_landscape.mp4")
-    proj.revise(anchor__follow=False)
+    proj.revise(anchor__follow=False, effect__layer_order="in_front")
     calls = {"n": 0}
     real = vfx_render_mod.composite_frame
 
@@ -354,3 +354,189 @@ def test_render_resumes_after_restart_from_stage_outputs(settings, db_factory, s
     assert counts == {"render_layers": 1, "render_video": 1, "cover": 1, "roi_qa": 1}
     _contract(proj.path(job.result_json["render_video_asset_id"]), 1280, 720, 120)
     assert Image.open(io.BytesIO(proj.storage.get_bytes(proj.asset(job.result_json["cover_asset_id"]).object_key)))
+
+
+# ---- subject masks (vfx.track ``masks`` stage) and occlusion ------------------------------------------------------
+
+STOMP_MASKS = FIX / "stomp_masks.zip"
+BODY_PROMPT = [{"frame": 43, "points": [{"x": 0.44, "y": 0.45, "label": 1}]}]
+
+
+def _gt_stomp(f: int) -> np.ndarray:
+    import zipfile
+
+    with zipfile.ZipFile(STOMP_MASKS) as z:
+        return np.asarray(Image.open(io.BytesIO(z.read(f"mask_{f:04d}.png"))).convert("L")) > 127
+
+
+def _iou(a, b) -> float:
+    return float((a & b).sum() / max((a | b).sum(), 1))
+
+
+def _masks(proj, result):
+    from open_creative.pocket_vfx.masks import read_masks_zip
+
+    m = result["masks"]
+    return read_masks_zip(proj.path(m["masks_zip_asset_id"]), expect_frames=result.get("frame_count"),
+                          expect_size=tuple(m["size"]))
+
+
+def test_track_masks_stage_stores_masks_and_preview(proj):
+    proj.prepare("stomp_landscape.mp4")
+    proj.revise(subject_prompts=BODY_PROMPT)
+    track = proj.run("vfx.track")
+    m = track.result_json["masks"]
+    assert m["source"] == "fixture_gt" and m["mock"] is True and m["reused"] is False and m["size"] == [640, 360]
+    assert m["frame_count"] == 120 and isinstance(m["diagnostics"], list)
+    zip_asset, preview = proj.asset(m["masks_zip_asset_id"]), proj.asset(m["mask_preview_asset_id"])
+    assert zip_asset.role == "masks_zip" and zip_asset.mime == "application/zip"
+    assert preview.role == "mask_preview" and (preview.width, preview.height, preview.frame_count) == (640, 360, 120)
+    assert {m["masks_zip_asset_id"], m["mask_preview_asset_id"]} <= set(map(str, track.output_asset_ids))
+    seq = _masks(proj, m | {"masks": m}) if False else _masks(proj, {"masks": m, "frame_count": 120})
+    from open_creative.pocket_vfx.masks import upscale_mask
+
+    scores = [_iou(upscale_mask(seq.masks[f], 1280, 720) >= 0.5, _gt_stomp(f)) for f in range(0, 120, 17)]
+    assert min(scores) >= 0.95, scores
+    with proj.db_factory() as db:
+        st = db.scalar(select(JobStage).where(JobStage.job_id == track.id, JobStage.stage_name == "masks"))
+        assert st.state == "succeeded" and st.submission_key is not None
+
+
+def test_correction_only_retrack_reuses_masks_without_a_submission(proj):
+    runner = proj.ctx.runner_for("mock_v1")
+    proj.prepare("stomp_landscape.mp4")
+    proj.revise(subject_prompts=BODY_PROMPT)
+    first = proj.run("vfx.track").result_json["masks"]
+    submitted = runner.submit_count
+    proj.revise(corrections=[_gt_uv(80)])
+    again = proj.run("vfx.track")
+    m = again.result_json["masks"]
+    assert runner.submit_count == submitted  # no new provider submission
+    assert m["reused"] is True and m["masks_zip_asset_id"] == first["masks_zip_asset_id"]
+    assert again.result_json["track_key"] != config_track_key(PocketVfxConfig.model_validate(
+        {**proj.cfg, "corrections": []}), proj.asset(proj.cfg["video_asset_id"]))
+    with proj.db_factory() as db:
+        st = db.scalar(select(JobStage).where(JobStage.job_id == again.id, JobStage.stage_name == "masks"))
+        assert st.state == "succeeded" and st.submission_key is None and st.provider_job_id is None
+    proj.revise(subject_prompts=[{"frame": 40, "points": BODY_PROMPT[0]["points"]}])  # new prompt: new masks
+    assert proj.run("vfx.track").result_json["masks"]["reused"] is False
+    assert runner.submit_count == submitted + 1
+
+
+def test_track_without_subject_skips_masks_and_render_reports_mask_required(proj):
+    proj.prepare("stomp_landscape.mp4")
+    proj.revise(anchor__follow=False)
+    track = proj.run("vfx.track")
+    assert track.result_json["masks"] is None
+    with proj.db_factory() as db:
+        assert {s.stage_name for s in db.scalars(select(JobStage).where(JobStage.job_id == track.id))} == {"track"}
+    job = proj.run("vfx.render", {"track_job_id": str(track.id), "render_profile": "quick"}, expect="failed")
+    assert job.error_code == "mask_required"
+    job = proj.run("vfx.render", {"track_job_id": None, "render_profile": "quick"}, expect="failed")
+    assert job.error_code == "track_required"
+
+
+def test_behind_subject_render_never_covers_the_subject_core(proj):
+    proj.prepare("stomp_landscape.mp4")
+    proj.revise(anchor__follow=False, subject_prompts=BODY_PROMPT)  # fixed ground anchor next to the stomping foot
+    track = proj.run("vfx.track")
+    r = proj.run("vfx.render", {"track_job_id": str(track.id), "render_profile": "quick"}).result_json
+    assert r["occlusion"] is True and r["occlusion_qa"] == 0
+    assert r["roi_qa"]["status"] == "pass" and r["roi_qa"]["max_err"] <= 1
+    qa = proj.json(r["roi_qa_asset_id"])
+    assert qa["occlusion_qa"]["max"] == 0 and qa["occlusion_qa"]["frames"] == 120
+    peak = frame_index(proj.cfg["effect"]["peak_ms"])
+    # the ring really passes behind the person: its ROI box overlaps the subject on frames after the peak
+    overlap = 0
+    for f in range(peak, peak + 20):
+        box = qa["frame_stats"]["roi_bbox"][f]
+        if box:
+            x0, y0, x1, y1 = box
+            overlap += int(_gt_stomp(f)[y0:y1, x0:x1].sum())
+    assert overlap > 1000
+    layers = proj.json(r["layers_asset_id"])
+    assert layers["subject_masks"]["masks_zip_asset_id"] == track.result_json["masks"]["masks_zip_asset_id"]
+
+
+def test_energy_aura_render_draws_the_contour_band_behind_the_subject(proj):
+    proj.prepare("stomp_landscape.mp4")
+    eff = dict(proj.cfg["effect"], preset_id="energy_aura_v1", layer_order="behind_subject", palette="violet")
+    proj.revise(effect=eff, anchor__follow=False, subject_prompts=BODY_PROMPT)
+    track = proj.run("vfx.track")
+    r = proj.run("vfx.render", {"track_job_id": str(track.id), "render_profile": "quick"}).result_json
+    assert r["occlusion"] is True and r["occlusion_qa"] == 0 and r["roi_qa"]["status"] == "pass"
+    qa = proj.json(r["roi_qa_asset_id"])
+    peak = frame_index(proj.cfg["effect"]["peak_ms"])
+    x0, y0, x1, _ = qa["frame_stats"]["roi_bbox"][peak]
+    sx0, sy0, sx1, _ = _box(_gt_stomp(peak))
+    # the effect ROI is the band around the whole silhouette (union with the anchor glow), not only the anchor
+    assert x0 <= sx0 and x1 >= sx1 and y0 <= sy0
+
+
+def _box(m):
+    ys, xs = np.nonzero(m)
+    return int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1
+
+
+def _put_mask_edit(proj, png: Image.Image) -> str:
+    buf = io.BytesIO()
+    png.save(buf, format="PNG")
+    aid = uuid.uuid4()
+    key = f"{proj.project.session_id}/{proj.project.id}/{aid}/mask_edit.png"
+    proj.storage.put_bytes(key, buf.getvalue(), "image/png")
+    with proj.db_factory() as db:
+        db.add(Asset(id=aid, project_id=proj.project.id, role="mask_edit", state="ready", object_key=key,
+                     mime="image/png", bytes=len(buf.getvalue()), sha256="0" * 64, width=png.width,
+                     height=png.height))
+        db.commit()
+    return str(aid)
+
+
+def test_mask_edit_replaces_its_frame(proj):
+    proj.prepare("stomp_landscape.mp4")
+    edit = np.zeros((720, 1280), np.uint8)  # painted at the work-clip size; any size is accepted
+    edit[300:500, 500:700] = 255
+    aid = _put_mask_edit(proj, Image.fromarray(edit, "L"))
+    proj.revise(subject_prompts=BODY_PROMPT, mask_edits=[{"frame": 50, "asset_id": aid}])
+    m = proj.run("vfx.track").result_json["masks"]
+    seq = _masks(proj, {"masks": m, "frame_count": 120})
+    assert np.array_equal(seq.masks[50] > 127, edit[::2, ::2] > 127)
+    assert proj.asset(m["masks_zip_asset_id"]).meta_json["mask_edit_frames"] == [50]
+
+
+def _load_make_fixtures():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("pv_make_fixtures", FIX / "make_fixtures.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_portrait_masks_align_with_gt_at_output_size(proj):
+    """Rotated 30 fps portrait source -> 24 fps 9:16 work clip -> 360x640 proxy masks (the mock serves the fixture's
+    display-orientation GT through the PTS map) -> upscaled to 720x1280: aligned with the scene, never transposed or
+    shifted in time."""
+    mf = _load_make_fixtures()
+    analyze = proj.prepare("rotated_portrait.mp4", trim={"source_start_ms": 0, "duration_ms": 2000},
+                           output={"aspect": "9:16", "fps": 24})
+    work = proj.asset(analyze.result_json["work_asset_id"])
+    dw, dh = 720, 1280  # display size of the fixture == the 9:16 work clip (identity cover-fit)
+    assert (work.width, work.height) == (dw, dh) and work.transform_json["scale"] == 1.0
+    f0 = 24
+    p = mf.pose(work.meta_json["pts_map"][f0] / 1000, dw, dh)
+    proj.revise(anchor__follow=False, subject_prompts=[{"frame": f0, "points": [
+        {"x": p["cx"] / dw, "y": (p["hip"] - 0.12 * p["u"]) / dh, "label": 1}]}])
+    m = proj.run("vfx.track").result_json["masks"]
+    assert m["source"] == "fixture_gt" and m["size"] == [360, 640]  # portrait proxy, never transposed
+    seq = _masks(proj, {"masks": m, "frame_count": 48})
+    from open_creative.pocket_vfx.masks import upscale_mask
+
+    bg = mf.background(dw, dh, 11)
+    scores = {}
+    for f in (0, 12, f0, 36, 47):  # work frame f shows the scene at its source PTS (30 -> 24 fps)
+        gt = mf.draw(bg, work.meta_json["pts_map"][f] / 1000)[1].astype(bool)
+        up = upscale_mask(seq.masks[f], dw, dh) >= 0.5
+        assert up.shape == gt.shape
+        scores[f] = _iou(up, gt)
+    assert min(scores.values()) >= 0.9, scores

@@ -35,6 +35,12 @@ import cv2
 import numpy as np
 
 ALGORITHM = "lk_fb_median_v1"
+# Post-smoothing of a followed track (vfx.track and PVTrackAnchor): sigma, and the bound on how far smoothing may move
+# a point from its LK measurement (proxy px = 1 output px), so it removes jitter but follows the displayed motion,
+# which on CFR-resampled clips moves in uneven steps (test_vfx_coordinates). Changing either requires a new
+# ``keys.TRACK_MODEL_REV``.
+SMOOTH_SIGMA_FRAMES = 1.0
+SMOOTH_MAX_SHIFT_PX = 0.5
 DEFAULT_PARAMS = {"patch_r": None, "max_corners": 40, "fb_max": 3.0, "min_features": 4}
 PATCH_REL = 0.04  # default patch radius, of the proxy short side
 FULL_CONF_FEATURES = 20  # kept features at which the feature-count term of the confidence saturates
@@ -343,3 +349,22 @@ def track_to_json(points: Sequence[TrackPoint], proxy_wh, out_wh, params: dict |
         "algorithm": ALGORITHM,
         "params": _resolved(params or {}),
     }
+
+
+def anchor_positions(track: dict | None, static_uv, w: int, h: int, n: int,
+                     policy: str = "hide") -> list[list[float] | None]:
+    """Per-frame effect anchor in output px. ``track`` is a ``track_to_json`` doc (uv01 points) or None for a fixed
+    anchor (``static_uv`` on every frame). Invalid frames follow ``policy``: ``hide`` -> None (no effect that
+    frame), ``freeze`` -> the last valid position (frames before the first valid one stay None)."""
+    if track is None:
+        return [[static_uv[0] * w, static_uv[1] * h]] * n
+    points = {p["frame"]: p for p in track["points"]}
+    out, last = [], None
+    for i in range(n):
+        p = points.get(i)
+        if p is not None and p["valid"]:
+            last = [p["x"] * w, p["y"] * h]
+            out.append(last)
+        else:
+            out.append(last if policy == "freeze" else None)
+    return out

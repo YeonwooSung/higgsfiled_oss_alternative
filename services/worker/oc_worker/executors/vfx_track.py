@@ -7,7 +7,9 @@ proxy's sha256). A re-track loads the cache of the most recent succeeded ``vfx.t
 recomputes segments whose key is new, so one correction re-tracks at most the two segments next to it.
 
 ``follow=false`` stores a static track (the anchor on every frame, all valid): the render does not move the effect.
-The ``masks`` stage (Task 10) is not run yet.
+
+Stage ``masks`` (``vfx_masks.masks_stage``, GPU) runs when the preset uses a subject mask and a subject is selected
+(``masks_stage_runs``); it is keyed by ``masks_key`` and reuses an earlier track job's masks for the same key.
 """
 
 from __future__ import annotations
@@ -15,10 +17,13 @@ from __future__ import annotations
 import math
 
 from oc_api.models import Asset, Job
-from oc_api.pocket_vfx.jobs import source_sha
-from open_creative.pocket_vfx.keys import model_rev, track_key
+from oc_api.pocket_vfx.jobs import masks_stage_runs, source_sha
+from open_creative.pocket_vfx.keys import masks_key, model_rev, track_key
+from open_creative.pocket_vfx.presets import load_presets
 from open_creative.pocket_vfx.timeline import effect_window
 from open_creative.pocket_vfx.track import (
+    SMOOTH_MAX_SHIFT_PX,
+    SMOOTH_SIGMA_FRAMES,
     TrackPoint,
     assemble,
     plan_segments,
@@ -40,11 +45,7 @@ from .vfx_common import (
     pinned_config,
     store_json,
 )
-
-SMOOTH_SIGMA_FRAMES = 1.0
-# Smoothing may move a point at most this far from the LK measurement (proxy px = 1 output px): it removes jitter
-# but must follow the displayed motion, which on CFR-resampled clips moves in uneven steps (test_vfx_coordinates).
-SMOOTH_MAX_SHIFT_PX = 0.5
+from .vfx_masks import masks_stage
 
 
 def _point_dict(p: TrackPoint) -> dict:
@@ -135,11 +136,15 @@ def vfx_track(run: JobRun) -> tuple[list[str], dict]:
         return [track_id, side_id]
 
     track_id, side_id = run.ensure_stage("track", track_stage)
-    # Task 10 adds the ``masks`` stage here (GPU, keyed by masks_key); until then the job succeeds without it.
+    outputs, masks = [track_id, side_id], None
+    if masks_stage_runs(cfg, load_presets()[cfg.effect.preset_id]):
+        mkey = masks_key(cfg_json, sha, model_rev(run.job.model_profile))
+        mask_ids, masks = masks_stage(run, cfg, cfg_json, key=mkey, sha=sha, work=work, proxy=proxy, n=n)
+        outputs += mask_ids
     stats = run.asset(track_id).meta_json
-    return [track_id, side_id], {
+    return outputs, {
         **{k: stats[k] for k in ("track_key", "invalid_intervals", "valid_fraction", "peak_valid", "peak_frame",
                                  "segments_total", "segments_reused", "follow")},
         "track_asset_id": track_id, "track_segments_asset_id": side_id, "work_asset_id": str(work.id),
-        "masks": None, "revision": run.job.input_revision,
+        "masks": masks, "revision": run.job.input_revision,
     }

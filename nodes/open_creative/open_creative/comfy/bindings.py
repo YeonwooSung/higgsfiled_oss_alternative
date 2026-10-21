@@ -24,12 +24,16 @@ REQUIRED_BINDINGS: dict[str, dict[str, str]] = {
         "guide_rgb": "video", "guide_depth": "video", "reference": "image", "prompt": "string", "seed": "int",
         "width": "int", "height": "int", "frames": "int", "control_strength": "float",
     },
+    # Pocket VFX. SAM 2.1 video masks of the proxy work clip; ``prompts`` = ``pocket_vfx.masks.build_prompts``.
+    "vfx_masks_v1": {"frames": "video", "prompts": "json", "width": "int", "height": "int"},
 }
 # Which app (workflows/<app>/ directory) owns each workflow.
 WORKFLOW_APP: dict[str, str] = {
-    **{name: "product-lock" for name in REQUIRED_BINDINGS if not name.startswith("camera_")},
+    **{name: "product-lock" for name in REQUIRED_BINDINGS if name.startswith("product_")},
     "camera_depth_v1": "camera-sketch",
     "camera_cinematic_v1": "camera-sketch",
+    "vfx_masks_v1": "pocket-vfx",
+    "vfx_plate_v1": "pocket-vfx",  # bindings arrive with Task 12
 }
 REQUIRED_OUTPUTS: dict[str, tuple[str, ...]] = {
     "product_segment_v1": ("mask",),
@@ -37,6 +41,7 @@ REQUIRED_OUTPUTS: dict[str, tuple[str, ...]] = {
     "product_background_video_v1": ("video",),
     "camera_depth_v1": ("depth",),
     "camera_cinematic_v1": ("video",),
+    "vfx_masks_v1": ("masks",),  # ZIP of mask_%04d.png (8-bit gray, proxy size) + manifest.json
 }
 TYPES = {"string", "int", "float", "image", "video", "json"}
 
