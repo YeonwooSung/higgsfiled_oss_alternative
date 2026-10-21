@@ -236,6 +236,7 @@ export const ko: Dict = {
   downloadAgain: "{format} 다시 다운로드",
   downloadFailed: "{format}을(를) 준비하지 못했습니다.",
   shareLink: "공유 링크",
+  shareUrlHidden: "활성 링크입니다. 주소는 만들 때만 표시됩니다. 접근을 막으려면 폐기하세요.",
   shareCreate: "공유 링크 만들기",
   shareExplain: "링크가 있는 누구나 만료(7일)되거나 폐기할 때까지 이 영상을 볼 수 있습니다.",
   copy: "복사",

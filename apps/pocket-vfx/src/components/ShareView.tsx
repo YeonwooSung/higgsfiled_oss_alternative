@@ -2,14 +2,17 @@
 
 /**
  * Sharing (shared §6, §10): `ShareLink` creates / revokes a public link to one render video, only on an explicit click
- * (results are private by default; the original clip is never shareable — the API allows finished outputs only).
+ * (results are private by default; the original clip is never shareable — the API allows finished outputs only). Its
+ * state is the server list (`GET /projects/{id}/shares`), so a link made earlier can still be revoked after leaving the
+ * result view; the URL itself is shown only right after creating it (the server stores the token hash only).
  * `ShareView` is the public `s/[token]` page: `GET /public/shares/{token}/meta` gives mime, role, `render_profile`,
  * `plate_source` and `mock`; `GET /public/shares/{token}` redirects to the file. A video plays muted; an image shows as an image;
  * anything else (e.g. a ZIP) is never put in an <img>.
  */
 import type { VfxRenderProfile } from "@oc/contracts";
 import { Button } from "@oc/ui";
-import { useQuery } from "@tanstack/react-query";
+import { activeSharesFor, sharesQueryKey } from "@oc/web-core";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Copy, Link2, Sparkles, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { api, ApiError } from "../api/client";
@@ -22,7 +25,16 @@ import { ErrorLine } from "./JobUi";
 export function ShareLink({ assetId }: { assetId: string }) {
   const { t, locale } = useI18n();
   const projectId = useEditor((s) => s.project?.id);
-  const [share, setShare] = useState<{ id: string; url: string; expires_at: string } | null>(null);
+  const qc = useQueryClient();
+  // Server state: the link stays listed (and revocable) after this view is left. The URL is known only right after
+  // creating it here (the server keeps the token hash only).
+  const list = useQuery({
+    queryKey: sharesQueryKey(projectId ?? ""),
+    queryFn: () => api.listShares(projectId!),
+    enabled: !!projectId,
+  });
+  const active = activeSharesFor(list.data, assetId);
+  const [urls, setUrls] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -35,35 +47,48 @@ export function ShareLink({ assetId }: { assetId: string }) {
     } catch (e) {
       setError(e instanceof ApiError ? e.message : t("genericError"));
     } finally {
+      if (projectId) await qc.invalidateQueries({ queryKey: sharesQueryKey(projectId) });
       setBusy(false);
     }
   };
-  const full = share ? `${typeof location === "undefined" ? "" : location.origin}${share.url}` : "";
+  const origin = typeof location === "undefined" ? "" : location.origin;
   return (
     <section aria-labelledby="share-title" className="flex flex-col gap-2 text-xs" data-region="share">
       <h3 id="share-title" className="font-semibold uppercase tracking-wide text-muted">{t("shareTitle")}</h3>
-      {share ? (
-        <>
-          <p className="text-muted">{t("shareActive", { date: new Date(share.expires_at).toLocaleDateString(locale) })}</p>
-          <div className="flex gap-2">
-            <input readOnly value={full} aria-label={t("shareLink")} onFocus={(e) => e.currentTarget.select()}
-              className="min-h-[44px] min-w-0 flex-1 rounded-button border border-border bg-app px-2 text-ink" />
-            <Button size="sm" className="min-h-[44px]" icon={<Copy className="h-3.5 w-3.5" aria-hidden />}
-              onClick={() => void navigator.clipboard?.writeText(full).then(() => setNote(t("copied")), () => {})}>{t("copy")}</Button>
-          </div>
-          <Button size="sm" variant="danger" className="min-h-[44px] self-start" disabled={busy} icon={<Trash2 className="h-3.5 w-3.5" aria-hidden />}
-            onClick={() => run(async () => { await api.revokeShare(share.id); setShare(null); setNote(t("shareRevoked")); })}>{t("revoke")}</Button>
-        </>
+      {active.length > 0 ? (
+        active.map((share) => {
+          const full = urls[share.id] ? `${origin}${urls[share.id]}` : null;
+          return (
+            <div key={share.id} className="flex flex-col gap-2">
+              <p className="text-muted">{t("shareActive", { date: new Date(share.expires_at).toLocaleDateString(locale) })}</p>
+              {full ? (
+                <div className="flex gap-2">
+                  <input readOnly value={full} aria-label={t("shareLink")} onFocus={(e) => e.currentTarget.select()}
+                    className="min-h-[44px] min-w-0 flex-1 rounded-button border border-border bg-app px-2 text-ink" />
+                  <Button size="sm" className="min-h-[44px]" icon={<Copy className="h-3.5 w-3.5" aria-hidden />}
+                    onClick={() => void navigator.clipboard?.writeText(full).then(() => setNote(t("copied")), () => {})}>{t("copy")}</Button>
+                </div>
+              ) : (
+                <p className="text-muted">{t("shareUrlHidden")}</p>
+              )}
+              <Button size="sm" variant="danger" className="min-h-[44px] self-start" disabled={busy} icon={<Trash2 className="h-3.5 w-3.5" aria-hidden />}
+                onClick={() => run(async () => { await api.revokeShare(share.id); setNote(t("shareRevoked")); })}>{t("revoke")}</Button>
+            </div>
+          );
+        })
       ) : (
         <>
           <p className="text-muted">{t("shareExplain")}</p>
-          <Button size="sm" variant="secondary" className="min-h-[44px] self-start" disabled={busy || !projectId}
+          <Button size="sm" variant="secondary" className="min-h-[44px] self-start" disabled={busy || !projectId || list.isPending}
             icon={<Link2 className="h-3.5 w-3.5" aria-hidden />}
-            onClick={() => run(async () => { setShare(await api.createShare(projectId!, assetId)); })}>{t("shareCreate")}</Button>
+            onClick={() => run(async () => {
+              const created = await api.createShare(projectId!, assetId);
+              setUrls((u) => ({ ...u, [created.id]: created.url }));
+            })}>{t("shareCreate")}</Button>
         </>
       )}
       {note && <p role="status" className="text-muted">{note}</p>}
-      <ErrorLine text={error} />
+      <ErrorLine text={error ?? (list.isError ? t("genericError") : null)} />
     </section>
   );
 }

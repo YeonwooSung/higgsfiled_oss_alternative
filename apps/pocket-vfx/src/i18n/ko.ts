@@ -399,6 +399,7 @@ export const ko: Dict = {
   shareCreate: "공유 링크 만들기",
   shareActive: "링크가 있는 누구나 {date}까지 영상을 볼 수 있습니다. 원본 클립은 공유되지 않습니다.",
   shareLink: "공유 링크",
+  shareUrlHidden: "활성 링크입니다. 주소는 만들 때만 표시됩니다. 접근을 막으려면 폐기하세요.",
   copy: "복사",
   copied: "복사했습니다.",
   revoke: "링크 폐기",

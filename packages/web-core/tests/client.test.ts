@@ -37,6 +37,15 @@ describe("ApiClient", () => {
     expect(JSON.parse(fetcher.mock.calls[1][1]!.body as string)).toEqual({ app_slug: "camera-sketch", title: "t" });
   });
 
+  it("lists a project's active share links", async () => {
+    const shares = [{ id: "s1", output_asset_id: "a1", created_at: "2026-10-20T00:00:00+00:00", expires_at: "2026-10-27T00:00:00+00:00" }];
+    const fetcher = vi.fn(async (_url: string, _init?: RequestInit) => json(200, { shares }));
+    const api = createApiClient("pocket-vfx", fetcher);
+    expect(await api.listShares("p")).toEqual(shares);
+    expect(fetcher.mock.calls[0][0]).toBe("/api/v1/projects/p/shares");
+    expect(fetcher.mock.calls[0][1]!.method).toBe("GET");
+  });
+
   it("hashes bytes as lowercase hex sha256", async () => {
     const hex = await sha256Hex(new TextEncoder().encode("abc").buffer as ArrayBuffer);
     expect(hex).toBe("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");

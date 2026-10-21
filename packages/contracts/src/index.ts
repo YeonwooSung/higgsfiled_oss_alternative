@@ -238,6 +238,15 @@ export interface CameraCapabilities {
   };
 }
 
+/** `GET /projects/{id}/shares` item: an active (not revoked, not expired) public link. The URL is returned only once,
+ * by `POST /projects/{id}/shares` (only the token hash is stored). */
+export interface ShareSummary {
+  id: string;
+  output_asset_id: string;
+  created_at: string;
+  expires_at: string;
+}
+
 export interface Estimate {
   kind: JobKind;
   stages: string[];

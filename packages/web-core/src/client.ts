@@ -7,6 +7,7 @@ import type {
   Estimate,
   Job,
   JobKind,
+  ShareSummary,
 } from "@oc/contracts";
 
 export class ApiError extends Error {
@@ -102,6 +103,10 @@ export class ApiClient<C = unknown, P extends { config: C } = { config: C }> {
   createShare(projectId: string, outputAssetId: string, ttlDays = 7) {
     return this.request<{ id: string; url: string; expires_at: string }>("POST", `/projects/${projectId}/shares`,
       { output_asset_id: outputAssetId, ttl_days: ttlDays });
+  }
+  /** Active links of the project, newest first (no URL: it is shown once, at creation). */
+  async listShares(projectId: string): Promise<ShareSummary[]> {
+    return (await this.request<{ shares: ShareSummary[] }>("GET", `/projects/${projectId}/shares`)).shares;
   }
   revokeShare(id: string) {
     return this.request<void>("DELETE", `/shares/${id}`);

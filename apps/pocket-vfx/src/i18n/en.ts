@@ -397,6 +397,7 @@ export const en = {
   shareCreate: "Create share link",
   shareActive: "Anyone with this link can watch the video until {date}. Your original clip is never shared.",
   shareLink: "Share link",
+  shareUrlHidden: "Active link. Its address is shown only when it is created; revoke it to stop access.",
   copy: "Copy",
   copied: "Copied.",
   revoke: "Revoke link",

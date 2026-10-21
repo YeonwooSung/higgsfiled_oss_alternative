@@ -234,6 +234,7 @@ export const en = {
   downloadAgain: "Download {format} again",
   downloadFailed: "Could not prepare {format}.",
   shareLink: "Share link",
+  shareUrlHidden: "Active link. Its address is shown only when it is created; revoke it to stop access.",
   shareCreate: "Create share link",
   shareExplain: "Anyone with the link can watch this video until it expires (7 days) or you revoke it.",
   copy: "Copy",

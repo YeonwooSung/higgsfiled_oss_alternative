@@ -106,3 +106,73 @@ def test_vfx_render_video_is_shareable_with_profile_and_mock_meta(app, session_c
         assert (meta["mime"], meta["role"], meta["render_profile"], meta["mock"]) == ("video/mp4", "render_video",
                                                                                       profile, mock)
         assert meta["plate_source"] == {quick: "bundled", generated: "generated", plain: None}[aid]
+
+
+def _job_asset(app, project_id, role, kind, profile, meta, mime="video/mp4"):
+    """An output ``role`` asset produced by a succeeded ``kind`` job of ``profile`` (asset.job_id set)."""
+    aid = put_asset(app, project_id, role, b"bytes", mime, 1280, 720, meta=meta)
+    with app.state.db() as db:
+        row = db.get(Project, uuid.UUID(project_id))
+        job = Job(project_id=row.id, session_id=row.session_id, input_revision=1, kind=kind, model_profile=profile,
+                  state="succeeded", output_asset_ids=[aid], result_json={})
+        db.add(job)
+        db.flush()
+        db.get(Asset, uuid.UUID(aid)).job_id = job.id
+        db.commit()
+    return aid
+
+
+def _share_meta(app, client, pid, aid):
+    r = client.post(f"/api/v1/projects/{pid}/shares", json={"output_asset_id": aid})
+    assert r.status_code == 201, r.text
+    return TestClient(app).get(f"/api/v1/public/shares/{r.json()['url'].rsplit('/', 1)[1]}/meta").json()
+
+
+def test_share_meta_mock_for_product_lock_and_camera_sketch_outputs(app, session_client):
+    """``mock`` is true for an output of a mock_v1 job and false for a non-mock profile job whose asset says mock false."""
+    pl = session_client.post("/api/v1/projects", json={"app_slug": "product-lock", "title": "Can"}).json()["id"]
+    cs = session_client.post("/api/v1/projects", json={"app_slug": "camera-sketch", "title": "Room"}).json()["id"]
+    cases = [
+        (pl, "render", "product.render", "mock_v1", {"mock": True}, True),
+        (pl, "render", "product.render", "open_weights_v1", {"mock": False}, False),
+        (pl, "cover", "product.render", "mock_v1", {}, True),
+        (cs, "geometry_video", "camera.guide", "mock_v1", {"mode": "geometry", "mock": True}, True),
+        (cs, "geometry_video", "camera.guide", "open_weights_v1", {"mode": "geometry", "mock": False}, False),
+        (cs, "cinematic_video", "camera.cinematic", "mock_v1", {"mode": "cinematic"}, True),
+        (cs, "cinematic_video", "camera.cinematic", "open_weights_v1", {"mode": "cinematic", "mock": False}, False),
+    ]
+    for pid, role, kind, profile, meta, mock in cases:
+        got = _share_meta(app, session_client, pid, _job_asset(app, pid, role, kind, profile, meta))
+        assert got["role"] == role and got["mock"] is mock, (role, profile, got)
+        if role == "cinematic_video":
+            assert got["exact_camera_control"] is False
+
+
+def test_list_shares_returns_the_owners_active_links_without_tokens(app, session_client, project):
+    from datetime import timedelta
+
+    from oc_api.db import utcnow
+    from oc_api.models import Share
+
+    _, video, cover = finished_render(app, project)
+    url = f"/api/v1/projects/{project['id']}/shares"
+    assert session_client.get(url).json() == {"shares": []}
+    active = session_client.post(url, json={"output_asset_id": video, "ttl_days": 7}).json()
+    revoked = session_client.post(url, json={"output_asset_id": video}).json()
+    expired = session_client.post(url, json={"output_asset_id": cover}).json()
+    assert session_client.delete(f"/api/v1/shares/{revoked['id']}").status_code == 204
+    with app.state.db() as db:
+        db.get(Share, uuid.UUID(expired["id"])).expires_at = utcnow() - timedelta(minutes=1)
+        db.commit()
+    r = session_client.get(url)
+    assert r.status_code == 200, r.text
+    (item,) = r.json()["shares"]
+    assert set(item) == {"id", "output_asset_id", "created_at", "expires_at"}  # never the token or its hash
+    assert (item["id"], item["output_asset_id"], item["expires_at"]) == (active["id"], video, active["expires_at"])
+    # another session sees nothing of this project
+    other = TestClient(app)
+    assert other.post("/api/v1/sessions").status_code == 201
+    assert other.get(url).status_code == 404
+    # the listed id is enough to revoke
+    assert session_client.delete(f"/api/v1/shares/{item['id']}").status_code == 204
+    assert session_client.get(url).json() == {"shares": []}

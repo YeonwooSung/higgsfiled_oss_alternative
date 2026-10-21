@@ -50,6 +50,18 @@ def create_share(project_id: str, body: ShareCreate, db: DbSession = Depends(get
             "output_asset_id": str(asset.id)}
 
 
+@router.get("/projects/{project_id}/shares")
+def list_shares(project_id: str, db: DbSession = Depends(get_db), session: SessionRow = Depends(current_session)):
+    """The project's active links (not revoked, not expired), newest first. Only the token hash is stored, so the
+    public URL is shown once at creation and never again; the id is enough to revoke."""
+    project = owned_project(project_id, db, session)
+    rows = db.scalars(select(Share).where(Share.project_id == project.id, Share.revoked_at.is_(None),
+                                          Share.expires_at > utcnow()).order_by(Share.created_at.desc()))
+    return {"shares": [{"id": str(s.id), "output_asset_id": str(s.output_asset_id),
+                        "created_at": s.created_at.isoformat(), "expires_at": s.expires_at.isoformat()}
+                       for s in rows]}
+
+
 @router.delete("/shares/{share_id}", status_code=204)
 def revoke_share(share_id: str, db: DbSession = Depends(get_db), session: SessionRow = Depends(current_session)):
     share = db.scalar(select(Share).join(Project, Project.id == Share.project_id).where(

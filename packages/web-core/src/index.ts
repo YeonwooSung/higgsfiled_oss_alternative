@@ -5,3 +5,4 @@ export * from "./autosave";
 export * from "./history";
 export * from "./i18n";
 export * from "./sync";
+export * from "./shares";
