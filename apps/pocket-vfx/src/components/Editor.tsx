@@ -2,14 +2,15 @@
 
 /**
  * Screen B (spec §3): top bar (title, save state, undo / redo, export), effect cards and tools (left 220 px), the
- * stage with the draft preview, the inspector column (300 px; its controls arrive with Task 17) and the 160 px
- * timeline. Below 768 px: stage + timeline with an Effect / Track / Adjust bottom sheet.
+ * stage with the draft preview, the inspector column (300 px: render action, then the inspector sections with tracking)
+ * and the 160 px timeline. Below 768 px: stage + timeline with an Effect / Track / Adjust bottom sheet (Track: tools +
+ * tracking; Adjust: render action + the other inspector sections). Every saved revision is validated (`useValidateLoop`).
  *
  * Track data: the newest succeeded vfx.track gives the track JSON (trajectory, confidence, invalid intervals) and the
  * mask preview; the config of the revision it ran on is the staleness basis (`trackInputs`).
  */
 import type { PocketVfxConfig, PocketVfxProject, TrackJson, VfxTrackResult } from "@oc/contracts";
-import { Badge, Button, cx } from "@oc/ui";
+import { Button, cx } from "@oc/ui";
 import { useQuery } from "@tanstack/react-query";
 import { Brush, Check, CircleAlert, Crosshair, Download, Image as ImageIcon, Loader2, MousePointerClick, Redo2, Scissors, Undo2 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
@@ -18,13 +19,17 @@ import { derivedAsset } from "../flow/clip";
 import { useAssetUrl } from "../hooks/assets";
 import { useIsDesktop } from "../hooks/media";
 import { useEditorShortcuts } from "../hooks/shortcuts";
+import { useValidateLoop } from "../hooks/validate";
 import { useDecodedFrames } from "../hooks/useFrames";
 import { useI18n } from "../i18n";
 import { frameCount } from "../model/timeline";
-import { assetById, trackInputs, trackStatus, useEditor, type Tool, type TrackStatus } from "../state/editorStore";
+import { assetById, trackInputs, trackStatus, useEditor, type Tool } from "../state/editorStore";
 import { EffectCards, usePresets } from "./EffectCards";
+import { Inspector } from "./Inspector";
+import { RenderBar } from "./RenderBar";
 import { Stage } from "./Stage";
 import { Timeline } from "./Timeline";
+import { TrackPanel } from "./TrackPanel";
 import { TopBar } from "./TopBar";
 
 type MobileTab = "effect" | "track" | "adjust";
@@ -62,23 +67,6 @@ function ToolPicker() {
         })}
       </div>
       <p className="text-xs text-muted" aria-live="polite">{active ? t(active.hint) : t("toolNoneHint")}</p>
-    </section>
-  );
-}
-
-const STATUS_TONE: Record<TrackStatus, "neutral" | "success" | "warning"> = { none: "neutral", fresh: "success", stale: "warning" };
-
-function TrackSummary({ status, result }: { status: TrackStatus; result: VfxTrackResult | null }) {
-  const { t } = useI18n();
-  return (
-    <section className="flex flex-col gap-2" data-region="track-status" aria-label={t("trackStatus")}>
-      <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">{t("trackStatus")}</h2>
-      <span><Badge tone={STATUS_TONE[status]}>{t(`track_${status}`)}</Badge></span>
-      <p className="text-xs text-muted">{t(`trackHint_${status}`)}</p>
-      {result && status !== "none" && result.invalid_intervals.length > 0 && (
-        <p className="flex gap-1.5 text-xs text-warning"><CircleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
-          {t("trackLostCount", { count: result.invalid_intervals.length })}</p>
-      )}
     </section>
   );
 }
@@ -190,6 +178,7 @@ function EditorBody({ project, config, desktop, onTrim, t }: {
   const plate = usePlatePreview(project, config);
   const status = trackStatus(config, basis);
   const fresh = status === "fresh";
+  useValidateLoop(project.id);
 
   const back = async () => {
     setLeaving(true);
@@ -219,12 +208,8 @@ function EditorBody({ project, config, desktop, onTrim, t }: {
       mask={mask} plate={plate} policy={policy} />
   );
   const timeline = <Timeline n={n} filmstripId={filmstrip?.id} track={track} trackFresh={fresh} compact={!desktop} />;
-  const side = (
-    <div className="flex flex-col gap-5">
-      <TrackSummary status={status} result={result} />
-      <Guide />
-    </div>
-  );
+  const tracking = <TrackPanel status={status} result={result} track={track} n={n} policy={policy} />;
+  const renderBar = <RenderBar />;
 
   return (
     <div className="flex min-h-[100dvh] flex-col md:h-[100dvh] md:min-h-[640px]">
@@ -236,7 +221,11 @@ function EditorBody({ project, config, desktop, onTrim, t }: {
             <ToolPicker />
           </aside>
           <main className="flex min-h-0 min-w-0 flex-col">{stage}</main>
-          <aside data-region="inspector" aria-label={t("inspector")} className="scroll-panel row-span-2 border-l border-border bg-panel p-3">{side}</aside>
+          <aside data-region="inspector" aria-label={t("inspector")} className="scroll-panel row-span-2 border-l border-border bg-panel">
+            <div className="sticky top-0 z-10 border-b border-border bg-panel p-3">{renderBar}</div>
+            <Inspector n={n} tracking={tracking} />
+            <div className="p-4"><Guide /></div>
+          </aside>
           <div className="col-start-2 row-start-2 min-w-0">{timeline}</div>
         </div>
       ) : (
@@ -254,8 +243,8 @@ function EditorBody({ project, config, desktop, onTrim, t }: {
             </div>
             <div role="tabpanel" className="flex flex-col gap-5 p-3">
               {tab === "effect" && <EffectCards projectId={project.id} />}
-              {tab === "track" && <><ToolPicker /><TrackSummary status={status} result={result} /></>}
-              {tab === "adjust" && <Guide />}
+              {tab === "track" && <><ToolPicker />{tracking}</>}
+              {tab === "adjust" && <>{renderBar}<div className="-mx-3"><Inspector n={n} /></div><Guide /></>}
             </div>
           </nav>
         </>

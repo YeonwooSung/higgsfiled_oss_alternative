@@ -20,6 +20,11 @@ const mix = (a: [number, number, number], b: [number, number, number], k: number
 const WARNING: [number, number, number] = [0xf2, 0xc8, 0x6b];
 const GREEN: [number, number, number] = [0x69, 0xd6, 0xa5];
 
+/** Strip colour of one track point: red when invalid, warning -> green by confidence (a heuristic, not a probability). */
+export function confidenceColor(p: TrackJson["points"][number] | undefined): string {
+  return !p ? "transparent" : !p.valid ? "#FF6B6B" : mix(WARNING, GREEN, Math.min(Math.max(p.confidence, 0), 1));
+}
+
 export function Timeline({ n, filmstripId, track, trackFresh, compact }: {
   n: number;
   filmstripId: string | undefined;
@@ -131,7 +136,7 @@ export function Timeline({ n, filmstripId, track, trackFresh, compact }: {
           <div className="absolute inset-x-0 top-1 flex h-2 overflow-hidden rounded-full bg-app">
             {Array.from({ length: n }, (_, f) => {
               const p = points[f]?.frame === f ? points[f] : points.find((q) => q.frame === f);
-              const color = !p ? "transparent" : !p.valid ? "#FF6B6B" : mix(WARNING, GREEN, Math.min(Math.max(p.confidence, 0), 1));
+              const color = confidenceColor(p);
               return <span key={f} className="h-full flex-1" style={{ background: color }} />;
             })}
           </div>
