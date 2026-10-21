@@ -13,11 +13,28 @@ export const SAMPLES = [
 ] as const;
 export type SampleId = (typeof SAMPLES)[number]["id"];
 
+/** Extension fallback for files the browser gives no MIME type (some OS / drag-and-drop paths, e.g. `.mov`). */
+const EXT_MIMES: Record<string, (typeof CLIP_MIMES)[number]> = { mp4: "video/mp4", mov: "video/quicktime", webm: "video/webm" };
+
+/** The MIME type to check and declare: the browser's when it gives one, else the one implied by the extension
+ * ("" when neither is known). */
+export function clipMime(file: { type: string; name?: string }): string {
+  if (file.type) return file.type;
+  const dot = file.name?.lastIndexOf(".") ?? -1;
+  return dot >= 0 ? EXT_MIMES[file.name!.slice(dot + 1).toLowerCase()] ?? "" : "";
+}
+
 /** Client-side pre-check (the server checks again): i18n key of the problem, or null. */
-export function clipFileProblem(file: Pick<File, "type" | "size">): "fileTypeError" | "fileSizeError" | null {
-  if (!(CLIP_MIMES as readonly string[]).includes(file.type)) return "fileTypeError";
+export function clipFileProblem(file: Pick<File, "type" | "size"> & { name?: string }): "fileTypeError" | "fileSizeError" | null {
+  if (!(CLIP_MIMES as readonly string[]).includes(clipMime(file))) return "fileTypeError";
   if (file.size > CLIP_MAX_BYTES) return "fileSizeError";
   return null;
+}
+
+/** The file with its resolved MIME type, so the upload declares (and the signed PUT sends) that type. */
+export function withClipMime(file: File): File {
+  const mime = clipMime(file);
+  return mime === file.type ? file : new File([file], file.name, { type: mime, lastModified: file.lastModified });
 }
 
 /**
@@ -28,7 +45,7 @@ export function clipFileProblem(file: Pick<File, "type" | "size">): "fileTypeErr
 export async function startProjectWithClip(file: File, title: string): Promise<PocketVfxProject> {
   await api.startSession();
   const project = await api.createProject(title.slice(0, 120) || "Untitled");
-  await api.uploadAsset(project.id, "clip", file, file.name);
+  await api.uploadAsset(project.id, "clip", withClipMime(file), file.name);
   return project;
 }
 
