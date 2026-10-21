@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Export one app plus the shared code it needs into a standalone folder (for a separate submission).
-# Usage: scripts/export_app.sh <product-lock|camera-sketch> /path/to/out
+# Usage: scripts/export_app.sh <product-lock|camera-sketch|pocket-vfx> /path/to/out
 set -euo pipefail
 APP="${1:?app slug, e.g. product-lock}"
 OUT="${2:?output directory}"

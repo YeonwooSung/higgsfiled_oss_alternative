@@ -36,6 +36,7 @@ not been run against a real deployment yet.
 ```
 apps/product-lock      Next.js editor (App Router, Tailwind, Radix, Zustand, TanStack Query, react-konva)
 apps/camera-sketch     Next.js editor for Camera Sketch (Three.js preview, react-konva sketch overlay)
+apps/pocket-vfx        Next.js editor for Pocket VFX (video timeline, point track, mask edit, before/after compare)
 packages/ui            shared UI primitives        packages/contracts   API types
 packages/web-core      API client, job watcher, autosave, history, i18n base (used by camera-sketch)
 services/api           FastAPI + SQLAlchemy + Alembic (sessions, projects, assets, jobs, shares)
@@ -61,9 +62,10 @@ uv run uvicorn oc_api.app:create_app --factory --port 8000
 uv run python -m oc_worker.main
 pnpm dev:product-lock          # http://localhost:3000 → "Try sample"
 pnpm dev:camera-sketch         # http://localhost:3001 (same API on :8000)
+pnpm dev:pocket-vfx            # http://localhost:3002 (same API on :8000)
 ```
 
-Or everything in Docker (PostgreSQL, migrations, API, worker, both web apps — :3000 and :3001):
+Or everything in Docker (PostgreSQL, migrations, API, worker, the three web apps — :3000, :3001 and :3002):
 
 ```bash
 cp .env.example .env
@@ -172,3 +174,78 @@ share-page playback. Uploads additionally need PUT (as for Product Lock). With t
 - Spec section 13 results on the mock profile: [`docs/camera-sketch-verification.md`](docs/camera-sketch-verification.md).
 - `scripts/export_app.sh camera-sketch <out>` exports a standalone tree (this app, shared packages, nodes, services, infra,
   its presets/workflow/fixtures/model manifest, and the specs).
+
+---
+
+# Pocket VFX
+
+Pocket VFX adds one visual effect to a short video clip of yours. The original pixels are kept: the effect is a
+separate layer composited over your clip, and every frame is checked so nothing changes outside the effect's region.
+Spec: [`docs/03_POCKET_VFX_SPEC.md`](docs/03_POCKET_VFX_SPEC.md). Dev server: `pnpm dev:pocket-vfx` on
+**http://localhost:3002** (same API on **:8000** and the same worker as the other apps).
+
+## Effects
+
+| Effect | What it does | Notes |
+|---|---|---|
+| **Impact Wave** | Shock ring and dust from a clicked point at the chosen peak time. | Can sit behind the subject (subject mask needed). |
+| **Energy Aura** | Glow band around the subject's contour, or a local glow at the anchor. | Needs a subject mask for the contour. |
+| **Blink Out** | The subject dissolves into noise and particles and is replaced by a clean plate you upload. | Only with a fixed camera and an empty frame (clean plate). The app checks alignment and refuses a mismatch; it does not restore or invent the background. |
+
+One effect and one subject per project. Timing (start / peak / end) and scale / intensity are config, not new generations.
+
+## Quick vs. Generated plate
+
+- **Quick**: bundled plates (dust burst, energy wisps, particles) plus procedural layers. No model run; labelled "Quick".
+- **Generated**: an LTX effect plate on a black background, matted to alpha (threshold + soft knee, black-level despill,
+  temporal smoothing) and composited behind or over the subject. Labelled "AI generated". Raw plate and matte are viewable.
+  Changing scale or intensity re-renders only; the track and the plate are not regenerated.
+
+## P0 limits
+
+- Trim 1-5 s from a source of at most 60 s; MP4 / MOV / WebM, at most 100 MB.
+- Output 24 fps constant frame rate, 1280x720 or 720x1280 (variable frame rate and rotated sources are normalised).
+- One effect, one subject, one tracked point (Lucas-Kanade on a proxy, with manual correction keyframes).
+- Blink Out only with a fixed camera and a clean plate. Moving-camera clean plates are not supported.
+- SAM masks are segmentation, not matting: hair and motion-blurred edges are hard cut. Edit masks per frame when needed.
+- The app never claims background restoration.
+- Not supported: camera shake, depth ordering, multi-effect stacks, auto action recognition, pose, physics, face
+  regeneration, alpha video codecs, 1080p/4K.
+- Thresholds (track validity, mask diagnostics, matte QA) were tuned on synthetic fixtures only.
+
+## Mock vs. open weights
+
+- `mock_v1` (default) runs on CPU: masks come from the fixture ground truth when the clip matches a fixture,
+  otherwise deterministic GrabCut; the "generated" plate is a deterministic procedural stand-in. Results are labelled **Mock**.
+- `open_weights_v1` for Pocket VFX is **pending**: the `vfx_masks_v1` (SAM 2.1 hiera small, video predictor) and
+  `vfx_plate_v1` (LTX-2.3 distilled v1.1) graphs are not exported from a Comfy deployment, their binding manifests are
+  not added and the model sha256 values in [`models/pocket-vfx.manifest.json`](models/pocket-vfx.manifest.json) are empty.
+  `GET /api/v1/capabilities` reports it unavailable. See [`workflows/pocket-vfx/README.md`](workflows/pocket-vfx/README.md).
+  No real mask or plate inference has been run.
+
+## Models and licenses
+
+Weights are not included.
+
+| Role | Model | License |
+|---|---|---|
+| Subject masks | SAM 2.1 hiera small | Apache-2.0 |
+| Effect plate | LTX-2.3 distilled v1.1 | LTX community license (weights), distinct from this repository's MIT code license |
+| Plate text encoder | Gemma text encoder of the official LTX-2.3 ComfyUI example | Gemma Terms of Use |
+
+The bundled plates (`presets/pocket-vfx/plates/`) and SFX (`presets/pocket-vfx/sfx/`) are procedurally generated by
+`fixtures/pocket-vfx/make_fixtures.py` and are MIT like the code.
+
+## Known limitations
+
+- SQLite worker claim race: with `--concurrency 2` on SQLite two workers can claim the same job. Use PostgreSQL
+  (the compose stack) or `--concurrency 1` for local development.
+- The layers ZIP holds two RGBA PNG sequences (effect, foreground), one PNG per frame (120 frames each), so it can be large.
+- With `OC_STORAGE_BACKEND=s3` the browser reads signed URLs cross-origin; the bucket needs CORS for the Pocket VFX origin
+  (see the CORS note under Camera Sketch, with `http://localhost:3002`).
+
+## Evaluation and verification
+
+- Manual eval sheet (3 inputs per effect): [`docs/pocket-vfx-eval.md`](docs/pocket-vfx-eval.md) - not yet run.
+- Spec section 14 results on the mock profile: [`docs/pocket-vfx-verification.md`](docs/pocket-vfx-verification.md).
+- `scripts/export_app.sh pocket-vfx <out>` exports a standalone tree.
