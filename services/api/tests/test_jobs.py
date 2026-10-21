@@ -159,6 +159,8 @@ def test_events_stream_replays_after_last_event_id(app, session_client, project)
     session_client.post(f"/api/v1/jobs/{job['id']}/cancel")
     with session_client.stream("GET", f"/api/v1/jobs/{job['id']}/events") as r:
         assert r.headers["content-type"].startswith("text/event-stream")
+        # proxies (e.g. the Next.js rewrite) must not compress/buffer the stream (Ruling R24)
+        assert "no-transform" in r.headers["cache-control"] and r.headers["x-accel-buffering"] == "no"
         text = "".join(r.iter_text())
     assert "id: 1" in text and "id: 2" in text and '"cancelled"' in text
     with session_client.stream("GET", f"/api/v1/jobs/{job['id']}/events", headers={"Last-Event-ID": "1"}) as r:

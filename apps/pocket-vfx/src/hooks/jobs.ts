@@ -14,26 +14,59 @@ import {
   type VfxRenderProfile, type VfxValidateResponse,
 } from "@oc/contracts";
 import { watchJob, type SourceLike } from "@oc/web-core";
+import { useEffect } from "react";
 import { api, ApiError } from "../api/client";
 import { useEditor, type SaveState, type TrackStatus } from "../state/editorStore";
 
 // ---- running jobs
 
+export const isActive = (j: Job) => !TERMINAL_JOB_STATES.includes(j.state);
+
+
+/** Followed jobs: one watcher per job id, shared by every caller (`stop` ends it, e.g. when the editor unmounts). */
+const watching = new Map<string, { done: Promise<Job>; stop: () => void }>();
+
 export function followJob(job: Job): Promise<Job> {
-  useEditor.getState().trackJob(job);
+  const known = watching.get(job.id);
+  if (known) return known.done;
+  // only a job the store does not hold yet is written: `useFollowActiveJobs` follows store jobs from an effect on
+  // `jobs`, and writing them back would re-run that effect forever
+  if (useEditor.getState().jobs[job.id] !== job) useEditor.getState().trackJob(job);
   if (TERMINAL_JOB_STATES.includes(job.state)) return Promise.resolve(job);
-  return new Promise((resolve) => {
-    watchJob(job.id, {
+  let stop: () => void = () => {};
+  const done = new Promise<Job>((resolve) => {
+    stop = watchJob(job.id, {
       eventSource: (url) => new EventSource(url, { withCredentials: true }) as unknown as SourceLike,
       fetchJob: (id) => api.getJob(id),
       onUpdate: (j) => useEditor.getState().trackJob(j),
       onDone: (j) => {
+        watching.delete(j.id);
         useEditor.getState().trackJob(j);
         void useEditor.getState().refresh().catch(() => {});
         resolve(j);
       },
     });
   });
+  watching.set(job.id, { done, stop });
+  return done;
+}
+
+/** Follow every job still queued/running (e.g. after a reload mid-job); already followed ones are skipped. */
+export function followActiveJobs(jobs: Record<string, Job>): void {
+  for (const j of Object.values(jobs)) if (isActive(j)) void followJob(j);
+}
+
+/** Stop all watchers (the editor unmounts). */
+export function stopFollowingJobs(): void {
+  for (const w of watching.values()) w.stop();
+  watching.clear();
+}
+
+/** Mount once in the editor: follows the active jobs of the loaded project and those a refresh brings in. */
+export function useFollowActiveJobs(): void {
+  const jobs = useEditor((s) => s.jobs);
+  useEffect(() => { followActiveJobs(jobs); }, [jobs]);
+  useEffect(() => stopFollowingJobs, []);
 }
 
 /** Saves pending edits, then creates the job on that revision (Idempotency-Key per click). */
@@ -51,7 +84,6 @@ export async function startJob(kind: JobKind, options: Record<string, unknown> =
   return followJob(await createJob(kind, options));
 }
 
-export const isActive = (j: Job) => !TERMINAL_JOB_STATES.includes(j.state);
 const byNewest = (a: Job, b: Job) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0);
 
 export function activeJob(jobs: Record<string, Job>, kind: JobKind): Job | undefined {

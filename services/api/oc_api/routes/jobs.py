@@ -227,7 +227,7 @@ def job_events(job_id: str, request: Request, db: DbSession = Depends(get_db),
                 yield ": keep-alive\n\n"
 
     return StreamingResponse(stream(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+                             headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"})
 
 
 @router.get("/jobs/{job_id}/integrity")

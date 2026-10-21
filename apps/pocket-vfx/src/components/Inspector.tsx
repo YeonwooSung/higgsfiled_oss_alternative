@@ -19,13 +19,13 @@ import {
 import { useCurrentValidation } from "../hooks/validate";
 import { useI18n } from "../i18n";
 import { sfxFromPercent, sfxPercent } from "../model/audio";
+import { parseSeed, SEED_MAX } from "../model/seed";
 import { outsideTrackWindow } from "../model/frames";
 import { effectWindow, FPS } from "../model/timeline";
 import { assetById, useEditor, type TimingHandle } from "../state/editorStore";
 import { usePresets } from "./EffectCards";
-import { ErrorLine, JobProgress, jobFailure, Modal, Reasons, reasonText, type T } from "./RenderBar";
+import { ErrorLine, JobProgress, jobFailure, Modal, Reasons, reasonText, type T } from "./JobUi";
 
-const SEED_MAX = 2 ** 31 - 1;
 const pct = (v: number) => `${Math.round(v * 1000) / 10}`;
 type ControlKey = "scale" | "intensity" | "rotation_deg" | "squash";
 const CONTROL_BOUNDS: Record<ControlKey, [number, number]> = { scale: [0.25, 2], intensity: [0, 1], rotation_deg: [-180, 180], squash: [0.2, 1] };
@@ -301,8 +301,8 @@ function PlateSection({ preset }: { preset: VfxPreset | undefined }) {
           <input type="number" min={0} max={SEED_MAX} step={1} value={plate.seed}
             className="min-h-[44px] rounded-[6px] border border-border bg-panel px-2 tabular md:min-h-8"
             onChange={(e) => {
-              const v = Math.round(Number(e.target.value));
-              if (Number.isFinite(v)) update((c) => { c.plate.seed = Math.min(Math.max(v, 0), SEED_MAX); }, "inspector:seed");
+              const v = parseSeed(e.target.value); // empty or partial: keep the saved seed
+              if (v !== null) update((c) => { c.plate.seed = v; }, "inspector:seed");
             }} />
         </label>
         <Button size="sm" variant="ghost" className="min-h-[44px] md:min-h-8" icon={<Dices className="h-4 w-4" aria-hidden />}

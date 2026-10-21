@@ -19,6 +19,7 @@ import { derivedAsset } from "../flow/clip";
 import { useAssetUrl } from "../hooks/assets";
 import { useIsDesktop } from "../hooks/media";
 import { useEditorShortcuts } from "../hooks/shortcuts";
+import { useFollowActiveJobs } from "../hooks/jobs";
 import { useValidateLoop } from "../hooks/validate";
 import { useDecodedFrames } from "../hooks/useFrames";
 import { useI18n } from "../i18n";
@@ -179,6 +180,7 @@ function EditorBody({ project, config, desktop, onTrim, t }: {
   const status = trackStatus(config, basis);
   const fresh = status === "fresh";
   useValidateLoop(project.id);
+  useFollowActiveJobs();
 
   const back = async () => {
     setLeaving(true);

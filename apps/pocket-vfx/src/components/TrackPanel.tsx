@@ -15,7 +15,7 @@ import { useValidation } from "../hooks/validate";
 import { useI18n } from "../i18n";
 import { anchorAt } from "../model/preview";
 import { useEditor, type TrackStatus } from "../state/editorStore";
-import { ErrorLine, JobProgress, jobFailure, Reasons, reasonText } from "./RenderBar";
+import { ErrorLine, JobProgress, jobFailure, Reasons, reasonText } from "./JobUi";
 import { confidenceColor } from "./Timeline";
 
 const STATUS_TONE: Record<TrackStatus, "neutral" | "success" | "warning"> = { none: "neutral", fresh: "success", stale: "warning" };
