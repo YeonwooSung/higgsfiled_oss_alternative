@@ -334,6 +334,7 @@ export const ko: Dict = {
   why_clean_plate_required: "Blink Out에는 빈 배경 프레임이 필요합니다.",
   why_clean_plate_mismatch: "Blink Out은 고정 카메라와 같은 위치에서 찍은 배경 프레임이 필요합니다. 다른 효과나 고정 카메라 클립을 선택하세요.",
   why_plate_palette_differs: "plate가 다른 색상으로 생성되었습니다. 맞추려면 새 plate를 생성하세요.",
+  why_plate_aspect_differs: "plate가 다른 화면 비율로 생성되었습니다. 맞추려면 새 plate를 생성하세요.",
   why_track_not_found: "추적 결과를 찾을 수 없습니다. 다시 추적하세요.",
   why_track_not_finished: "추적이 아직 끝나지 않았습니다.",
   why_generic: "문제가 생겼습니다. 다시 시도하세요.",

@@ -332,6 +332,7 @@ export const en = {
   why_clean_plate_required: "Blink Out needs an empty background frame.",
   why_clean_plate_mismatch: "Blink Out needs a fixed camera and a background frame from the same position: choose another effect or a fixed-camera clip.",
   why_plate_palette_differs: "The plate was generated with another palette: generate a new plate to match.",
+  why_plate_aspect_differs: "The plate was generated for another aspect ratio: generate a new plate to match.",
   why_track_not_found: "The track was not found: track again.",
   why_track_not_finished: "Tracking has not finished.",
   why_generic: "Something went wrong. Try again.",

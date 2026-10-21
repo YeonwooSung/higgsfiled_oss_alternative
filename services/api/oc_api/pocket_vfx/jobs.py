@@ -190,6 +190,28 @@ def _plate_palette_warning(db: DbSession, project: Project, cfg: PocketVfxConfig
                        "Generate a new plate to match."}
 
 
+def _plate_aspect_warning(db: DbSession, project: Project, cfg: PocketVfxConfig, render_profile: str) -> dict | None:
+    """A generated plate made for another orientation (its stored ``aspect``, else its size) than the output aspect.
+    Non-blocking, like ``plate_palette_differs``."""
+    if render_profile != "generated" or cfg.plate.mode != "generated" or cfg.plate.asset_id is None:
+        return None
+    plate = db.get(Asset, cfg.plate.asset_id)
+    if plate is None or plate.project_id != project.id or plate.role != "raw_plate":
+        return None
+    meta = plate.meta_json or {}
+    aspect = meta.get("aspect")
+    if aspect not in ("16:9", "9:16"):
+        w, h = plate.width or meta.get("width"), plate.height or meta.get("height")
+        if not w or not h or w == h:
+            return None
+        aspect = "16:9" if w > h else "9:16"
+    if aspect == cfg.output.aspect:
+        return None
+    return {"code": "plate_aspect_differs", "field": "config.plate.asset_id",
+            "message": f"The plate was generated for {aspect}; the output is {cfg.output.aspect}. "
+                       "Generate a new plate to match."}
+
+
 def _asset(db: DbSession, project: Project, asset_id, role: str) -> Asset | None:
     a = db.get(Asset, asset_id) if asset_id else None
     return a if a is not None and a.project_id == project.id and a.role == role else None
@@ -314,9 +336,10 @@ def validate(db: DbSession, project: Project, cfg: PocketVfxConfig, *, track: Jo
             blocking.append(_err("mask_required", "config.subject_prompts",
                                  "This effect needs a subject mask. Select the subject and track again."))
     blocking += plate_errors(db, project, cfg, render_profile or cfg.render_profile)
-    differs = _plate_palette_warning(db, project, cfg, render_profile or cfg.render_profile)
-    if differs:
-        warnings.append(differs)
+    for check in (_plate_palette_warning, _plate_aspect_warning):
+        differs = check(db, project, cfg, render_profile or cfg.render_profile)
+        if differs:
+            warnings.append(differs)
     if preset["input_requirements"].get("clean_plate"):
         blocking += _clean_plate_errors(db, project, cfg)
     return {"valid": not blocking, "blocking_errors": blocking, "warnings": warnings}

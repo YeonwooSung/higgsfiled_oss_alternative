@@ -441,6 +441,36 @@ def test_validate_warns_when_the_plate_palette_differs(app, session_client, read
     assert report["valid"] is True and "plate_palette_differs" in codes(report["warnings"])
 
 
+def test_validate_warns_when_the_plate_aspect_differs(app, session_client, ready):
+    """Non-blocking: a generated plate whose aspect (meta, else its size orientation) is not the output aspect."""
+    p, _ = ready
+    plate = make_plate(app, p)  # 768x448 landscape, no aspect in meta
+    proj = generated(session_client, p, plate)  # output 16:9
+    rev = proj["current_revision"]
+    assert "plate_aspect_differs" not in codes(validate(session_client, p, rev)["warnings"])
+
+    def set_plate(**fields):
+        with app.state.db() as db:
+            a = db.get(Asset, uuid.UUID(plate))
+            for k, v in fields.items():
+                setattr(a, k, v)
+            db.commit()
+
+    set_plate(meta_json={**make_plate_meta(), "aspect": "9:16"})  # the stored aspect wins over the size
+    report = validate(session_client, p, rev)
+    (w,) = [w for w in report["warnings"] if w["code"] == "plate_aspect_differs"]
+    assert w["field"] == "config.plate.asset_id" and report["valid"] is True
+    set_plate(meta_json={**make_plate_meta(), "aspect": "16:9"})
+    assert "plate_aspect_differs" not in codes(validate(session_client, p, rev)["warnings"])
+    set_plate(meta_json=make_plate_meta(), width=448, height=768)  # no stored aspect: a portrait plate
+    report = validate(session_client, p, rev)
+    assert report["valid"] is True and "plate_aspect_differs" in codes(report["warnings"])
+
+
+def make_plate_meta(frames=49):
+    return {"preset_id": "impact_wave_v1", "palette": "amber", "seed": 1, "frames": frames, "mock": True}
+
+
 # --- track validity at peak in validate ---------------------------------------------------------------------
 
 def test_validate_track_invalid_at_peak(app, session_client, ready):
