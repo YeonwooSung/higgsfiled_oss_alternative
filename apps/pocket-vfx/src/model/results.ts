@@ -119,7 +119,24 @@ export function trackingWarningItems(result: Pick<VfxRenderResult, "tracking_war
     else if (w.code === "camera_not_fixed") out.push({ key: "res_camera_not_fixed", vars: {} });
     else if (w.code === "camera_motion_unknown") out.push({ key: "res_camera_motion_unknown", vars: {} });
   }
-  for (const d of result.mask_warnings ?? []) out.push({ key: `res_mask_${d.code}`, vars: { frame: d.frame + 1 } });
+  for (const [code, frames] of maskWarningRuns(result.mask_warnings ?? [])) out.push({ key: `res_mask_${code}`, vars: { frames: runs(frames) } });
+  return out;
+}
+
+/** Mask diagnostics (one per frame) grouped per code, in order of first appearance, into runs of consecutive frames. */
+function maskWarningRuns<C extends string>(diags: readonly { code: C; frame: number }[]): Map<C, [number, number][]> {
+  const byCode = new Map<C, number[]>();
+  for (const d of diags) byCode.set(d.code, [...(byCode.get(d.code) ?? []), d.frame]);
+  const out = new Map<C, [number, number][]>();
+  for (const [code, frames] of byCode) {
+    const spans: [number, number][] = [];
+    for (const f of [...new Set(frames)].sort((a, b) => a - b)) {
+      const last = spans[spans.length - 1];
+      if (last && f === last[1] + 1) last[1] = f;
+      else spans.push([f, f]);
+    }
+    out.set(code, spans);
+  }
   return out;
 }
 

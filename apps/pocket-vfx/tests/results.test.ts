@@ -152,7 +152,21 @@ describe("result summaries", () => {
       { key: "res_track_invalid_at_peak", vars: { frame: 37 } },
       { key: "res_camera_not_fixed", vars: {} },
       { key: "res_camera_motion_unknown", vars: {} },
-      { key: "res_mask_holes", vars: { frame: 6 } },
+      { key: "res_mask_holes", vars: { frames: "6" } },
+    ]);
+  });
+
+  it("groups mask warnings of one code into runs of consecutive frames", () => {
+    const items = trackingWarningItems(result({
+      mask_warnings: [
+        { code: "mask_empty", frame: 10 }, { code: "area_jump", frame: 11 }, { code: "mask_empty", frame: 11 },
+        { code: "mask_empty", frame: 12 }, { code: "mask_empty", frame: 20 }, { code: "area_jump", frame: 21 },
+        { code: "area_jump", frame: 22 },
+      ],
+    }));
+    expect(items).toEqual([
+      { key: "res_mask_mask_empty", vars: { frames: "11–13, 21" } },
+      { key: "res_mask_area_jump", vars: { frames: "12, 22–23" } },
     ]);
   });
 
