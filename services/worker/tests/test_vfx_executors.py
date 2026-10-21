@@ -175,6 +175,21 @@ def test_analyze_stores_work_clip_proxy_filmstrip_and_motion(proj):
     assert {"normalize", "proxy", "filmstrip", "audio", "motion"} <= visible  # the visible stage advances
 
 
+def test_analyze_normalize_heartbeats_per_frame(proj, monkeypatch):
+    """The normalize decode runs frame_checkpoint (heartbeat + cancel) so a long source keeps the job's lease."""
+    mod = importlib.import_module("oc_worker.executors.vfx_analyze")
+    calls: list[int] = []
+    real = mod.frame_checkpoint
+
+    def spy(run, i, *a, **kw):
+        calls.append(i)
+        return real(run, i, *a, **kw)
+
+    monkeypatch.setattr(mod, "frame_checkpoint", spy)
+    proj.prepare("stomp_landscape.mp4")
+    assert len(calls) >= 2 * 120  # PTS pass + decoded frames of the 5 s trim
+
+
 def test_analyze_trims_and_extracts_audio(proj):
     r = proj.prepare("with_audio.mp4", trim={"source_start_ms": 1000, "duration_ms": 3000}).result_json
     assert r["has_audio"] is True and r["frame_count"] == 72

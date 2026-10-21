@@ -10,7 +10,8 @@ from open_creative.media.image import MediaError, load_mask_png, mask_to_png_byt
 from open_creative.media.video_ingest import SourceInfo, filmstrip, normalize_clip, probe_source, proxy_size
 from open_creative.product_lock.masks import mask_from_alpha
 
-from ..stages import JobRun, StageFailed
+from ..stages import Cancelled, JobRun, LeaseLost, StageFailed
+from .camera_common import frame_checkpoint
 
 _VIDEO_ROLES = frozenset({"clip"})
 
@@ -109,17 +110,22 @@ def _clip(run: JobRun, asset):
     """Probe the uploaded clip, then store a proxy-size CFR 24 preview of the whole source and a filmstrip.
     The original stays untouched; the preview is never the original."""
     src = run.fetch(asset)
+
+    def on_frame(i: int) -> None:  # a 60 s 4K clip decodes for longer than the lease: heartbeat + cancel per frame
+        frame_checkpoint(run, i)
+
     try:
-        info = probe_source(src)
-    except MediaError:
+        info = probe_source(src, on_frame=on_frame)
+    except (MediaError, Cancelled, LeaseLost):
         raise
     except Exception as e:  # noqa: BLE001 - ffprobe failures on undecodable bytes
         raise MediaError("unsupported_codec") from e
+    run.heartbeat(force=True)
     pw, ph = _preview_size(info)
     preview = run.work_dir / "clip_preview.mp4"
     try:
-        normalize_clip(src, preview, info, 0, info.duration_ms, pw, ph)
-    except MediaError:
+        normalize_clip(src, preview, info, 0, info.duration_ms, pw, ph, on_frame=on_frame)
+    except (MediaError, Cancelled, LeaseLost):
         raise
     except Exception as e:  # noqa: BLE001
         raise MediaError("unsupported_codec") from e

@@ -111,3 +111,41 @@ def test_clip_turns_ready_only_after_its_preview_and_filmstrip_exist(ctx, db_fac
     assert job.state == "succeeded", (job.error_code, job.error_message)
     assert seen == [("clip_preview", "uploaded"), ("clip_filmstrip", "uploaded")]
     assert load(db_factory, Asset, aid).state == "ready"
+
+
+def test_clip_inspect_heartbeats_through_probe_and_preview_decode(ctx, db_factory, storage, pvfx_project,
+                                                                  monkeypatch):
+    """A long clip keeps its lease: the per-frame probe and preview decode run frame_checkpoint (heartbeat + cancel)."""
+    import importlib
+
+    mod = importlib.import_module("oc_worker.executors.inspect_asset")
+    calls: list[int] = []
+    real = mod.frame_checkpoint
+
+    def spy(run, i, *a, **kw):
+        calls.append(i)
+        return real(run, i, *a, **kw)
+
+    monkeypatch.setattr(mod, "frame_checkpoint", spy)
+    aid = upload_clip(db_factory, storage, pvfx_project, (FIX / "stomp_landscape.mp4").read_bytes())
+    job = inspect(ctx, db_factory, pvfx_project, aid)
+    assert job.state == "succeeded", (job.error_code, job.error_message)
+    assert len(calls) >= 2 * 120  # probe pass + every decoded preview frame
+
+
+def test_cancel_during_clip_decode_cancels_instead_of_rejecting(ctx, db_factory, storage, pvfx_project, monkeypatch):
+    import importlib
+
+    from oc_worker.stages import Cancelled
+
+    mod = importlib.import_module("oc_worker.executors.inspect_asset")
+
+    def cancel(run, i, *a, **kw):
+        if i == 30:
+            raise Cancelled()
+
+    monkeypatch.setattr(mod, "frame_checkpoint", cancel)
+    aid = upload_clip(db_factory, storage, pvfx_project, (FIX / "stomp_landscape.mp4").read_bytes())
+    job = inspect(ctx, db_factory, pvfx_project, aid)
+    assert job.state == "cancelled"
+    assert load(db_factory, Asset, aid).state == "uploaded"  # not rejected as an unsupported codec

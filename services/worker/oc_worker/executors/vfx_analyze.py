@@ -21,7 +21,7 @@ from open_creative.media.video_ingest import (
 from open_creative.pocket_vfx.motion import camera_motion
 
 from ..stages import JobRun, StageFailed
-from .camera_common import json_asset, ready_asset
+from .camera_common import frame_checkpoint, json_asset, ready_asset
 from .vfx_common import canvas, gray_frames, pinned_config, store_json
 
 FILMSTRIP_THUMBS = 12
@@ -42,9 +42,11 @@ def vfx_analyze(run: JobRun) -> tuple[list[str], dict]:
     def normalize(stage):
         run.transition("running", "normalize")
         src = run.fetch(clip)
+        run.heartbeat(force=True)
         out = run.work_dir / "work_clip.mp4"
         try:
-            pts = normalize_clip(src, out, info, trim["source_start_ms"], trim["duration_ms"], out_w, out_h)
+            pts = normalize_clip(src, out, info, trim["source_start_ms"], trim["duration_ms"], out_w, out_h,
+                                 on_frame=lambda i: frame_checkpoint(run, i))
         except MediaError as e:
             raise StageFailed(e.code, "The clip could not be decoded.") from e
         transform = {"kind": "cover", "src_w": info.display_w, "src_h": info.display_h, "out_w": out_w,

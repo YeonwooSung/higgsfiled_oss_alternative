@@ -224,3 +224,96 @@ def test_proxy_filmstrip_first_frame(tmp_path):
     assert Image.open(tmp_path / "strip.png").size == (12 * 160, 90)
     first_frame_png(work, tmp_path / "first.png")
     assert Image.open(tmp_path / "first.png").size == (1280, 720)
+
+
+def test_probe_and_normalize_report_progress_per_frame(tmp_path):
+    """Long decodes call ``on_frame`` with a running counter (the worker heartbeats from it)."""
+    src = FIX / "stomp_landscape.mp4"
+    probe_calls: list[int] = []
+    info = probe_source(src, on_frame=probe_calls.append)
+    assert probe_calls == list(range(info.frame_count))
+    calls: list[int] = []
+    normalize_clip(src, tmp_path / "w.mp4", info, 0, 2000, 640, 360, on_frame=calls.append)
+    assert calls == list(range(len(calls)))
+    assert len(calls) >= info.frame_count + 48  # the PTS pass plus every decoded frame up to the trim end
+
+
+def _capture_popen(monkeypatch):
+    import open_creative.media.video_ingest as vi
+
+    cmds: list[list[str]] = []
+    real = vi.subprocess.Popen
+
+    def spy(cmd, *a, **kw):
+        cmds.append(list(cmd))
+        return real(cmd, *a, **kw)
+
+    monkeypatch.setattr(vi.subprocess, "Popen", spy)
+    return cmds
+
+
+def _decode_cmd(cmds):
+    return next(c for c in cmds if Path(c[0]).name.startswith("ffmpeg") and c[-1] == "pipe:1")  # the source decoder
+
+
+@pytest.mark.parametrize("ts_offset", [0.0, 1.5])
+def test_late_trim_seeks_near_the_start_and_keeps_pts_selection(tmp_path, monkeypatch, ts_offset):
+    """A trim well past the start decodes from a keyframe-safe seek point; work frame i still shows the source frame
+    with the greatest PTS <= its absolute time (also for a stream whose first PTS is not 0)."""
+    meta = MANIFEST["frame_numbers"]
+    src = FIX / "frame_numbers.mp4"
+    if ts_offset:
+        src = tmp_path / "shifted.mp4"
+        _ffmpeg("-i", str(FIX / "frame_numbers.mp4"), "-c", "copy", "-output_ts_offset", str(ts_offset), str(src))
+    info = probe_source(src)
+    assert info.start_ms == round(ts_offset * 1000)
+    src_pts = [p + ts_offset * 1000 for p in meta["pts_ms"]]
+    start, dur = 3500, 2000
+    cmds = _capture_popen(monkeypatch)
+    work = tmp_path / "w.mp4"
+    pts = normalize_clip(src, work, info, start, dur, info.display_w, info.display_h)
+    dec = _decode_cmd(cmds)
+    assert "-ss" in dec and dec.index("-ss") < dec.index("-i")
+    seek_ms = float(dec[dec.index("-ss") + 1]) * 1000
+    assert info.start_ms < seek_ms <= info.start_ms + start - 2000
+    seen = 0
+    for i, f in enumerate(decode_frames(work)):
+        target = info.start_ms + start + i * 1000 / 24
+        k = bisect.bisect_right(src_pts, target + 1e-3) - 1
+        assert _read_code(f, meta["code_layout"]) == k, i
+        assert pts.source_pts_ms[i] == pytest.approx(src_pts[k], abs=1e-3)
+        seen += 1
+    assert seen == frame_index(dur)
+
+
+def test_early_trim_decodes_from_the_start(tmp_path, monkeypatch):
+    src = FIX / "stomp_landscape.mp4"
+    info = probe_source(src)
+    cmds = _capture_popen(monkeypatch)
+    normalize_clip(src, tmp_path / "w.mp4", info, 1000, 2000, 1280, 720)
+    assert "-ss" not in _decode_cmd(cmds)
+
+
+@pytest.mark.parametrize("out_size", [(640, 360), (720, 1280), (1280, 720)])
+def test_ffmpeg_side_scaling_matches_cover_fit(tmp_path, monkeypatch, out_size):
+    """Scaling happens in the decode pipeline (fixed numeric args); the result has cover_fit's geometry."""
+    from open_creative.media.video import cover_fit
+
+    src = FIX / "stomp_landscape.mp4"
+    info = probe_source(src)
+    cmds = _capture_popen(monkeypatch)
+    ow, oh = out_size
+    work = tmp_path / "w.mp4"
+    normalize_clip(src, work, info, 0, 1000, ow, oh)
+    dec = _decode_cmd(cmds)
+    if (ow, oh) == (info.display_w, info.display_h):
+        assert "-vf" not in dec
+    else:
+        vf = dec[dec.index("-vf") + 1]
+        assert vf.startswith("scale=") and "crop=" in vf
+    ref = [cover_fit(f, ow, oh) for _, f in zip(range(24), decode_frames(src))]
+    got = list(decode_frames(work))
+    assert len(got) == 24
+    for a, b in zip(got[::6], ref[::6]):
+        assert a.shape == b.shape == (oh, ow, 3)
+        assert float(np.abs(a.astype(np.int16) - b.astype(np.int16)).mean()) < 3.0
