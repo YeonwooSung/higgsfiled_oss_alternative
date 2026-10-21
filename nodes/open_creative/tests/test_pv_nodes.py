@@ -27,7 +27,8 @@ from open_creative.pocket_vfx.masks import build_prompts, read_masks_zip
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[3]
-PV_NODES = ("PVTrackAnchor", "PVSubjectMasks", "PVProceduralEffect", "PVTrackedComposite", "PVOutsideROIIntegrity")
+PV_NODES = ("PVTrackAnchor", "PVSubjectMasks", "PVProceduralEffect", "PVTrackedComposite", "PVOutsideROIIntegrity",
+            "PVPlateMatte")
 
 
 def test_vfx_masks_contract():
@@ -296,3 +297,13 @@ def test_sam2_model_folder_is_registered_inside_comfy(monkeypatch):
     monkeypatch.setitem(sys.modules, "folder_paths", folder_paths)
     comfy_nodes._register_sam2_folder()
     assert calls == [("sam2", "/comfy/models/sam2")]
+
+
+def test_pv_plate_matte_node():
+    from open_creative.comfy_nodes import PVPlateMatte
+
+    plate = np.zeros((4, 32, 48, 3), np.float32)
+    plate[:, 8:20, 10:30] = 0.9
+    rgb, alpha = PVPlateMatte().run(plate, 0.06, 0.04)
+    assert rgb.shape == (4, 32, 48, 3) and alpha.shape == (4, 32, 48)
+    assert alpha[:, 12, 20].min() > 0.99 and alpha[:, 0, 0].max() == 0.0

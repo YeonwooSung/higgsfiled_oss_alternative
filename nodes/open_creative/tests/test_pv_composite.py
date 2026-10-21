@@ -246,6 +246,7 @@ def test_subject_core_cover_empty_core():
     assert subject_core_cover(src, src, np.zeros((16, 16), bool)) == 0.0
 
 
+@pytest.mark.slow
 def test_full_frame_composite_speed():
     src, m = _source(11), _subject()
     effect = _layer(np.full((H, W), 0.3, np.float32))

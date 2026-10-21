@@ -26,6 +26,7 @@ from .pocket_vfx import masks as pv_masks
 from .pocket_vfx.composite import FrameInputs
 from .pocket_vfx.composite import composite_frame as pv_composite_frame
 from .pocket_vfx.integrity import IntegrityAccumulator, subject_core_cover
+from .pocket_vfx.matte import MatteConfig, matte_sequence
 from .pocket_vfx.presets import load_presets as load_pv_presets
 from .pocket_vfx.procedural import render_effect
 from .pocket_vfx.timeline import EffectWindow
@@ -659,11 +660,32 @@ class PVOutsideROIIntegrity:
         return (json.dumps({"integrity": acc.result(), "occlusion_qa": max(cover) if cover else None}),)
 
 
+class PVPlateMatte:
+    """Raw emissive plate frames (sRGB) -> linear premultiplied RGB (IMAGE) + alpha (MASK)."""
+
+    CATEGORY = PV_CATEGORY
+    FUNCTION = "run"
+    RETURN_TYPES = ("IMAGE", "MASK")
+    RETURN_NAMES = ("rgb_premult_linear", "alpha")
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+            "frames": ("IMAGE",),
+            "threshold": ("FLOAT", {"default": 0.06, "min": 0.0, "max": 1.0, "step": 0.005}),
+            "knee": ("FLOAT", {"default": 0.04, "min": 0.0, "max": 0.5, "step": 0.005}),
+        }}
+
+    def run(self, frames, threshold, knee):
+        pairs = list(matte_sequence(iter(_frames_u8(frames)), MatteConfig(float(threshold), float(knee))))
+        return (_out(np.stack([p[0] for p in pairs])), _out(np.stack([p[1] for p in pairs])))
+
+
 NODE_CLASS_MAPPINGS = {cls.__name__: cls for cls in
                        (PLProductMask, PLLockedProduct, PLBackgroundPrompt, PLCompositeSequence, PLCoreIntegrityCheck,
                         CSDepthToScene, CSCompileCameraPath, CSRenderGuides, CSPathDiagnostics,
                         CSGeneratedMotionReport, PVTrackAnchor, PVSubjectMasks, PVProceduralEffect,
-                        PVTrackedComposite, PVOutsideROIIntegrity)}
+                        PVTrackedComposite, PVOutsideROIIntegrity, PVPlateMatte)}
 NODE_DISPLAY_NAME_MAPPINGS = {
     "PLProductMask": "Product Lock · Product Mask",
     "PLLockedProduct": "Product Lock · Locked Product",
@@ -680,4 +702,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "PVProceduralEffect": "Pocket VFX · Procedural Effect",
     "PVTrackedComposite": "Pocket VFX · Tracked Composite",
     "PVOutsideROIIntegrity": "Pocket VFX · Outside-ROI Integrity",
+    "PVPlateMatte": "Pocket VFX · Plate Matte",
 }
