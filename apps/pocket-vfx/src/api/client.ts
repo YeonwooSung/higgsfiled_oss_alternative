@@ -14,6 +14,10 @@ export class PocketVfxClient extends ApiClient<PocketVfxConfig, PocketVfxProject
   presets() {
     return this.request<VfxPresetsResponse>("GET", "/pocket-vfx/presets");
   }
+  /** Config of a saved revision (e.g. the one a track job ran on). */
+  revision(projectId: string, revision: number) {
+    return this.request<{ revision: number; config: PocketVfxConfig; created_at: string }>("GET", `/projects/${projectId}/revisions/${revision}`);
+  }
   /** Pre-render checks of a saved revision (`POST /projects/{id}/vfx/validate`). */
   validate(projectId: string, revision: number) {
     return this.request<VfxValidateResponse>("POST", `/projects/${projectId}/vfx/validate`, { revision });

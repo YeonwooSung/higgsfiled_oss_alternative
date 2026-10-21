@@ -2,7 +2,7 @@
 
 import { TERMINAL_JOB_STATES, type Aspect, type Asset, type Job, type PocketVfxProject, type VfxCameraMotionStatus, type VfxTrim } from "@oc/contracts";
 import { Badge, Button, cx, Segmented } from "@oc/ui";
-import { Check, CircleAlert, Clapperboard, Loader2, Pause, Play, Volume2, VolumeX } from "lucide-react";
+import { Check, CircleAlert, Clapperboard, Loader2, Pause, Play, Volume2, VolumeX, Wand2 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "../api/client";
@@ -33,7 +33,7 @@ const sameSettings = (a: Settings, b: Settings) =>
  * silent clip). "Prepare clip" saves trim + aspect and runs `vfx.analyze` (no generation); its work clip is then
  * PATCHed into the config, and the prepared first frame + filmstrip are shown.
  */
-export function TrimScreen({ projectId }: { projectId: string }) {
+export function TrimScreen({ projectId, onContinue }: { projectId: string; onContinue?: () => void }) {
   const { t } = useI18n();
   const query = useProject(projectId);
   const project = query.data;
@@ -116,7 +116,8 @@ export function TrimScreen({ projectId }: { projectId: string }) {
   }
   const sourceMs = clipDurationMs(clip) ?? 0;
   if (sourceMs < 1000) return shell(<Message icon={<CircleAlert className="h-6 w-6 text-danger" aria-hidden />} title={t("rejectedTitle")} hint={t("clipTooShort")} action />);
-  return shell(<TrimEditor project={project} clip={clip} sourceMs={sourceMs} analyze={analyze} save={save} follow={follow} linkError={linkError} />);
+  return shell(<TrimEditor project={project} clip={clip} sourceMs={sourceMs} analyze={analyze} save={save} follow={follow} linkError={linkError}
+    onContinue={onContinue} />);
 }
 
 /** Refetches (1.5 s apart) while a ready clip still lacks its preview / filmstrip. */
@@ -171,7 +172,7 @@ function Steps() {
   );
 }
 
-function TrimEditor({ project, clip, sourceMs, analyze, save, follow, linkError }: {
+function TrimEditor({ project, clip, sourceMs, analyze, save, follow, linkError, onContinue }: {
   project: PocketVfxProject;
   clip: Asset;
   sourceMs: number;
@@ -179,6 +180,7 @@ function TrimEditor({ project, clip, sourceMs, analyze, save, follow, linkError 
   save: ReturnType<typeof useConfigSaver>["save"];
   follow: (job: Job) => void;
   linkError: string | null;
+  onContinue?: () => void;
 }) {
   const { t } = useI18n();
   const config = project.config;
@@ -346,7 +348,7 @@ function TrimEditor({ project, clip, sourceMs, analyze, save, follow, linkError 
         <div className="mt-auto flex flex-col gap-3 border-t border-border pt-4" data-region="prepare">
           {work && dirty && <p className="flex gap-2 text-xs text-warning"><CircleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />{t("settingsChanged")}</p>}
           {running && <AnalyzeProgress job={analyze} />}
-          {prepared ? <PreparedSummary project={project} work={work!} /> : (
+          {prepared ? <PreparedSummary project={project} work={work!} onContinue={onContinue} /> : (
             <Button variant="primary" onClick={() => void prepare()} disabled={running} className="w-full"
               icon={running ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Clapperboard className="h-4 w-4" aria-hidden />}>
               {running ? t("preparing") : work || failed ? t("prepareAgain") : t("prepare")}
@@ -422,7 +424,7 @@ function motionOf(project: PocketVfxProject, work: Asset): VfxCameraMotionStatus
   return ((m?.meta as { status?: VfxCameraMotionStatus } | undefined)?.status) ?? null;
 }
 
-function PreparedSummary({ project, work }: { project: PocketVfxProject; work: Asset }) {
+function PreparedSummary({ project, work, onContinue }: { project: PocketVfxProject; work: Asset; onContinue?: () => void }) {
   const { t } = useI18n();
   const first = useAssetUrl(derivedAsset(project.assets, "first_frame", work.id));
   const motion = motionOf(project, work);
@@ -441,6 +443,7 @@ function PreparedSummary({ project, work }: { project: PocketVfxProject; work: A
         ? <span><Badge tone="success" icon={<Check className="h-3 w-3" aria-hidden />}>{t("camera_fixed")}</Badge></span>
         : <p className="flex gap-2 text-xs text-warning"><CircleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />{t(`camera_${motion}`)}</p>)}
       <p className="text-xs text-muted">{t("nextStep")}</p>
+      {onContinue && <Button variant="primary" onClick={onContinue} className="w-full" icon={<Wand2 className="h-4 w-4" aria-hidden />}>{t("continueToEffect")}</Button>}
     </div>
   );
 }

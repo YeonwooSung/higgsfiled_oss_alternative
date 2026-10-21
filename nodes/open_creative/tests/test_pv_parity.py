@@ -59,5 +59,11 @@ def test_parity_fixture_covers_required_cases():
         before = [s for s in c["samples"] if s["frame"] < w[0]]
         assert before and all(s["glow"] is None and s["curve"] is None for s in before)
         assert any(s["curve"] is not None for s in c["samples"])
+    for c in data["envelopes"]:
+        start, peak, end = c["window"]
+        by = {s["frame"]: s for s in c["samples"]}
+        assert by[start - 1]["aura"] == by[end + 1]["aura"] == 0.0 and by[start - 1]["plate"] == 0.0
+        assert by[peak]["plate"] == 1.0  # the plate is at full strength on the peak frame
+    assert any(c["window"][1] < c["window"][2] for c in data["envelopes"])
     kinds = {c["kind"] for c in data["plate_indices"]}
     assert kinds == {"trim", "retime", "loop", "plate_length", "invalid"}

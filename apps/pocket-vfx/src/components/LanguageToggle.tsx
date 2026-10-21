@@ -9,7 +9,7 @@ export function LanguageToggle() {
     <button
       type="button"
       onClick={() => setLocale(locale === "en" ? "ko" : "en")}
-      className="inline-flex min-h-[44px] items-center gap-1 rounded-button px-2 text-[13px] text-muted hover:bg-app hover:text-ink md:min-h-8"
+      className="inline-flex min-h-[44px] items-center gap-1 whitespace-nowrap rounded-button px-2 text-[13px] text-muted hover:bg-app hover:text-ink md:min-h-8"
       aria-label={t("language")}
     >
       <Languages className="h-4 w-4" aria-hidden />

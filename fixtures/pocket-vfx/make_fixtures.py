@@ -29,7 +29,7 @@ presets/pocket-vfx/plates/manifest.json (sha256, seed, style, license).
 --sfx writes presets/pocket-vfx/sfx/{impact,aura,blink}_v1.wav (MIT, synthesized, 48 kHz mono 16-bit) and sets each
 preset's ``sfx.peak_offset_ms`` to the measured energy peak of its file (repo presets and the packaged mirror).
 --parity writes parity.v1.json: Python reference values the apps/pocket-vfx TS ports must reproduce (frame_index,
-frame_count, effect_window, timing_errors, the Impact Wave ring curve and anchor glow, plate_indices); checked by
+frame_count, effect_window, timing_errors, the Impact Wave ring curve and anchor glow, the Energy Aura + plate envelopes, plate_indices); checked by
 apps/pocket-vfx/tests/parity.test.ts and kept fresh by nodes/open_creative/tests/test_pv_parity.py.
 Fixed seeds and bitexact muxing -> byte-identical outputs on the same FFmpeg/x264 build.
 """
@@ -53,10 +53,11 @@ from open_creative.pocket_vfx.matte import PlateLengthError, loop_seam_ok, plate
 from open_creative.pocket_vfx.plate import (
     BUNDLED_FRAMES,
     BUNDLED_SIZES,
+    plate_envelope,
     procedural_plate,
 )
 from open_creative.pocket_vfx.presets import load_presets, presets_path
-from open_creative.pocket_vfx.procedural import impact_curve, impact_glow
+from open_creative.pocket_vfx.procedural import _aura_envelope, impact_curve, impact_glow
 from open_creative.pocket_vfx.timeline import (
     EffectWindow,
     effect_window,
@@ -455,6 +456,17 @@ def _impact_case(window, short, scale, intensity):
             "r_flash": flash[0], "tau": min(max((win.end - win.peak) / 4.0, 0.75), 3.0), "samples": samples}
 
 
+PARITY_ENVELOPES = [(34, 43, 82), (10, 10, 12), (20, 30, 30), (5, 9, 89), (0, 0, 0), (3, 4, 40)]
+
+
+def _envelope_case(window):
+    """Energy Aura envelope (``procedural._aura_envelope``) and plate envelope (``plate.plate_envelope``)."""
+    win = EffectWindow(*window)
+    return {"window": list(window),
+            "samples": [{"frame": f, "aura": _aura_envelope(win, f), "plate": plate_envelope(win, f)}
+                        for f in range(win.start - 2, win.end + 3)]}
+
+
 def _window(w: EffectWindow) -> list[int]:
     return [w.start, w.peak, w.end]
 
@@ -470,6 +482,7 @@ def parity_build() -> dict:
                           for e, d in effects],
         "timing_errors": [{"effect": e, "duration_ms": d, "errors": timing_errors(e, d)} for e, d in effects],
         "impact": [_impact_case(*c) for c in PARITY_IMPACT],
+        "envelopes": [_envelope_case(c) for c in PARITY_ENVELOPES],
         "plate_indices": [_plate_case(*c) for c in PARITY_PLATES],
     }
 

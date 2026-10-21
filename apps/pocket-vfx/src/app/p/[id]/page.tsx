@@ -1,6 +1,6 @@
-import { TrimScreen } from "../../../components/TrimScreen";
+import { ProjectScreen } from "../../../components/ProjectScreen";
 
 export default async function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  return <TrimScreen projectId={id} />;
+  return <ProjectScreen projectId={id} />;
 }
