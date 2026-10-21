@@ -1,5 +1,7 @@
 """Plate matte, retime and loop QA (Pocket VFX §7)."""
 
+from itertools import pairwise
+
 import numpy as np
 import pytest
 from open_creative.pocket_vfx.matte import (
@@ -106,7 +108,7 @@ def test_retime_49_into_40():
     assert retime_factor(49, 40) == pytest.approx(1.225)
     idx = retime_indices(49, 40)
     assert len(idx) == 40 and idx[0] == 0 and idx[-1] == 48
-    assert all(b >= a for a, b in zip(idx, idx[1:]))
+    assert all(b >= a for a, b in pairwise(idx))
 
 
 def test_retime_out_of_range_raises():
@@ -124,7 +126,7 @@ def test_plate_indices_rules():
     assert idx[0] == 0 and idx[-1] == 59 and len(idx) == 40
     assert plate_indices(40, 40) == list(range(40))
     idx = plate_indices(30, 50)  # P < W <= 2P: stretch
-    assert len(idx) == 50 and idx[-1] == 29 and all(b >= a for a, b in zip(idx, idx[1:]))
+    assert len(idx) == 50 and idx[-1] == 29 and all(b >= a for a, b in pairwise(idx))
     with pytest.raises(PlateLengthError):
         plate_indices(49, 120)
     with pytest.raises(PlateLengthError):
