@@ -34,7 +34,7 @@ function Playbar() {
         onClick={() => { const v = video(); if (v) v.paused ? void v.play() : v.pause(); }} />
       <input type="range" min={0} max={5} step={0.04} value={Math.min(5, state.t)} aria-label="timeline"
         onChange={(e) => { const v = video(); if (v) v.currentTime = Number(e.target.value); }}
-        className="h-1 w-40 accent-[#18794E] md:w-64" />
+        className="h-1 w-40 accent-accent md:w-64" />
       <span className="w-16 text-xs tabular-nums text-muted">{Math.min(5, state.t).toFixed(1)} / 5.0s</span>
     </div>
   );
@@ -48,7 +48,7 @@ function Thumb({ assetId, selected, onClick, label }: { assetId: string; selecte
       className={cx("relative h-[68px] w-12 shrink-0 overflow-hidden rounded-button border-2 bg-stage", selected ? "border-accent" : "border-transparent")}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       {url && <img src={url} alt={label} className="h-full w-full object-cover" />}
-      {selected && <span className="absolute bottom-0 inset-x-0 bg-accent text-[10px] text-white">{label}</span>}
+      {selected && <span className="absolute bottom-0 inset-x-0 bg-accent text-[10px] text-on-accent">{label}</span>}
     </button>
   );
 }

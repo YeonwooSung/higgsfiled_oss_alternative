@@ -166,7 +166,7 @@ export function Inspector({ only }: { only?: "scene" | "output" }) {
             onChange={(v) => update((c) => { c.lighting.background_brightness = v; })} format={pct} />
           <label className="flex items-center justify-between text-[13px]">
             {t("shadow")}
-            <input type="checkbox" checked={config.shadow.enabled} className="h-4 w-4 accent-[#18794E]"
+            <input type="checkbox" checked={config.shadow.enabled} className="h-4 w-4 accent-accent"
               onChange={(e) => update((c) => { c.shadow.enabled = e.target.checked; })} />
           </label>
           <SliderField label={t("shadowOpacity")} value={config.shadow.opacity} min={0} max={0.6} step={0.01} disabled={!config.shadow.enabled}

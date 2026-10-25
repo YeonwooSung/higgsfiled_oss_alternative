@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { en } from "../src/i18n/en";
-import { ko } from "../src/i18n/ko";
+import { en } from "../../src/features/product-lock/i18n/en";
+import { ko } from "../../src/features/product-lock/i18n/ko";
 
 describe("i18n", () => {
   it("Korean resources cover every English key", () => {

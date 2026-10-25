@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { outputSize, placeProduct, pyRound, visible } from "../src/model/geometry";
+import { outputSize, placeProduct, pyRound, visible } from "../../src/features/product-lock/model/geometry";
 
 describe("geometry parity with open_creative.product_lock.geometry", () => {
   it("uses Python's round-half-to-even", () => {

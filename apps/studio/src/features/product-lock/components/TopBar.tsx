@@ -28,7 +28,7 @@ export function TopBar() {
 
   return (
     <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-panel px-3 md:px-4">
-      <Link href="/" className="flex items-center gap-1.5 font-semibold" aria-label={t("appName")}>
+      <Link href="/product" className="flex items-center gap-1.5 font-semibold" aria-label={t("appName")}>
         <Lock className="h-4 w-4 text-accent" aria-hidden />
         <span className="hidden sm:inline">{t("appName")}</span>
       </Link>

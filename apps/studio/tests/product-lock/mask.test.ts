@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MaskBuffer, clampBrush, clipBox, coverage, stampLine } from "../src/model/mask";
+import { MaskBuffer, clampBrush, clipBox, coverage, stampLine } from "../../src/features/product-lock/model/mask";
 
 describe("mask editing", () => {
   it("brush size is clamped to 2..80 source px", () => {

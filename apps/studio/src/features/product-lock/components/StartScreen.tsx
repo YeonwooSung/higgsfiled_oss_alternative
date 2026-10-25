@@ -46,7 +46,7 @@ export function StartScreen() {
       await api.startSession();
       const project = await api.createProject(title.slice(0, 120) || "Untitled");
       await api.uploadAsset(project.id, "product", file, file.name);
-      router.push(`/p/${project.id}`);
+      router.push(`/product/p/${project.id}`);
     } catch (e) {
       setError(errorText(e, t));
       setBusy(null);
@@ -54,7 +54,7 @@ export function StartScreen() {
   };
 
   const trySample = async () => {
-    const blob = await fetch("/samples/can_lock_cola.png").then((r) => r.blob());
+    const blob = await fetch("/samples/product/can_lock_cola.png").then((r) => r.blob());
     await start(new File([blob], "can_lock_cola.png", { type: "image/png" }), "Lock Cola sample");
   };
 

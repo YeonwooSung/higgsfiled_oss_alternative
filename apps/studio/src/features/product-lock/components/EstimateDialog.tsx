@@ -14,7 +14,7 @@ export function EstimateDialog({ estimate, onConfirm, onClose }: {
   return (
     <Dialog.Root open={!!estimate} onOpenChange={(o) => !o && onClose()}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-black/30" />
+        <Dialog.Overlay className="fixed inset-0 bg-black/60" />
         <Dialog.Content className="fixed left-1/2 top-1/2 w-[min(420px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded-panel border border-border bg-panel p-5 shadow-lg">
           <Dialog.Title className="mb-2 text-[15px] font-semibold">{t("confirmTitle")}</Dialog.Title>
           {estimate && (

@@ -86,14 +86,14 @@ export function StageArea() {
                 options={[{ value: "fit", label: t("fit") }, { value: "1", label: t("zoom100") }, { value: "2", label: t("zoom200") }]} />
             </div>
             <label className="flex items-center gap-1.5 text-xs text-muted">
-              <input type="checkbox" checked={showCore} onChange={(e) => setShowCore(e.target.checked)} className="accent-[#18794E]" />
+              <input type="checkbox" checked={showCore} onChange={(e) => setShowCore(e.target.checked)} className="accent-accent" />
               {t("protectedLabel")}
             </label>
           </>
         )}
         {view === "mask" && (
           <label className="flex items-center gap-1.5 text-xs text-muted">
-            <input type="checkbox" checked={showGrid} onChange={toggleGrid} className="accent-[#18794E]" />
+            <input type="checkbox" checked={showGrid} onChange={toggleGrid} className="accent-accent" />
             {t("transparentGrid")}
           </label>
         )}
