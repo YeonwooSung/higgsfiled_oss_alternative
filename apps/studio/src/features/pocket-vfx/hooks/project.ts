@@ -4,27 +4,18 @@ import { TERMINAL_JOB_STATES, type Job, type PocketVfxConfig, type PocketVfxProj
 import { watchJob, type SourceLike } from "@oc/web-core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { editorProjectQuery, projectQueryKey } from "../../../shell/projectQuery";
 import { api, ApiError } from "../api/client";
 
-export const projectKey = (id: string) => ["project", id] as const;
+export const projectKey = projectQueryKey;
 
-/** The project (config, assets, recent jobs); a missing session cookie (401) starts a new anonymous session once. */
+/**
+ * The project (config, assets, recent jobs); a missing session cookie (401) starts a new anonymous session once.
+ * The editor store's autosaves do not write back here, so the cache is dropped when the project screen unmounts.
+ */
 export function useProject(projectId: string) {
-  return useQuery({
-    queryKey: projectKey(projectId),
-    queryFn: async () => {
-      try {
-        return await api.getProject(projectId);
-      } catch (e) {
-        if (e instanceof ApiError && e.status === 401) {
-          await api.startSession();
-          return api.getProject(projectId);
-        }
-        throw e;
-      }
-    },
-    staleTime: Infinity,
-  });
+  const qc = useQueryClient();
+  return useQuery(editorProjectQuery(api, projectId, qc));
 }
 
 export type SaveState = "idle" | "saving" | "error" | "conflict";

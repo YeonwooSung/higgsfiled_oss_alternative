@@ -1,8 +1,9 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { api, ApiError } from "../api/client";
+import { editorProjectQuery } from "../../../shell/projectQuery";
+import { api } from "../api/client";
 import { useI18n } from "../i18n";
 import { useEditor } from "../state/editorStore";
 import { BottomPanel } from "./BottomPanel";
@@ -24,21 +25,8 @@ export function Editor({ projectId }: { projectId: string }) {
   const load = useEditor((s) => s.load);
   const project = useEditor((s) => s.project);
   const [mobileTab, setMobileTab] = useState<MobileTab>("product");
-  const query = useQuery({
-    queryKey: ["project", projectId],
-    queryFn: async () => {
-      try {
-        return await api.getProject(projectId);
-      } catch (e) {
-        if (e instanceof ApiError && e.status === 401) {
-          await api.startSession();
-          return api.getProject(projectId);
-        }
-        throw e;
-      }
-    },
-    staleTime: Infinity,
-  });
+  const qc = useQueryClient();
+  const query = useQuery(editorProjectQuery(api, projectId, qc));
 
   useEffect(() => {
     if (query.data) load(query.data);

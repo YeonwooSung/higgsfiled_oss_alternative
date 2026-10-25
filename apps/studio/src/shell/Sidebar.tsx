@@ -1,7 +1,6 @@
 "use client";
 
 import { cx } from "@oc/ui";
-import { ApiClient } from "@oc/web-core";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import { useQuery } from "@tanstack/react-query";
@@ -10,11 +9,11 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { createContext, useContext, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { useShellI18n } from "./i18n";
+import { listProjectsOrEmpty } from "./projectQuery";
+import { shellApi } from "./shellApi";
 import { browserStorage, readCollapsed, writeCollapsed } from "./sidebarState";
 import { activeToolForPath, listableProjects, PROJECTS_QUERY_KEY, projectHref, TOOLS, type Tool } from "./tools";
 
-/** `listProjects` is tool-agnostic; the slug only matters for endpoints this client never calls. */
-const shellApi = new ApiClient("camera-sketch");
 const PROJECT_LIMIT = 50;
 
 /* ---------- mobile drawer state (the shell top bar's menu button opens it) ---------- */
@@ -80,7 +79,8 @@ function SidebarContent({ mode, onNavigate }: { mode: Mode; onNavigate?: () => v
   const active = activeToolForPath(pathname);
   const projects = useQuery({
     queryKey: PROJECTS_QUERY_KEY,
-    queryFn: () => shellApi.listProjects(PROJECT_LIMIT),
+    // A fresh visitor has no session yet (401): that is an empty list, not an error.
+    queryFn: () => listProjectsOrEmpty(shellApi, PROJECT_LIMIT),
     retry: 0,
   });
   const list = listableProjects(projects.data?.projects ?? []);

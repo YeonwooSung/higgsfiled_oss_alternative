@@ -2,10 +2,11 @@
 
 import type { CameraAnalyzeResult } from "@oc/contracts";
 import { cx, Segmented } from "@oc/ui";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
-import { api, ApiError } from "../api/client";
+import { editorProjectQuery } from "../../../shell/projectQuery";
+import { api } from "../api/client";
 import { depthToLink, latestJob, sceneToLink } from "../flow/scene";
 import { useAssetUrl } from "../hooks/assets";
 import { useIsDesktop } from "../hooks/media";
@@ -158,21 +159,8 @@ export function ProjectView({ projectId }: { projectId: string }) {
   useEffect(() => {
     if (tool === "target" && playheadMs !== 0) useEditor.getState().setTool("none");
   }, [tool, playheadMs]);
-  const query = useQuery({
-    queryKey: ["project", projectId],
-    queryFn: async () => {
-      try {
-        return await api.getProject(projectId);
-      } catch (e) {
-        if (e instanceof ApiError && e.status === 401) {
-          await api.startSession();
-          return api.getProject(projectId);
-        }
-        throw e;
-      }
-    },
-    staleTime: Infinity,
-  });
+  const qc = useQueryClient();
+  const query = useQuery(editorProjectQuery(api, projectId, qc));
 
   useEffect(() => {
     if (query.data) load(query.data);
