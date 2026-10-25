@@ -33,6 +33,7 @@ class Storage(Protocol):
     def read_url(self, key: str, ttl: int, mime: str | None = None, filename: str | None = None) -> str: ...
     def put_bytes(self, key: str, data: bytes, mime: str | None = None) -> None: ...
     def put_file(self, key: str, path: Path, mime: str | None = None) -> None: ...
+    def copy(self, src_key: str, dst_key: str, mime: str | None = None) -> None: ...
     def get_bytes(self, key: str) -> bytes: ...
     def iter_chunks(self, key: str, chunk_size: int = ...) -> Iterator[bytes]: ...
     def get_file(self, key: str, path: Path) -> Path: ...
@@ -114,6 +115,17 @@ class LocalStorage:
         p.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(path, p)
 
+    def copy(self, src_key: str, dst_key: str, mime: str | None = None) -> None:
+        src = self._path(src_key)
+        if not src.is_file():
+            raise FileNotFoundError(src_key)
+        tmp = self.begin_write(dst_key)
+        try:
+            shutil.copyfile(src, tmp)
+            self.commit_write(dst_key, tmp)
+        finally:
+            tmp.unlink(missing_ok=True)
+
     def get_bytes(self, key: str) -> bytes:
         return self._path(key).read_bytes()
 
@@ -193,6 +205,17 @@ class S3Storage:
 
     def put_file(self, key: str, path: Path, mime: str | None = None) -> None:
         self.s3.upload_file(str(path), self.bucket, key, ExtraArgs={"ContentType": mime} if mime else None)
+
+    def copy(self, src_key: str, dst_key: str, mime: str | None = None) -> None:
+        from botocore.exceptions import ClientError
+
+        try:
+            self.s3.copy_object(Bucket=self.bucket, Key=dst_key, CopySource={"Bucket": self.bucket, "Key": src_key},
+                                MetadataDirective="REPLACE", **({"ContentType": mime} if mime else {}))
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") in ("NoSuchKey", "404"):
+                raise FileNotFoundError(src_key) from e
+            raise
 
     def get_bytes(self, key: str) -> bytes:
         return self.s3.get_object(Bucket=self.bucket, Key=key)["Body"].read()

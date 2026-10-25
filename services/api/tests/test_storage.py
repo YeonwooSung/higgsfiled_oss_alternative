@@ -69,3 +69,36 @@ def test_concurrent_writes_to_one_key_use_separate_temp_files(tmp_path):
     s.commit_write("s/p/a/clip.mp4", b)
     assert s.get_bytes("s/p/a/clip.mp4") == b"second"
     assert sorted(p.name for p in (tmp_path / "s/p/a").iterdir()) == ["clip.mp4"]  # no temp file left behind
+
+
+def test_local_copy_is_byte_identical_and_independent(tmp_path):
+    s = LocalStorage(tmp_path, "secret-123")
+    s.put_bytes("s/p/a/out.mp4", b"abc")
+    s.copy("s/p/a/out.mp4", "s/q/b/product.mp4", "video/mp4")
+    assert s.get_bytes("s/q/b/product.mp4") == b"abc"
+    s.delete_prefix("s/p/a/out.mp4")
+    assert not s.exists("s/p/a/out.mp4") and s.get_bytes("s/q/b/product.mp4") == b"abc"
+    assert sorted(p.name for p in (tmp_path / "s/q/b").iterdir()) == ["product.mp4"]  # no temp file left behind
+
+
+def test_local_copy_missing_source_raises(tmp_path):
+    import pytest
+    s = LocalStorage(tmp_path, "secret-123")
+    with pytest.raises(FileNotFoundError):
+        s.copy("nope/x.png", "dst/y.png")
+    assert not s.exists("dst/y.png")
+
+
+def test_s3_copy_calls_copy_object():
+    from unittest.mock import MagicMock
+
+    s = S3Storage(bucket="b", endpoint_url="http://minio:9000", region="us-east-1",
+                  access_key="AKIAEXAMPLE", secret_key="secret")
+    s.s3 = MagicMock()
+    s.copy("s/p/a/out.mp4", "s/q/b/product.mp4", "video/mp4")
+    s.s3.copy_object.assert_called_once_with(Bucket="b", Key="s/q/b/product.mp4",
+                                             CopySource={"Bucket": "b", "Key": "s/p/a/out.mp4"},
+                                             MetadataDirective="REPLACE", ContentType="video/mp4")
+    s.s3.reset_mock()
+    s.copy("s/p/a/out.mp4", "s/q/b/other.bin")
+    assert "ContentType" not in s.s3.copy_object.call_args.kwargs
