@@ -1,13 +1,14 @@
 "use client";
 
 import { Button, UploadDrop } from "@oc/ui";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleAlert, ImagePlus, Info, Sparkles, Video } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { api } from "../api/client";
 import { fetchSample, startProjectWithScene } from "../flow/upload";
 import { SAMPLES, type SampleId } from "../flow/scene";
+import { PROJECTS_QUERY_KEY } from "../../../shell/tools";
 import { useI18n } from "../i18n";
 import { errorText } from "./errors";
 import { LanguageToggle } from "./LanguageToggle";
@@ -17,6 +18,7 @@ const ACCEPT = "image/png,image/jpeg,image/webp";
 export function StartScreen() {
   const { t } = useI18n();
   const router = useRouter();
+  const queryClient = useQueryClient();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Capabilities are fetched anonymously; used here only to warn when the backend is unreachable.
@@ -28,8 +30,11 @@ export function StartScreen() {
     try {
       const file = await load();
       const project = await startProjectWithScene(file, title);
+      void queryClient.invalidateQueries({ queryKey: PROJECTS_QUERY_KEY });
       router.push(`/camera/p/${project.id}`);
     } catch (e) {
+      // The project may exist even though a later step (upload, inspect) failed.
+      void queryClient.invalidateQueries({ queryKey: PROJECTS_QUERY_KEY });
       setError(errorText(e, t));
       setBusy(false);
     }

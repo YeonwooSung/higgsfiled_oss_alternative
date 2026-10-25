@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
-import { I18nProvider } from "../../features/product-lock/i18n";
-import "../../features/product-lock/product.css";
+import { I18nProvider } from "../../../features/product-lock/i18n";
+import "../../../features/product-lock/product.css";
 
 export default function ProductLayout({ children }: { children: ReactNode }) {
   return (

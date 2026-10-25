@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { I18nProvider } from "../../features/camera-sketch/i18n";
+import { I18nProvider } from "../../../features/camera-sketch/i18n";
 
 export default function CameraLayout({ children }: { children: ReactNode }) {
   return (

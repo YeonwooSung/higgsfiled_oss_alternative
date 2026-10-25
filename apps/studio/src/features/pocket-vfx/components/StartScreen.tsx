@@ -2,9 +2,11 @@
 
 import { Button, UploadDrop } from "@oc/ui";
 import { CircleAlert, Film, Info, Sparkles, VolumeX } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { ACCEPT, clipFileProblem, fetchSample, SAMPLES, startProjectWithClip, type SampleId } from "../flow/upload";
+import { PROJECTS_QUERY_KEY } from "../../../shell/tools";
 import { useI18n } from "../i18n";
 import { errorText } from "./errors";
 import { TopBar } from "./TopBar";
@@ -16,6 +18,7 @@ class ClipFileError extends Error {}
 export function StartScreen() {
   const { t } = useI18n();
   const router = useRouter();
+  const queryClient = useQueryClient();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -27,8 +30,11 @@ export function StartScreen() {
       const problem = clipFileProblem(file);
       if (problem) throw new ClipFileError(t(problem));
       const project = await startProjectWithClip(file, title);
+      void queryClient.invalidateQueries({ queryKey: PROJECTS_QUERY_KEY });
       router.push(`/vfx/p/${project.id}`);
     } catch (e) {
+      // The project may exist even though a later step (upload, inspect) failed.
+      void queryClient.invalidateQueries({ queryKey: PROJECTS_QUERY_KEY });
       setError(e instanceof ClipFileError ? e.message : errorText(e, t));
       setBusy(false);
     }

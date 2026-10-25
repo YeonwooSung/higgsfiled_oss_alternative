@@ -46,6 +46,17 @@ describe("ApiClient", () => {
     expect(fetcher.mock.calls[0][1]!.method).toBe("GET");
   });
 
+  it("lists the session's projects with an optional limit", async () => {
+    const projects = [{ id: "p", app_slug: "pocket-vfx", title: "t", created_at: "c", updated_at: "u" }];
+    const fetcher = vi.fn(async (_url: string, _init?: RequestInit) => json(200, { projects }));
+    const api = createApiClient("camera-sketch", fetcher);
+    expect(await api.listProjects(20)).toEqual({ projects });
+    await api.listProjects();
+    expect(fetcher.mock.calls[0][0]).toBe("/api/v1/projects?limit=20");
+    expect(fetcher.mock.calls[0][1]!.method).toBe("GET");
+    expect(fetcher.mock.calls[1][0]).toBe("/api/v1/projects");
+  });
+
   it("hashes bytes as lowercase hex sha256", async () => {
     const hex = await sha256Hex(new TextEncoder().encode("abc").buffer as ArrayBuffer);
     expect(hex).toBe("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { I18nProvider } from "../../features/pocket-vfx/i18n";
+import { I18nProvider } from "../../../features/pocket-vfx/i18n";
 
 export default function VfxLayout({ children }: { children: ReactNode }) {
   return (

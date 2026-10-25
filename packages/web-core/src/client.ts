@@ -7,6 +7,7 @@ import type {
   Estimate,
   Job,
   JobKind,
+  ProjectSummary,
   ShareSummary,
 } from "@oc/contracts";
 
@@ -67,6 +68,10 @@ export class ApiClient<C = unknown, P extends { config: C } = { config: C }> {
   }
   createProject(title: string) {
     return this.request<P>("POST", "/projects", { app_slug: this.appSlug, title });
+  }
+  /** The session's projects across every tool, newest first. */
+  listProjects(limit?: number) {
+    return this.request<{ projects: ProjectSummary[] }>("GET", `/projects${limit !== undefined ? `?limit=${limit}` : ""}`);
   }
   getProject(id: string) {
     return this.request<P>("GET", `/projects/${id}`);

@@ -2,11 +2,12 @@
 
 import type { Preset } from "@oc/contracts";
 import { Button, UploadDrop } from "@oc/ui";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ImagePlus, Lock, Sparkles } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { api } from "../api/client";
+import { PROJECTS_QUERY_KEY } from "../../../shell/tools";
 import { useI18n } from "../i18n";
 import { errorText } from "./errors";
 import { LanguageToggle } from "./LanguageToggle";
@@ -35,6 +36,7 @@ function PresetCard({ preset }: { preset: Preset }) {
 export function StartScreen() {
   const { t } = useI18n();
   const router = useRouter();
+  const queryClient = useQueryClient();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const presets = useQuery({ queryKey: ["presets"], queryFn: () => api.presets() });
@@ -45,6 +47,7 @@ export function StartScreen() {
       setBusy(t("uploading"));
       await api.startSession();
       const project = await api.createProject(title.slice(0, 120) || "Untitled");
+      void queryClient.invalidateQueries({ queryKey: PROJECTS_QUERY_KEY });
       await api.uploadAsset(project.id, "product", file, file.name);
       router.push(`/product/p/${project.id}`);
     } catch (e) {
