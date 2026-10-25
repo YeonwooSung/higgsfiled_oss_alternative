@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12" # matches infra/Dockerfile.python and requires-python >= 3.12
+  NODE_VERSION: "20" # matches infra/Dockerfile.web
+
+jobs:
+  python:
+    name: Python tests (${{ matrix.suite }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # The three uv workspace test roots run as parallel shards (non-slow tests, SQLite).
+        suite: [nodes/open_creative/tests, services/api/tests, services/worker/tests]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system packages (ffmpeg/ffprobe for video ingest, audio, export)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --locked
+      - run: uv run pytest -q ${{ matrix.suite }}
+
+  python-postgres:
+    name: Python tests (PostgreSQL)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45 # ~18 min locally; per-test drop/create of all tables makes it slower than SQLite
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: oc
+          POSTGRES_PASSWORD: oc
+          POSTGRES_DB: oc_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U oc -d oc_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      OC_TEST_DATABASE_URL: postgresql+psycopg://oc:oc@127.0.0.1:5432/oc_test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --locked
+      # Only the API and worker suites read OC_TEST_DATABASE_URL; they share one database
+      # (tables are dropped and recreated per test), so this job runs serially.
+      - run: uv run pytest -q services
+
+  web:
+    name: Web (typecheck, test, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4 # version comes from package.json "packageManager"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r typecheck
+      - run: pnpm -r test
+      - name: Build apps
+        run: |
+          pnpm --filter @oc/product-lock build
+          pnpm --filter @oc/camera-sketch build
+          pnpm --filter @oc/pocket-vfx build
