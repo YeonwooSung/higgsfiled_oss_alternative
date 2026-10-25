@@ -63,3 +63,24 @@ and helpers the tests use, with the values printed; the tests themselves assert 
 
 Not run: `docker build` of the `web-vfx` image and the full `docker compose up` stack; a manual browser walk-through of the UI;
 the PostgreSQL-backed test run (`OC_TEST_DATABASE_URL`); the Python half of the standalone export (`uv sync` in the exported tree).
+
+## Full stack walk-through (2026-10-25)
+
+`docker compose -f infra/docker-compose.yml up --build -d` (Docker 29; this builds the `web-vfx` image), `.env` from
+`.env.example` with a random signing secret and `OC_DEFAULT_PROFILE=mock_v1`, then a Playwright (Chromium) walk-through.
+Run twice: with the default local storage backend, and with `--profile s3` (MinIO, `OC_STORAGE_BACKEND=s3`).
+
+| Step | Result |
+|---|---|
+| Stack: `web-vfx` image builds and serves :3002; postgres healthy, `migrate` exits 0, api `GET /api/v1/capabilities` answers, worker claims jobs from Postgres (all jobs of the run `succeeded`) | PASS |
+| Upload `fixtures/pocket-vfx/stomp_landscape.mp4` (local) and the "Phone portrait · rotated" sample (s3; shown upright, 720x1280) -> Trim -> Prepare clip (vfx.analyze) | PASS |
+| Impact Wave: Select subject (click on the figure), Anchor at the feet, Track (subject masks + anchor track) | PASS |
+| Quick render -> "Render finished." -> Result tab: **Mock** + Quick badges, checks "footage unchanged (max error 0/255)", "subject's core is untouched", no mask warnings | PASS |
+| Downloads: MP4, Cover PNG, Recipe ZIP, Layers ZIP | PASS (Layers ZIP takes about 30 s on CPU) |
+| Create share link -> open `/s/<token>`: plays, labelled Quick + **Mock** | PASS |
+| S3: presigned PUT of the clip to MinIO; preview/proxy/mask/result videos load with Range GETs (206) cross-origin from `localhost:3002`; no console errors, no failed requests | PASS (after the compose/storage fixes listed in `camera-sketch-verification.md`) |
+
+Product Lock was walked the same way (upload -> transparency mask / Detect product -> background -> Render ad -> MP4,
+Cover PNG, Recipe ZIP -> share link): PASS, except its share page did not show the Mock badge; fixed on this branch.
+
+Still not run: real inference (Comfy/GPU), Blink Out with a clean plate and Generate effect plate, the manual eval sheet.
