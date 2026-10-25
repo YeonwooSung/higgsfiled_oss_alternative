@@ -6,3 +6,7 @@
   background-size: 16px 16px;
   background-position: 0 0, 0 8px, 8px -8px, -8px 0;
 }
+
+/* Text rendered directly on the light stage (no panel behind it) must be dark: the theme's light ink/muted
+   tokens are for dark surfaces. Controls (toolbars, segmented switches) sit on opaque panels instead. */
+.theme-product .stage-ink { color: #3F4640; } /* ~8:1 on #E9E8E3 */

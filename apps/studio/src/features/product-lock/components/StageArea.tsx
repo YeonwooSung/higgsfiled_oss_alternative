@@ -71,7 +71,7 @@ export function StageArea() {
 
   return (
     <div className="flex h-[62dvh] min-h-[320px] shrink-0 flex-col bg-stage md:h-auto md:min-h-0 md:flex-1 md:shrink">
-      <div className="flex flex-wrap items-center gap-2 border-b border-border bg-panel/70 px-3 py-2">
+      <div className="flex flex-wrap items-center gap-2 border-b border-border bg-panel px-3 py-2">
         <div className="w-full sm:w-60">
           <Segmented<View> label="view" value={view} onChange={setView} options={[
             { value: "compose", label: t("output") },
@@ -112,7 +112,7 @@ export function StageArea() {
             productImg ? (
               <MaskStage product={productImg} width={Math.max(100, size.w - pad)} height={Math.max(100, size.h - pad)}
                 protectedLabel={t("protectedLabel")} onClipped={() => setNotice(t("boxClipped"))} />
-            ) : <p className="text-muted">{t("inspecting")}</p>
+            ) : <p className="stage-ink">{t("inspecting")}</p>
           ) : (
             <div className="relative" style={{ width: outW * scale, height: outH * scale }}>
               {videoUrl && (

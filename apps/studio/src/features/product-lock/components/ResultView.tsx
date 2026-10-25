@@ -64,7 +64,7 @@ export function ResultView() {
     // Narrower: stacked, and the stage area scrolls.
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 lg:h-full lg:flex-row">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col items-center gap-3">
-        <div className="w-56 shrink-0"><Segmented label="compare" value={mode} onChange={setMode}
+        <div className="w-56 shrink-0 rounded-button bg-panel"><Segmented label="compare" value={mode} onChange={setMode}
           options={[{ value: "result", label: t("result") }, { value: "original", label: t("original") }]} /></div>
         <div className="flex h-[min(56dvh,560px)] w-full min-h-0 items-center justify-center lg:h-auto lg:flex-1">
           {mode === "result"
