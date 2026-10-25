@@ -1,11 +1,17 @@
-"""DB-lease job claiming: SELECT … FOR UPDATE SKIP LOCKED (PostgreSQL); SQLite ignores the hint."""
+"""DB-lease job claiming.
+
+PostgreSQL: SELECT … FOR UPDATE SKIP LOCKED hands concurrent workers different rows. SQLite ignores the
+hint, so the claim itself is a compare-and-set UPDATE keyed on the `attempts` value that was read (every
+claim bumps it): if another worker claimed the row in between, the UPDATE matches nothing and we pick again.
+"""
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.orm import Session as DbSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from oc_api.models import ACTIVE_JOB_STATES, Job
 
@@ -27,14 +33,21 @@ def claim_next(db: DbSession, worker_id: str, now: datetime) -> Job | None:
         if job is None:
             db.rollback()
             return None
-        if (job.attempts or 0) < MAX_ATTEMPTS:
-            break
-        _give_up(db, job, now)
-    job.lease_owner = worker_id
-    job.lease_expires_at = now + timedelta(seconds=LEASE_SECONDS)
-    job.attempts = (job.attempts or 0) + 1
-    db.commit()
-    return job
+        attempts = job.attempts or 0
+        unchanged = and_(Job.id == job.id, eligible, func.coalesce(Job.attempts, 0) == attempts)
+        if attempts >= MAX_ATTEMPTS:
+            _give_up(db, job, unchanged, now)
+            continue
+        res = db.execute(update(Job).where(unchanged)
+                         .values(lease_owner=worker_id, lease_expires_at=now + timedelta(seconds=LEASE_SECONDS),
+                                 attempts=attempts + 1)
+                         .execution_options(synchronize_session=False))
+        if res.rowcount != 1:  # another worker claimed it after our SELECT (SQLite only)
+            db.rollback()
+            continue
+        db.commit()
+        db.refresh(job)
+        return job
 
 
 def extend_lease(db: DbSession, job: Job, worker_id: str, now: datetime) -> bool:
@@ -46,12 +59,17 @@ def extend_lease(db: DbSession, job: Job, worker_id: str, now: datetime) -> bool
     return True
 
 
-def _give_up(db: DbSession, job: Job, now: datetime) -> None:
+def _give_up(db: DbSession, job: Job, unchanged: ColumnElement[bool], now: datetime) -> None:
     from oc_api.jobs_service import add_event
 
-    job.state, job.error_code = "failed", "worker_crashed"
-    job.error_message = "Processing stopped repeatedly and was not retried again."
-    job.lease_owner = job.lease_expires_at = None
-    job.finished_at = now
+    res = db.execute(update(Job).where(unchanged)
+                     .values(state="failed", error_code="worker_crashed",
+                             error_message="Processing stopped repeatedly and was not retried again.",
+                             lease_owner=None, lease_expires_at=None, finished_at=now)
+                     .execution_options(synchronize_session=False))
+    if res.rowcount != 1:  # another worker got to it first
+        db.rollback()
+        return
+    db.refresh(job)
     add_event(db, job, "state", {"state": "failed", "error": {"code": job.error_code}})
     db.commit()

@@ -1,3 +1,4 @@
+import threading
 from datetime import timedelta
 
 from sqlalchemy import select
@@ -50,6 +51,43 @@ def test_claim_takes_lease_and_skips_leased_jobs(db_factory, project):
         assert claim_next(db, "w2", now + timedelta(seconds=10)) is None
     with db_factory() as db:
         assert claim_next(db, "w2", now + timedelta(seconds=LEASE_SECONDS + 1)).lease_owner == "w2"
+
+
+def test_concurrent_claims_never_hand_out_the_same_job(db_factory, project):
+    """Two worker threads that both read the same eligible row must not both claim it (SQLite has no row locks)."""
+    jid = add_job(db_factory, project)
+    now = utcnow()
+    barrier = threading.Barrier(2, timeout=10)
+    results = {}
+
+    def worker(worker_id):
+        db = db_factory()
+        select_once = db.scalar
+        calls = []
+
+        def scalar(*args, **kwargs):
+            row = select_once(*args, **kwargs)
+            if not calls:
+                calls.append(1)
+                barrier.wait()  # both workers have picked their candidate before either writes
+            return row
+
+        db.scalar = scalar
+        try:
+            job = claim_next(db, worker_id, now)
+            results[worker_id] = job.id if job else None
+        finally:
+            db.close()
+
+    threads = [threading.Thread(target=worker, args=(w,)) for w in ("w1", "w2")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    claimed = [owner for owner, job_id in results.items() if job_id == jid]
+    assert len(claimed) == 1, results
+    job = load(db_factory, Job, jid)
+    assert job.lease_owner == claimed[0] and job.attempts == 1
 
 
 def test_terminal_jobs_are_never_claimed(db_factory, project):
