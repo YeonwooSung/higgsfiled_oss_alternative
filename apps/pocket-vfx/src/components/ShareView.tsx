@@ -11,7 +11,7 @@
  */
 import type { VfxRenderProfile } from "@oc/contracts";
 import { Button } from "@oc/ui";
-import { activeSharesFor, sharesQueryKey } from "@oc/web-core";
+import { shareRowsFor, sharesQueryKey } from "@oc/web-core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Copy, Link2, Sparkles, Trash2 } from "lucide-react";
 import { useState } from "react";
@@ -33,7 +33,6 @@ export function ShareLink({ assetId }: { assetId: string }) {
     queryFn: () => api.listShares(projectId!),
     enabled: !!projectId,
   });
-  const active = activeSharesFor(list.data, assetId);
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -51,13 +50,12 @@ export function ShareLink({ assetId }: { assetId: string }) {
       setBusy(false);
     }
   };
-  const origin = typeof location === "undefined" ? "" : location.origin;
+  const rows = shareRowsFor(list.data, assetId, urls, typeof location === "undefined" ? "" : location.origin);
   return (
     <section aria-labelledby="share-title" className="flex flex-col gap-2 text-xs" data-region="share">
       <h3 id="share-title" className="font-semibold uppercase tracking-wide text-muted">{t("shareTitle")}</h3>
-      {active.length > 0 ? (
-        active.map((share) => {
-          const full = urls[share.id] ? `${origin}${urls[share.id]}` : null;
+      {rows.length > 0 ? (
+        rows.map(({ share, url: full }) => {
           return (
             <div key={share.id} className="flex flex-col gap-2">
               <p className="text-muted">{t("shareActive", { date: new Date(share.expires_at).toLocaleDateString(locale) })}</p>

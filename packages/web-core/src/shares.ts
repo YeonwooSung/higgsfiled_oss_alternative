@@ -11,3 +11,26 @@ export const sharesQueryKey = (projectId: string) => ["shares", projectId] as co
 export function activeSharesFor(shares: readonly ShareSummary[] | undefined, outputAssetId: string, now = Date.now()): ShareSummary[] {
   return (shares ?? []).filter((s) => s.output_asset_id === outputAssetId && Date.parse(s.expires_at) > now);
 }
+
+export interface ShareRow {
+  share: ShareSummary;
+  /** Full public URL, or null when this link was not created by the current view (the server cannot rebuild it). */
+  url: string | null;
+}
+
+/**
+ * What a result view's share panel lists for one output: its active links, each paired with the full URL when this
+ * view created it (`createdUrls` maps share id → the relative `url` returned by `POST /projects/{id}/shares`).
+ */
+export function shareRowsFor(
+  shares: readonly ShareSummary[] | undefined,
+  outputAssetId: string,
+  createdUrls: Readonly<Record<string, string>>,
+  origin: string,
+  now = Date.now(),
+): ShareRow[] {
+  return activeSharesFor(shares, outputAssetId, now).map((share) => {
+    const path = createdUrls[share.id];
+    return { share, url: path ? `${origin}${path}` : null };
+  });
+}

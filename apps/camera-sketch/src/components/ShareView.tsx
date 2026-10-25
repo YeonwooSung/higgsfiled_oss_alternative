@@ -6,7 +6,7 @@
  * ("Path render" / "AI generated", never exact camera control) and Mock profile.
  */
 import { Badge, Button } from "@oc/ui";
-import { activeSharesFor, sharesQueryKey } from "@oc/web-core";
+import { shareRowsFor, sharesQueryKey } from "@oc/web-core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleAlert, Link2, Video } from "lucide-react";
 import { useState } from "react";
@@ -26,7 +26,6 @@ export function ShareLink({ assetId, label }: { assetId: string; label: string }
     queryFn: () => api.listShares(projectId!),
     enabled: !!projectId,
   });
-  const active = activeSharesFor(list.data, assetId);
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -43,14 +42,13 @@ export function ShareLink({ assetId, label }: { assetId: string; label: string }
       setBusy(false);
     }
   };
-  const origin = typeof location === "undefined" ? "" : location.origin;
+  const rows = shareRowsFor(list.data, assetId, urls, typeof location === "undefined" ? "" : location.origin);
   const shownError = error ?? (list.isError ? t("genericError") : null);
   return (
     <div className="space-y-2 text-xs" data-region="share">
       <h3 className="font-semibold uppercase tracking-wide text-muted">{t("shareLink")} · {label}</h3>
-      {active.length > 0 ? (
-        active.map((share) => {
-          const full = urls[share.id] ? `${origin}${urls[share.id]}` : null;
+      {rows.length > 0 ? (
+        rows.map(({ share, url: full }) => {
           return (
             <div key={share.id} className="space-y-2">
               {full ? (

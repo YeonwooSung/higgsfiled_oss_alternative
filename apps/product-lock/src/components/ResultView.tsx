@@ -3,7 +3,7 @@
 import type { Integrity } from "@oc/contracts";
 import { Badge, Button, Segmented } from "@oc/ui";
 import { useQuery } from "@tanstack/react-query";
-import { Download, Link2, ScanSearch, ShieldAlert, ShieldCheck } from "lucide-react";
+import { Download, ScanSearch, ShieldAlert, ShieldCheck } from "lucide-react";
 import { useState } from "react";
 import { api } from "../api/client";
 import { useAssetUrl } from "../hooks/assets";
@@ -11,6 +11,7 @@ import { useI18n } from "../i18n";
 import { assetById, useEditor } from "../state/editorStore";
 import { followJob, startJob } from "../state/jobs";
 import { errorText } from "./errors";
+import { ShareLink } from "./ShareView";
 
 function ProtectionBadge({ integrity }: { integrity: Integrity }) {
   const { t } = useI18n();
@@ -26,7 +27,6 @@ export function ResultView() {
   const job = selectedRenderJobId ? jobs[selectedRenderJobId] : undefined;
   const [mode, setMode] = useState<"result" | "original">("result");
   const [inspection, setInspection] = useState<string | null>(null);
-  const [share, setShare] = useState<{ id: string; url: string } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const integrity = useQuery({ queryKey: ["integrity", job?.id], queryFn: () => api.integrity(job!.id), enabled: !!job });
@@ -107,20 +107,8 @@ export function ResultView() {
           <Button size="sm" variant="secondary" disabled={!!busy} onClick={() => download("cover_png")}>{t("downloadCover")}</Button>
           <Button size="sm" variant="secondary" disabled={!!busy} onClick={() => download("recipe_zip")}>{t("downloadRecipe")}</Button>
         </div>
-        <div className="border-t border-border pt-3 text-xs">
-          {share ? (
-            <div className="space-y-2">
-              <p>{t("shareCreated")}</p>
-              <div className="flex gap-2">
-                <input readOnly value={`${location.origin}${share.url}`} className="flex-1 rounded-button border border-border px-2 py-1" />
-                <Button size="sm" onClick={() => navigator.clipboard.writeText(`${location.origin}${share.url}`)}>{t("copy")}</Button>
-              </div>
-              <Button size="sm" variant="danger" onClick={() => run("revoke", async () => { await api.revokeShare(share.id); setShare(null); })}>{t("revoke")}</Button>
-            </div>
-          ) : (
-            <Button size="sm" variant="ghost" icon={<Link2 className="h-4 w-4" />} disabled={!!busy || !video}
-              onClick={() => run("share", async () => setShare(await api.createShare(project.id, video!.id)))}>{t("share")}</Button>
-          )}
+        <div className="border-t border-border pt-3">
+          <ShareLink key={video?.id} assetId={video?.id} />
         </div>
         {error && <p role="alert" className="text-xs text-danger">{error}</p>}
       </aside>
