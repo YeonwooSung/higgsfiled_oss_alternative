@@ -23,10 +23,24 @@ export const TOOLS: readonly Tool[] = [
   { id: "vfx", slug: "pocket-vfx", href: "/vfx", labelKey: "toolVfx", blurbKey: "toolVfxBlurb", icon: Sparkles, accent: "255 154 82" },
 ];
 
+/** Lenient lookup for data from the backend, which may know tools this build does not. */
+export function findToolForSlug(slug: string): Tool | undefined {
+  return TOOLS.find((t) => t.slug === slug);
+}
+
+/** Strict lookup for typed callers; throws on a slug outside `AppSlug`. */
 export function toolForSlug(slug: AppSlug): Tool {
-  const tool = TOOLS.find((t) => t.slug === slug);
+  const tool = findToolForSlug(slug);
   if (!tool) throw new Error(`unknown app slug: ${slug}`);
   return tool;
+}
+
+/** Projects the sidebar can show, paired with their tool; unknown slugs are skipped, order kept. */
+export function listableProjects(projects: readonly ProjectSummary[]): { project: ProjectSummary; tool: Tool }[] {
+  return projects.flatMap((project) => {
+    const tool = findToolForSlug(project.app_slug);
+    return tool ? [{ project, tool }] : [];
+  });
 }
 
 export function projectHref(p: Pick<ProjectSummary, "id" | "app_slug">): string {

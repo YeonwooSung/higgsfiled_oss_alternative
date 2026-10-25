@@ -16,4 +16,6 @@ export const ko: Dict = {
   expandSidebar: "사이드바 펼치기",
   navigation: "메뉴",
   closeMenu: "메뉴 닫기",
+  projectsLoadFailed: "프로젝트를 불러오지 못했습니다",
+  retry: "다시 시도",
 };

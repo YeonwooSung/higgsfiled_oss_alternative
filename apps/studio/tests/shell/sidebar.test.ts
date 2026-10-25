@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import type { ProjectSummary } from "@oc/contracts";
 import { describe, expect, it, vi } from "vitest";
 import { COLLAPSED_KEY, readCollapsed, writeCollapsed } from "../../src/shell/sidebarState";
-import { activeToolForPath, projectHref, TOOLS, toolForSlug } from "../../src/shell/tools";
+import { activeToolForPath, findToolForSlug, listableProjects, projectHref, TOOLS, toolForSlug } from "../../src/shell/tools";
 
 const summary = (app_slug: ProjectSummary["app_slug"], id = "abc"): ProjectSummary => ({
   id, app_slug, title: "t", created_at: "2026-10-25T00:00:00Z", updated_at: "2026-10-25T00:00:00Z",
@@ -79,5 +79,20 @@ describe("activeToolForPath", () => {
     expect(activeToolForPath("/cameras")).toBeUndefined();
     expect(activeToolForPath("/s/tok")).toBeUndefined();
     expect(activeToolForPath(null)).toBeUndefined();
+  });
+});
+
+describe("unknown app slugs", () => {
+  it("findToolForSlug returns undefined instead of throwing", () => {
+    expect(findToolForSlug("camera-sketch")?.id).toBe("camera");
+    expect(() => findToolForSlug("future-tool")).not.toThrow();
+    expect(findToolForSlug("future-tool")).toBeUndefined();
+  });
+  it("listableProjects drops projects of unknown tools and keeps order", () => {
+    const unknown = { ...summary("camera-sketch", "x"), app_slug: "future-tool" } as unknown as ProjectSummary;
+    const list = [summary("pocket-vfx", "a"), unknown, summary("camera-sketch", "b")];
+    let out: ReturnType<typeof listableProjects> = [];
+    expect(() => { out = listableProjects(list); }).not.toThrow();
+    expect(out.map(({ project, tool }) => [project.id, tool.id])).toEqual([["a", "vfx"], ["b", "camera"]]);
   });
 });

@@ -5,13 +5,13 @@ import { ApiClient } from "@oc/web-core";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import { useQuery } from "@tanstack/react-query";
-import { PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
+import { CircleAlert, PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { createContext, useContext, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { useShellI18n } from "./i18n";
 import { browserStorage, readCollapsed, writeCollapsed } from "./sidebarState";
-import { activeToolForPath, PROJECTS_QUERY_KEY, projectHref, toolForSlug, TOOLS, type Tool } from "./tools";
+import { activeToolForPath, listableProjects, PROJECTS_QUERY_KEY, projectHref, TOOLS, type Tool } from "./tools";
 
 /** `listProjects` is tool-agnostic; the slug only matters for endpoints this client never calls. */
 const shellApi = new ApiClient("camera-sketch");
@@ -83,7 +83,7 @@ function SidebarContent({ mode, onNavigate }: { mode: Mode; onNavigate?: () => v
     queryFn: () => shellApi.listProjects(PROJECT_LIMIT),
     retry: 0,
   });
-  const list = projects.data?.projects ?? [];
+  const list = listableProjects(projects.data?.projects ?? []);
   const label = labelClass(mode);
   const rail = mode.kind === "rail";
 
@@ -128,16 +128,38 @@ function SidebarContent({ mode, onNavigate }: { mode: Mode; onNavigate?: () => v
           <span className="block px-4 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wide text-muted">{t("myProjects")}</span>
         </h2>
         <div className="scroll-panel min-h-0 flex-1 overflow-y-auto p-2 pt-1">
+          {projects.isError && (
+            // Visible in every mode (the icon stays when labels collapse) and announced via role="alert".
+            <div role="alert" className="mb-1">
+              <Tip mode={mode} label={`${t("projectsLoadFailed")} ${t("retry")}`}>
+                <button
+                  type="button"
+                  onClick={() => void projects.refetch()}
+                  disabled={projects.isFetching}
+                  aria-label={`${t("projectsLoadFailed")} ${t("retry")}`}
+                  className={cx(
+                    "flex min-h-[44px] w-full items-start gap-2 rounded-button px-2.5 py-1.5 text-left text-xs transition-colors duration-150 hover:bg-panel disabled:opacity-60 md:min-h-0",
+                    rail && (mode.collapsed ? "justify-center" : "justify-center lg:justify-start"),
+                  )}
+                >
+                  <CircleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-danger" aria-hidden />
+                  <span className={cx("min-w-0", label)}>
+                    <span className="block text-muted">{t("projectsLoadFailed")}</span>
+                    <span className="block font-medium text-accent underline underline-offset-2">{t("retry")}</span>
+                  </span>
+                </button>
+              </Tip>
+            </div>
+          )}
           {list.length === 0 ? (
-            !projects.isPending && (
+            !projects.isPending && !projects.isError && (
               <p className={label}>
                 <span className="block px-2 py-1 text-xs text-muted">{t("noProjects")}</span>
               </p>
             )
           ) : (
             <ul className="space-y-0.5">
-              {list.map((p) => {
-                const tool = toolForSlug(p.app_slug);
+              {list.map(({ project: p, tool }) => {
                 const href = projectHref(p);
                 const isActive = pathname === href;
                 const Icon = tool.icon;
@@ -154,7 +176,7 @@ function SidebarContent({ mode, onNavigate }: { mode: Mode; onNavigate?: () => v
                           isActive ? "bg-accent/10 text-ink" : "text-muted hover:bg-panel hover:text-ink",
                         )}
                       >
-                        <Icon className="h-3.5 w-3.5 shrink-0 text-accent" aria-label={t(tool.labelKey)} />
+                        <Icon className="h-3.5 w-3.5 shrink-0 text-accent" aria-hidden />
                         <span className={cx("min-w-0 truncate", label)}>{p.title}</span>
                       </Link>
                     </Tip>
@@ -220,6 +242,17 @@ export function SidebarDrawer() {
   const { open, setOpen } = useSidebarDrawer();
   const pathname = usePathname();
   useEffect(() => setOpen(false), [pathname, setOpen]);
+  // The drawer only exists below md; close it when the viewport grows so Radix's scroll lock is released.
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia("(min-width: 768px)");
+    const onChange = () => {
+      if (mq.matches) setOpen(false);
+    };
+    onChange();
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, [setOpen]);
 
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>

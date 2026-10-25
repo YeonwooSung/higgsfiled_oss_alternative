@@ -14,6 +14,8 @@ export const en = {
   expandSidebar: "Expand sidebar",
   navigation: "Navigation",
   closeMenu: "Close menu",
+  projectsLoadFailed: "Couldn't load projects",
+  retry: "Retry",
 };
 
 export type Dict = Record<keyof typeof en, string>;
