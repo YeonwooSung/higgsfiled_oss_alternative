@@ -15,6 +15,7 @@ import { shareRowsFor, sharesQueryKey } from "@oc/web-core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Copy, Link2, Sparkles, Trash2 } from "lucide-react";
 import { useState } from "react";
+import type { PublicShareMeta } from "../../../shell/pickShareView";
 import { api, ApiError } from "../api/client";
 import { useI18n } from "../i18n";
 import { profileBadgeOf } from "../model/results";
@@ -91,32 +92,10 @@ export function ShareLink({ assetId }: { assetId: string }) {
   );
 }
 
-/** `GET /public/shares/{token}/meta` (services/api/oc_api/routes/shares.py `share_meta`). */
-interface ShareMeta {
-  mime: string | null;
-  width: number | null;
-  height: number | null;
-  role: string;
-  mock: boolean;
-  render_profile?: VfxRenderProfile | null;
-  /** "bundled" | "generated" | "procedural" (render videos) */
-  plate_source?: string | null;
-  expires_at: string;
-}
-
-export function ShareView({ token }: { token: string }) {
+export function ShareView({ token, meta }: { token: string; meta: PublicShareMeta }) {
   const { t } = useI18n();
-  const meta = useQuery({
-    queryKey: ["share", token],
-    queryFn: async () => {
-      const r = await fetch(`/api/v1/public/shares/${encodeURIComponent(token)}/meta`);
-      if (!r.ok) throw new Error("gone");
-      return (await r.json()) as ShareMeta;
-    },
-    retry: false,
-  });
   const src = `/api/v1/public/shares/${encodeURIComponent(token)}`;
-  const m = meta.data;
+  const m = meta;
   const video = !!m?.mime?.startsWith("video/");
   const image = !!m?.mime && ["image/png", "image/jpeg", "image/webp"].includes(m.mime);
   // the render profile is on render videos only (a Quick render is never labelled generated)
@@ -124,7 +103,6 @@ export function ShareView({ token }: { token: string }) {
   return (
     <main className="mx-auto flex min-h-screen max-w-3xl flex-col items-center gap-4 px-4 py-8">
       <p className="flex items-center gap-2 font-semibold"><Sparkles className="h-4 w-4 text-accent" aria-hidden />{t("shareViewTitle")}</p>
-      {meta.isError && <p role="alert" className="text-muted">{t("shareGone")}</p>}
       {m && (
         <div className="flex flex-wrap items-center justify-center gap-2" data-region="share-badges">
           {profile && <ProfileBadge kind={profile} />}

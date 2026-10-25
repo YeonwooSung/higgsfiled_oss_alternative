@@ -10,6 +10,7 @@ import { shareRowsFor, sharesQueryKey } from "@oc/web-core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleAlert, Link2, Video } from "lucide-react";
 import { useState } from "react";
+import type { PublicShareMeta } from "../../../shell/pickShareView";
 import { api, ApiError } from "../api/client";
 import { useI18n } from "../i18n";
 import { useEditor } from "../state/editorStore";
@@ -82,35 +83,16 @@ export function ShareLink({ assetId, label }: { assetId: string; label: string }
   );
 }
 
-interface ShareMeta {
-  mime: string;
-  role?: string;
-  mode?: "geometry" | "cinematic" | null;
-  mock?: boolean;
-  width?: number | null;
-  height?: number | null;
-}
-
-export function ShareView({ token }: { token: string }) {
+export function ShareView({ token, meta }: { token: string; meta: PublicShareMeta }) {
   const { t } = useI18n();
-  const meta = useQuery({
-    queryKey: ["share", token],
-    queryFn: async () => {
-      const r = await fetch(`/api/v1/public/shares/${encodeURIComponent(token)}/meta`);
-      if (!r.ok) throw new Error("gone");
-      return (await r.json()) as ShareMeta;
-    },
-    retry: false,
-  });
   // The public route redirects to a signed read URL; on the S3 backend the video plays cross-origin from the
   // bucket. Bucket CORS requirements: README "Camera Sketch" > "S3 / MinIO: bucket CORS".
   const src = `/api/v1/public/shares/${encodeURIComponent(token)}`;
-  const m = meta.data;
+  const m = meta;
   const mode = m?.mode ?? (m?.role === "cinematic_video" ? "cinematic" : m?.role === "geometry_video" ? "geometry" : null);
   return (
     <main className="mx-auto flex min-h-screen max-w-3xl flex-col items-center gap-4 px-4 py-8">
       <p className="flex items-center gap-2 font-semibold"><Video className="h-4 w-4 text-accent" aria-hidden />{t("shareViewTitle")}</p>
-      {meta.isError && <p role="alert" className="text-muted">{t("shareGone")}</p>}
       {m && (
         <div className="flex flex-wrap items-center justify-center gap-2" data-region="share-badges">
           {mode && <ModeBadge mode={mode} />}
