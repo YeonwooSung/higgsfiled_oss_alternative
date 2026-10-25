@@ -70,3 +70,7 @@ and helpers the tests use, with the values printed; the tests themselves assert 
 
 Not run: `docker build` of the `web-vfx` image and the full `docker compose up` stack; a manual browser walk-through of the UI;
 the PostgreSQL-backed test run (`OC_TEST_DATABASE_URL`); the Python half of the standalone export (`uv sync` in the exported tree).
+
+Follow-up (2026-10-25, branch `chore/ci`): the PostgreSQL-backed run was done against a throwaway `postgres:16` container:
+`OC_TEST_DATABASE_URL=postgresql+psycopg://oc:oc@127.0.0.1:55432/oc_test uv run pytest services` gave 363 passed, 6 deselected
+(slow), 0 skipped (so `test_lease_postgres.py` ran), in 18 min; no fixes were needed. CI (`.github/workflows/ci.yml`) now runs it on every push/PR.
