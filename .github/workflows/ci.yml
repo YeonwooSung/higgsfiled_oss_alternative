@@ -94,5 +94,5 @@ jobs:
       - name: Build apps
         run: |
           pnpm --filter @oc/product-lock build
-          pnpm --filter @oc/camera-sketch build
           pnpm --filter @oc/pocket-vfx build
+          pnpm --filter @oc/studio build
