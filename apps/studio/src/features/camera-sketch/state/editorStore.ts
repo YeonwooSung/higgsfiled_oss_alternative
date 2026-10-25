@@ -176,7 +176,7 @@ export const useEditor = create<EditorState>((set, get) => {
       const handled = handledScenesOnLoad(project.assets, project.config);
       const handledSceneIds = get().project?.id === project.id ? [...new Set([...get().handledSceneIds, ...handled])] : handled;
       set({ project, handledSceneIds, config: clone(project.config), revision: project.current_revision, canUndo: false, canRedo: false,
-        saveState: "saved", jobs: { ...get().jobs, ...jobs }, serverCompile: null, compileError: null, lateralProposal: null,
+        saveState: "saved", jobs: get().project?.id === project.id ? { ...get().jobs, ...jobs } : jobs, serverCompile: null, compileError: null, lateralProposal: null,
         playing: false, playheadMs: get().project?.id === project.id ? get().playheadMs : 0 });
       scheduleCompile(project.id, project.current_revision, project.config);
     },

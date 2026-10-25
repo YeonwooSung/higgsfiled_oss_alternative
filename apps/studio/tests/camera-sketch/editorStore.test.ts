@@ -312,3 +312,14 @@ describe("coalesced edits", () => {
     expect(useEditor.getState().canUndo).toBe(false);
   });
 });
+
+describe("jobs belong to the loaded project", () => {
+  const job = (id: string) => ({ id, kind: "camera.guide", state: "succeeded", created_at: "2026-01-01T00:00:00Z" }) as unknown as CameraSketchProject["recent_jobs"][number];
+  it("opening another project drops the previous project's jobs; reloading the same project keeps them", () => {
+    useEditor.getState().load({ ...project(), id: "a", recent_jobs: [job("ja")] });
+    useEditor.getState().load({ ...project(), id: "a", recent_jobs: [] });
+    expect(Object.keys(useEditor.getState().jobs)).toEqual(["ja"]);
+    useEditor.getState().load({ ...project(), id: "b", recent_jobs: [job("jb")] });
+    expect(Object.keys(useEditor.getState().jobs)).toEqual(["jb"]);
+  });
+});

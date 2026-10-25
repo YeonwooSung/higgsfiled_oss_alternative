@@ -87,7 +87,7 @@ export const useEditor = create<EditorState>((set, get) => {
       });
       const jobs = Object.fromEntries(project.recent_jobs.map((j) => [j.id, j]));
       set({ project, config: clone(project.config), revision: project.current_revision, canUndo: false, canRedo: false,
-        saveState: "saved", jobs: { ...get().jobs, ...jobs } });
+        saveState: "saved", jobs: get().project?.id === project.id ? { ...get().jobs, ...jobs } : jobs });
     },
 
     refresh: async () => {
