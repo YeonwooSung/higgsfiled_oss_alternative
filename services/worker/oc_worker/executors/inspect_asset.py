@@ -53,6 +53,12 @@ _MESSAGES_VIDEO = {
 }
 
 
+def _with_handoff(asset, meta: dict) -> dict:
+    """The inspector replaces the meta; a hand-off input keeps its provenance (and upstream-mock flag)."""
+    handoff = (asset.meta_json or {}).get("handoff")
+    return {**meta, "handoff": handoff} if handoff is not None else meta
+
+
 def _product(run: JobRun, asset, data: bytes, suggest_mask: bool = True):
     img = normalize_image(data)
     normalized_key = asset.object_key.replace("-original", "")
@@ -61,9 +67,10 @@ def _product(run: JobRun, asset, data: bytes, suggest_mask: bool = True):
     normalized_key = normalized_key.rsplit(".", 1)[0] + ".png"
     png = to_png_bytes(img.rgb, img.alpha)
     run.ctx.storage.put_bytes(normalized_key, png, "image/png")
-    asset.meta_json = {"original_key": asset.object_key, "original_mime": img.mime,
-                       "original_sha256": hashlib.sha256(data).hexdigest(), "has_alpha": img.alpha is not None,
-                       "normalization": {"exif_orientation": "applied", "color": "sRGB", "metadata": "stripped"}}
+    asset.meta_json = _with_handoff(asset, {
+        "original_key": asset.object_key, "original_mime": img.mime,
+        "original_sha256": hashlib.sha256(data).hexdigest(), "has_alpha": img.alpha is not None,
+        "normalization": {"exif_orientation": "applied", "color": "sRGB", "metadata": "stripped"}})
     asset.object_key, asset.mime, asset.bytes = normalized_key, "image/png", len(png)
     asset.sha256 = hashlib.sha256(png).hexdigest()
     asset.width, asset.height = img.width, img.height
@@ -137,7 +144,8 @@ def _clip(run: JobRun, asset):
                                  meta={"fps": 24, "rotation_applied": info.rotation})
     strip_id = run.store_asset("clip_filmstrip", strip, "image/png", source_asset_id=asset.id,
                                meta={"frame_indices": indices})
-    asset.meta_json = {"source": asdict(info), "original_sha256": asset.sha256 or _sha256_file(src)}
+    asset.meta_json = _with_handoff(asset, {"source": asdict(info),
+                                            "original_sha256": asset.sha256 or _sha256_file(src)})
     asset.width, asset.height = info.display_w, info.display_h
     asset.duration_ms, asset.frame_count = info.duration_ms, info.frame_count
     asset.state = "ready"
