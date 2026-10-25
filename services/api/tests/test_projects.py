@@ -101,3 +101,12 @@ def test_list_projects_orders_by_last_revision_and_hides_deleted(app, session_cl
     assert [p["id"] for p in session_client.get("/api/v1/projects").json()["projects"]] == [a["id"], b["id"]]
     session_client.delete(f"/api/v1/projects/{b['id']}")
     assert [p["id"] for p in session_client.get("/api/v1/projects").json()["projects"]] == [a["id"]]
+
+
+def test_list_projects_without_session_is_empty_and_starts_none(client):
+    """A fresh visitor's sidebar: no session yet means no projects, not an error (and browsing creates no session)."""
+    r = client.get("/api/v1/projects")
+    assert r.status_code == 200 and r.json() == {"projects": []}
+    assert "set-cookie" not in r.headers
+    client.cookies.set("oc_session", "not-a-uuid")
+    assert client.get("/api/v1/projects").json() == {"projects": []}

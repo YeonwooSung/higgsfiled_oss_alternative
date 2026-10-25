@@ -30,7 +30,8 @@ def parse_uuid(value: str, what: str = "resource") -> uuid.UUID:
         raise ApiError(404, "not_found", f"{what} not found") from None
 
 
-def current_session(request: Request, db: DbSession = Depends(get_db)) -> SessionRow:
+def optional_session(request: Request, db: DbSession = Depends(get_db)) -> SessionRow | None:
+    """The caller's live session, or None (no cookie, unknown or expired)."""
     raw = request.cookies.get(SESSION_COOKIE)
     if raw:
         try:
@@ -39,7 +40,13 @@ def current_session(request: Request, db: DbSession = Depends(get_db)) -> Sessio
             row = None
         if row is not None and row.expires_at > utcnow():
             return row
-    raise ApiError(401, "session_required", "Start a session first.")
+    return None
+
+
+def current_session(session: SessionRow | None = Depends(optional_session)) -> SessionRow:
+    if session is None:
+        raise ApiError(401, "session_required", "Start a session first.")
+    return session
 
 
 def owned_project(project_id: str, db: DbSession, session: SessionRow) -> Project:

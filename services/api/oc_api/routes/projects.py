@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session as DbSession
 
 from ..apps import get_app
 from ..apps_registry import default_app_config, validate_config
-from ..deps import current_session, get_db, owned_project
+from ..deps import current_session, get_db, optional_session, owned_project
 from ..errors import ApiError
 from ..handoffs import project_handoff, project_upstream_mock
 from ..jobs_service import request_cancel
@@ -99,8 +99,13 @@ def create_project(body: ProjectCreate, request: Request, db: DbSession = Depend
 
 @router.get("/projects")
 def list_projects(request: Request, limit: int = Query(50, ge=1, le=100), db: DbSession = Depends(get_db),
-                  session: SessionRow = Depends(current_session)):
-    """The session's live projects, most recently revised first (powers the studio sidebar)."""
+                  session: SessionRow | None = Depends(optional_session)):
+    """The session's live projects, most recently revised first (powers the studio sidebar).
+
+    A visitor without a session simply has none yet: 200 with an empty list, and no session is started for browsing.
+    """
+    if session is None:
+        return {"projects": []}
     rows = db.execute(
         select(Project, ProjectRevision.created_at)
         .join(ProjectRevision, (ProjectRevision.project_id == Project.id)
