@@ -19,6 +19,7 @@ from pathlib import Path
 
 import numpy as np
 from oc_api.apps.pocket_vfx import MODULE as VFX_APP
+from oc_api.handoffs import handoff_readme_lines, project_handoff_meta, project_upstream_mock
 from oc_api.models import Job, JobStage, ProjectRevision
 from oc_api.settings import REPO_ROOT
 from open_creative.comfy.profiles import PROFILES
@@ -74,7 +75,8 @@ def _is_mock(render: Job, masks: dict | None) -> bool:
         profile is not None and profile.is_mock)
 
 
-def _readme(render: Job, cfg: dict, plan: dict, track_key: str | None, mock: bool) -> str:
+def _readme(render: Job, cfg: dict, plan: dict, track_key: str | None, mock: bool,
+            handoff: dict | None = None) -> str:
     res = render.result_json
     plate = plan["plate"]
     generated = res["render_profile"] == "generated"
@@ -85,7 +87,7 @@ def _readme(render: Job, cfg: dict, plan: dict, track_key: str | None, mock: boo
             if generated else
             "**Quick**: procedural effect + a bundled MIT-licensed plate. Nothing in this render is AI generated.")
     lines = [
-        "# Pocket VFX recipe\n", mock_line + mode + "\n",
+        "# Pocket VFX recipe\n", mock_line + handoff_readme_lines(handoff) + mode + "\n",
         "## This result\n",
         f"- Render job: `{render.id}`, project revision {render.input_revision}",
         (f"- Track job: `{plan['track_job_id']}`, track key `{track_key}`" if plan["track_job_id"] else
@@ -140,6 +142,8 @@ def _recipe(run: JobRun, render: Job) -> str:
     track_key = (track_job.result_json or {}).get("track_key") if track_job else None
     masks = plan["subject_masks"]
     mock = _is_mock(render, masks)
+    handoff = project_handoff_meta(run.db, run.project)
+    stored_mock = mock or project_upstream_mock(run.db, run.project)
 
     inputs = {"clip": _input_doc(run.asset(cfg["video_asset_id"])), "work_clip": _input_doc(run.asset(cfg["work_asset_id"]))}
     if plan["plate"] and plan["plate"]["asset_id"]:
@@ -166,9 +170,10 @@ def _recipe(run: JobRun, render: Job) -> str:
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr("README.md", _readme(render, cfg, plan, track_key, mock))
+        z.writestr("README.md", _readme(render, cfg, plan, track_key, mock, handoff))
         z.writestr("config.json", json.dumps({"revision": render.input_revision, "track_key": track_key,
-                                               "render_options": render.options_json, "config": cfg}, indent=2))
+                                               "render_options": render.options_json, "config": cfg,
+                                               "handoff": handoff}, indent=2))
         z.writestr("preset.json", json.dumps(preset, indent=2, ensure_ascii=False))
         if track_doc is not None:
             z.writestr("track.json", json.dumps({"track_key": track_key, **track_doc}, indent=2))
@@ -190,7 +195,7 @@ def _recipe(run: JobRun, render: Job) -> str:
     path.write_bytes(buf.getvalue())
     return run.store_asset("recipe", path, "application/zip", source_asset_id=_render_video_id(render),
                            meta={"revision": render.input_revision, "render_job_id": str(render.id),
-                                 "track_key": track_key, **({"mock": True} if mock else {})})
+                                 "track_key": track_key, **({"mock": True} if stored_mock else {})})
 
 
 # ---- layers ZIP ------------------------------------------------------------------------------------------

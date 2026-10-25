@@ -34,6 +34,26 @@ def _handoff_assets(db: DbSession, project: Project) -> list[Asset]:
     return [a for a in rows if isinstance((a.meta_json or {}).get("handoff"), dict)]
 
 
+APP_LABELS = {"product-lock": "Product Lock", "camera-sketch": "Camera Sketch", "pocket-vfx": "Pocket VFX"}
+
+
+def project_handoff_meta(db: DbSession, project: Project) -> dict | None:
+    """The stored hand-off record of the project's newest hand-off input (None if there is none)."""
+    assets = _handoff_assets(db, project)
+    return dict(assets[0].meta_json["handoff"]) if assets else None
+
+
+def handoff_readme_lines(handoff: dict | None) -> str:
+    """README text for a recipe of a hand-off project: the upstream Mock note plus the source app and project."""
+    if not handoff:
+        return ""
+    label = APP_LABELS.get(handoff.get("source_app"), handoff.get("source_app"))
+    mock = (f"**Mock** - the input was handed off from a Mock {label} result (stand-in output, not generative "
+            "output).\n\n" if handoff.get("mock") else "")
+    return (mock + f"- Started from a hand-off: {label} project `{handoff.get('source_project_id')}` "
+            f"(\"{handoff.get('source_title')}\").\n\n")
+
+
 def project_upstream_mock(db: DbSession, project: Project) -> bool:
     """True if any input of the project was handed off from a Mock result (the stored flag; never recomputed)."""
     return any(bool(a.meta_json["handoff"].get("mock")) for a in _handoff_assets(db, project))

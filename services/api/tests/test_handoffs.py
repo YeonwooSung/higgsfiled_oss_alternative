@@ -156,3 +156,36 @@ def test_handoff_marks_mock_from_source_profile(app, session_client, project):
     assert r.status_code == 201, r.text
     with app.state.db() as db:
         assert db.get(Asset, uuid.UUID(r.json()["asset_id"])).meta_json["handoff"]["mock"] is True
+
+
+def _mock_handoff_target_with_render(app, session_client, project):
+    """A pocket-vfx project started from a Mock render, holding its own non-mock render_video result."""
+    src, _ = finished_output(app, project, "render", profile="mock_v1")
+    out = hand_off(session_client, src, "pocket-vfx").json()
+    video, _ = finished_output(app, {"id": out["project_id"]}, "render_video", profile="open_weights_v1",
+                               kind="vfx.render")
+    return out, video
+
+
+def test_share_meta_has_app_slug_and_upstream_mock(app, session_client, project):
+    out, video = _mock_handoff_target_with_render(app, session_client, project)
+    r = session_client.post(f"/api/v1/projects/{out['project_id']}/shares", json={"output_asset_id": video})
+    assert r.status_code == 201, r.text
+    meta = session_client.get(f"/api/v1/public/shares/{r.json()['url'].rsplit('/', 1)[1]}/meta").json()
+    assert meta["app_slug"] == "pocket-vfx" and meta["mock"] is True
+
+
+def test_project_out_handoff_survives_source_delete(app, session_client, project):
+    out, _ = _mock_handoff_target_with_render(app, session_client, project)
+    got = session_client.get(f"/api/v1/projects/{out['project_id']}").json()
+    assert got["upstream_mock"] is True
+    assert got["handoff"] == {"source_app": "product-lock", "source_project_id": project["id"],
+                              "source_title": "Can ad", "source_exists": True, "mock": True}
+    assert session_client.delete(f"/api/v1/projects/{project['id']}").status_code == 202
+    got = session_client.get(f"/api/v1/projects/{out['project_id']}").json()
+    assert got["handoff"]["source_exists"] is False and got["upstream_mock"] is True
+
+
+def test_plain_project_has_no_handoff(session_client, project):
+    got = session_client.get(f"/api/v1/projects/{project['id']}").json()
+    assert got["upstream_mock"] is False and got["handoff"] is None

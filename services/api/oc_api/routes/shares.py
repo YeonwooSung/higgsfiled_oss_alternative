@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session as DbSession
 from ..db import utcnow
 from ..deps import current_session, get_db, owned_project, parse_uuid
 from ..errors import ApiError
+from ..handoffs import project_upstream_mock
 from ..models import Asset, Job, Project, Share
 from ..models import Session as SessionRow
 
@@ -99,9 +100,11 @@ def share_meta(token: str, db: DbSession = Depends(get_db)):
     job = db.get(Job, asset.job_id) if asset.job_id else None
     profile = PROFILES.get(job.model_profile) if job is not None else None
     # Mock = stand-in output in the asset itself, or made by a mock-profile job (e.g. a Quick render on mock masks)
-    mock = bool(meta.get("mock")) or bool(profile is not None and profile.is_mock)
+    project = db.get(Project, asset.project_id)
+    mock = (bool(meta.get("mock")) or bool(profile is not None and profile.is_mock)
+            or (project is not None and project_upstream_mock(db, project)))
     return {"mime": asset.mime, "width": asset.width, "height": asset.height, "role": asset.role,
-            "mode": meta.get("mode"), "mock": mock,
+            "mode": meta.get("mode"), "mock": mock, "app_slug": project.app_slug if project is not None else None,
             "render_profile": meta.get("render_profile"), "plate_source": meta.get("plate_source"),
             "exact_camera_control": False if meta.get("mode") == "cinematic" else None,
             "expires_at": share.expires_at.isoformat()}

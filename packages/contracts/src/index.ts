@@ -154,6 +154,22 @@ export interface Job<R = Record<string, unknown> | null> {
   stages?: { name: string; state: string; attempt: number; error_code: string | null }[];
 }
 
+export interface HandoffInfo {
+  source_app: AppSlug;
+  source_project_id: string;
+  source_title: string;
+  source_exists: boolean;
+  mock: boolean;
+}
+
+export interface ProjectSummary {
+  id: Uuid;
+  app_slug: AppSlug;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ProjectOf<S extends AppSlug, C> {
   id: Uuid;
   app_slug: S;
@@ -163,6 +179,8 @@ export interface ProjectOf<S extends AppSlug, C> {
   assets: Asset[];
   recent_jobs: Job[];
   created_at: string;
+  upstream_mock: boolean;
+  handoff: HandoffInfo | null;
 }
 export type Project = ProjectOf<"product-lock", ProductLockConfig>;
 export type CameraSketchProject = ProjectOf<"camera-sketch", CameraSketchConfig>;

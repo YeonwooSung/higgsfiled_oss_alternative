@@ -13,6 +13,7 @@ from ..apps import get_app
 from ..apps_registry import default_app_config, validate_config
 from ..deps import current_session, get_db, owned_project
 from ..errors import ApiError
+from ..handoffs import project_handoff, project_upstream_mock
 from ..jobs_service import request_cancel
 from ..db import utcnow
 from ..models import ACTIVE_JOB_STATES, Asset, CleanupTask, Job, JobStage, Project, ProjectRevision, Share
@@ -78,6 +79,8 @@ def project_out(db: DbSession, project: Project, request: Request) -> dict:
         "assets": [asset_out(request, a) for a in assets],
         "recent_jobs": [job_out(j) for j in jobs],
         "created_at": project.created_at.isoformat(),
+        "upstream_mock": project_upstream_mock(db, project),
+        "handoff": project_handoff(db, project),
     }
 
 

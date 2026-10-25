@@ -10,6 +10,7 @@ import uuid
 import zipfile
 from pathlib import Path
 
+from oc_api.handoffs import handoff_readme_lines, project_handoff_meta, project_upstream_mock
 from oc_api.models import Job, JobStage, ProjectRevision
 from oc_api.settings import REPO_ROOT
 from open_creative.comfy.profiles import get_profile
@@ -27,11 +28,11 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _readme(profile, revision: int, cfg: dict, integrity: dict) -> str:
+def _readme(profile, revision: int, cfg: dict, integrity: dict, handoff: dict | None = None) -> str:
     mock = "**Mock profile** — backgrounds were synthetic stand-ins, not generative output.\n\n" if profile.is_mock else ""
     verdict = "passed" if integrity.get("passed") else "did NOT pass"
     return (
-        f"# Product Lock recipe\n\n{mock}"
+        f"# Product Lock recipe\n\n{mock}{handoff_readme_lines(handoff)}"
         f"- Execution profile: {profile.label} (`{profile.id}`)\n"
         f"- Project revision: {revision}\n"
         f"- Preset: `{cfg['scene']['preset_id']}`, seed {cfg['seed']}, aspect {cfg['output']['aspect']}\n"
@@ -80,10 +81,12 @@ def _recipe(run: JobRun, render: Job) -> str:
             inputs[role] = {"sha256": a.sha256, "mime": a.mime, "width": a.width, "height": a.height,
                             "original_sha256": (a.meta_json or {}).get("original_sha256")}
 
+    handoff = project_handoff_meta(run.db, run.project)
+    upstream_mock = project_upstream_mock(run.db, run.project)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr("README.md", _readme(profile, render.input_revision, cfg, integrity))
-        z.writestr("config.json", json.dumps({"revision": render.input_revision, "config": cfg}, indent=2))
+        z.writestr("README.md", _readme(profile, render.input_revision, cfg, integrity, handoff))
+        z.writestr("config.json", json.dumps({"revision": render.input_revision, "config": cfg, "handoff": handoff}, indent=2))
         z.writestr("preset.json", json.dumps({**preset.public(), "prompt": preset.prompt,
                                                "negative": preset.negative, "video_prompt": preset.video_prompt},
                                               indent=2))
@@ -100,7 +103,7 @@ def _recipe(run: JobRun, render: Job) -> str:
     path = run.work_dir / "recipe.zip"
     path.write_bytes(buf.getvalue())
     return run.store_asset("recipe", path, "application/zip", source_asset_id=render.output_asset_ids[0],
-                           meta={"revision": render.input_revision})
+                           meta={"revision": render.input_revision, **({"mock": True} if upstream_mock else {})})
 
 
 def export(run: JobRun) -> tuple[list[str], dict]:

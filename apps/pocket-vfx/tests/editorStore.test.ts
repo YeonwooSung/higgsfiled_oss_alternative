@@ -21,7 +21,7 @@ const config = (): PocketVfxConfig => ({
   render_profile: "quick", model_profile: "mock_v1",
 });
 const project = (): PocketVfxProject => ({
-  id: "p", app_slug: "pocket-vfx", title: "t", current_revision: 3, config: config(), assets: [], recent_jobs: [], created_at: "x",
+  id: "p", app_slug: "pocket-vfx", title: "t", current_revision: 3, config: config(), assets: [], recent_jobs: [], created_at: "x", upstream_mock: false, handoff: null,
 });
 const s = () => useEditor.getState();
 const window = () => {

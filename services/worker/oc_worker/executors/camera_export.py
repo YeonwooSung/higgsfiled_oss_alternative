@@ -15,6 +15,7 @@ from pathlib import Path
 from sqlalchemy import select
 
 from oc_api.apps.camera_sketch import MODULE as CAMERA_APP
+from oc_api.handoffs import handoff_readme_lines, project_handoff_meta, project_upstream_mock
 from oc_api.models import Job, JobStage
 from oc_api.settings import REPO_ROOT
 from open_creative.comfy.profiles import PROFILES
@@ -84,7 +85,8 @@ def _is_mock(src: Job, guide: Job, depth_meta: dict) -> bool:
     return bool(depth_meta.get("mock")) or any(p is not None and p.is_mock for p in profiles)
 
 
-def _readme(src: Job, guide: Job, cfg: dict, path_doc: dict, inputs: dict, mock: bool) -> str:
+def _readme(src: Job, guide: Job, cfg: dict, path_doc: dict, inputs: dict, mock: bool,
+            handoff: dict | None = None) -> str:
     cinematic = src.kind == "camera.cinematic"
     profile = PROFILES.get(src.model_profile)
     compiled = path_doc["compiled"]
@@ -94,7 +96,7 @@ def _readme(src: Job, guide: Job, cfg: dict, path_doc: dict, inputs: dict, mock:
             f"**This export: Geometry — {GEOMETRY_LABEL} ({GEOMETRY_LABEL_KO}).**")
     gen = cfg["generation"]
     lines = [
-        "# Camera Sketch recipe\n", mock_line + this + "\n",
+        "# Camera Sketch recipe\n", mock_line + handoff_readme_lines(handoff) + this + "\n",
         "## Modes\n",
         (f"- Geometry = {GEOMETRY_LABEL} ({GEOMETRY_LABEL_KO}): a deterministic 2.5D render of the compiled camera "
          "path over the scene's relative depth. Same inputs, config and solver version give the same frames."),
@@ -152,10 +154,12 @@ def _recipe(run: JobRun, src: Job, guide: Job) -> str:
         if analyze is not None and analyze not in related:
             related.append(analyze)
     mock = _is_mock(src, guide, depth_meta)
+    handoff = project_handoff_meta(run.db, run.project)
+    stored_mock = mock or project_upstream_mock(run.db, run.project)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr("README.md", _readme(src, guide, cfg, path_doc, inputs, mock))
-        z.writestr("config.json", json.dumps({"revision": src.input_revision, "config": cfg}, indent=2))
+        z.writestr("README.md", _readme(src, guide, cfg, path_doc, inputs, mock, handoff))
+        z.writestr("config.json", json.dumps({"revision": src.input_revision, "config": cfg, "handoff": handoff}, indent=2))
         z.writestr("path.json", json.dumps(path_doc, indent=2))
         z.writestr("jobs.json", json.dumps([_job_doc(run, j) for j in related], indent=2))
         z.writestr("inputs.json", json.dumps(inputs, indent=2))
@@ -176,7 +180,7 @@ def _recipe(run: JobRun, src: Job, guide: Job) -> str:
     path.write_bytes(buf.getvalue())
     return run.store_asset("recipe", path, "application/zip", source_asset_id=src.output_asset_ids[0],
                            meta={"revision": src.input_revision, "source_job_id": str(src.id),
-                                 **({"mock": True} if mock else {})})
+                                 **({"mock": True} if stored_mock else {})})
 
 
 def camera_export(run: JobRun) -> tuple[list[str], dict]:

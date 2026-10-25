@@ -2,11 +2,12 @@
 
 import io
 import json
+import uuid
 import zipfile
 
 import numpy as np
 import pytest
-from oc_api.models import Job, JobStage
+from oc_api.models import Asset, Job, JobStage
 from oc_worker.executors.vfx_export import effect_rgba
 from open_creative.media.video import decode_frames
 from open_creative.pocket_vfx.color import linear_to_srgb, srgb_to_linear
@@ -285,3 +286,26 @@ def test_blink_exports_the_reveal_layer_and_credits_the_users_photo(proj):
         last = png(z, "reveal/0110.png")
         on = last[..., 3] == 255
         assert on.sum() > 5000 and np.array_equal(last[..., :3][on], plate[on])
+
+
+def test_recipe_carries_handoff_provenance_and_upstream_mock(proj):
+    proj.prepare("stomp_landscape.mp4")
+    src_id = uuid.uuid4()
+    handoff = {"source_app": "product-lock", "source_project_id": str(uuid.uuid4()), "source_asset_id": str(src_id),
+               "source_job_id": None, "source_sha256": "b" * 64, "source_title": "Can ad", "mock": True}
+    with proj.db_factory() as db:
+        db.add(Asset(id=src_id, project_id=proj.project.id, role="render", state="ready", object_key="x/y",
+                     mime="video/mp4", bytes=1))
+        db.flush()
+        clip = db.get(Asset, proj.cfg["video_asset_id"] and uuid.UUID(proj.cfg["video_asset_id"]))
+        clip.source_asset_id = src_id
+        clip.meta_json = {**(clip.meta_json or {}), "handoff": handoff}
+        db.commit()
+    proj.revise(subject_prompts=BODY_PROMPT)
+    track = proj.run("vfx.track")
+    render = proj.run("vfx.render", {"track_job_id": str(track.id), "render_profile": "quick"})
+    job = export(proj, render, "recipe_zip")
+    z = open_zip(proj, job)
+    assert json.loads(z.read("config.json"))["handoff"]["source_app"] == "product-lock"
+    readme = z.read("README.md").decode()
+    assert "Mock" in readme and "Product Lock" in readme and handoff["source_project_id"] in readme

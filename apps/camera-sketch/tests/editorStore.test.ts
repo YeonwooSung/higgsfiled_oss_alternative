@@ -11,7 +11,7 @@ const { useEditor, currentServerPath, renderGate, stopCompileLoop } = await impo
 const { sceneToLink } = await import("../src/flow/scene");
 
 const project = (over: Partial<CameraSketchConfig> = {}): CameraSketchProject => ({
-  id: "p", app_slug: "camera-sketch", title: "t", current_revision: 1, assets: [], recent_jobs: [], created_at: "x",
+  id: "p", app_slug: "camera-sketch", title: "t", current_revision: 1, assets: [], recent_jobs: [], created_at: "x", upstream_mock: false, handoff: null,
   config: {
     scene_asset_id: null, depth_asset_id: null, target: { u: 0.5, v: 0.5, depth_scale: 1 },
     path: { preset: "slide", sketch_space: "target_screen_position", sketch_points: [], lateral_ratio: 0.04, push_ratio: 0.06, arc_deg: 0, easing: "ease_in_out" },

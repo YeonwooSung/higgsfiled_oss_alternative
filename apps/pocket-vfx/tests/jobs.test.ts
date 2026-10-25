@@ -28,7 +28,7 @@ const job = (over: Partial<Job>): Job => ({
   created_at: "2026-10-21T10:00:00Z", finished_at: null, ...over,
 });
 const project = (jobs: Job[] = [], cfg = config()): PocketVfxProject => ({
-  id: "p", app_slug: "pocket-vfx", title: "t", current_revision: 3, config: cfg, assets: [], recent_jobs: jobs, created_at: "x",
+  id: "p", app_slug: "pocket-vfx", title: "t", current_revision: 3, config: cfg, assets: [], recent_jobs: jobs, created_at: "x", upstream_mock: false, handoff: null,
 });
 const valid: VfxValidateResponse = { valid: true, blocking_errors: [], warnings: [] };
 const s = () => useEditor.getState();
