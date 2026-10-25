@@ -1,5 +1,6 @@
 import uuid
 
+from conftest import new_client
 from fastapi.testclient import TestClient
 
 from oc_api.models import Asset
@@ -79,3 +80,24 @@ def test_config_cannot_reference_asset_of_another_project(app, session_client, p
     r = session_client.patch(f"/api/v1/projects/{project['id']}", json={"expected_revision": 1, "config": cfg})
     assert r.status_code == 422
     assert r.json()["error"]["code"] == "asset_not_found"
+
+
+def test_list_projects_is_session_scoped_and_newest_first(app, session_client):
+    a = session_client.post("/api/v1/projects", json={"app_slug": "camera-sketch", "title": "A"}).json()
+    b = session_client.post("/api/v1/projects", json={"app_slug": "pocket-vfx", "title": "B"}).json()
+    other = new_client(app); other.post("/api/v1/sessions")
+    other.post("/api/v1/projects", json={"app_slug": "product-lock", "title": "X"})
+    r = session_client.get("/api/v1/projects")
+    assert r.status_code == 200
+    rows = r.json()["projects"]
+    assert [p["id"] for p in rows] == [b["id"], a["id"]]
+    assert rows[0]["app_slug"] == "pocket-vfx" and set(rows[0]) == {"id", "app_slug", "title", "created_at", "updated_at"}
+
+
+def test_list_projects_orders_by_last_revision_and_hides_deleted(app, session_client):
+    a = session_client.post("/api/v1/projects", json={"app_slug": "camera-sketch", "title": "A"}).json()
+    b = session_client.post("/api/v1/projects", json={"app_slug": "camera-sketch", "title": "B"}).json()
+    session_client.patch(f"/api/v1/projects/{a['id']}", json={"expected_revision": 1, "config": a["config"]})
+    assert [p["id"] for p in session_client.get("/api/v1/projects").json()["projects"]] == [a["id"], b["id"]]
+    session_client.delete(f"/api/v1/projects/{b['id']}")
+    assert [p["id"] for p in session_client.get("/api/v1/projects").json()["projects"]] == [a["id"]]

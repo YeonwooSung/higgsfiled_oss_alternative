@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -92,6 +92,22 @@ def create_project(body: ProjectCreate, request: Request, db: DbSession = Depend
                            config_schema_version=config.schema_version))
     db.commit()
     return project_out(db, project, request)
+
+
+@router.get("/projects")
+def list_projects(request: Request, limit: int = Query(50, ge=1, le=100), db: DbSession = Depends(get_db),
+                  session: SessionRow = Depends(current_session)):
+    """The session's live projects, most recently revised first (powers the studio sidebar)."""
+    rows = db.execute(
+        select(Project, ProjectRevision.created_at)
+        .join(ProjectRevision, (ProjectRevision.project_id == Project.id)
+              & (ProjectRevision.revision == Project.current_revision))
+        .where(Project.session_id == session.id, Project.deleted_at.is_(None))
+        .order_by(ProjectRevision.created_at.desc(), Project.created_at.desc())
+        .limit(limit)).all()
+    return {"projects": [{"id": str(p.id), "app_slug": p.app_slug, "title": p.title,
+                          "created_at": p.created_at.isoformat(), "updated_at": updated.isoformat()}
+                         for p, updated in rows]}
 
 
 @router.get("/projects/{project_id}")
