@@ -126,11 +126,12 @@ const DERIVATIVE_POLLS = 20;
 const REJECT_KEYS = { reject_unsupported_codec: 1, reject_multiple_video_streams: 1, reject_too_large_dims: 1, reject_too_long: 1,
   reject_too_large: 1, reject_unsupported_format: 1 };
 
-function Shell({ project, status, children }: { project?: PocketVfxProject; status?: SaveState extends infer S ? Exclude<S, "idle"> : never; children: ReactNode }) {
+function Shell({ project, status, children }: { project?: PocketVfxProject; status?: Exclude<SaveState, "idle">; children: ReactNode }) {
+  const { t } = useI18n();
   const mock = useVfxMock(project?.config.model_profile, project?.upstream_mock);
   return (
     <div className="flex min-h-screen flex-col md:h-screen">
-      <TopBar title={project?.title} saveState={status} mock={mock} />
+      <TopBar title={project?.title} saveState={status} conflictText={t("conflict")} mock={mock} />
       {children}
     </div>
   );

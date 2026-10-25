@@ -11,9 +11,11 @@ import { useSidebarDrawer } from "./Sidebar";
 export type SaveState = "saved" | "saving" | "error" | "conflict";
 
 /** The one top bar for every tool: brand, title, save status, Mock badge, tool `actions`, language. */
-export function TopBar({ title, saveState, mock, actions, onMenu }: {
+export function TopBar({ title, saveState, conflictText, mock, actions, onMenu }: {
   title?: string;
   saveState?: SaveState;
+  /** Tool-specific wording for the conflict status, when the generic shell text would lose guidance. */
+  conflictText?: string;
   mock?: boolean;
   actions?: ReactNode;
   onMenu?: () => void;
@@ -24,7 +26,7 @@ export function TopBar({ title, saveState, mock, actions, onMenu }: {
     saved: <><Check className="h-3.5 w-3.5" aria-hidden />{t("saved")}</>,
     saving: <><Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />{t("saving")}</>,
     error: <><CircleAlert className="h-3.5 w-3.5 text-danger" aria-hidden />{t("saveFailed")}</>,
-    conflict: <><CircleAlert className="h-3.5 w-3.5 text-target" aria-hidden />{t("conflict")}</>,
+    conflict: <><CircleAlert className="h-3.5 w-3.5 text-target" aria-hidden />{conflictText ?? t("conflict")}</>,
   }[saveState];
 
   return (

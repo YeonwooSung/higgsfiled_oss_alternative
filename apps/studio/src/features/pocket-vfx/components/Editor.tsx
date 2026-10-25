@@ -14,8 +14,8 @@
 import type { Job, PocketVfxConfig, PocketVfxProject, TrackJson, VfxTrackResult } from "@oc/contracts";
 import { Button, cx } from "@oc/ui";
 import { useQuery } from "@tanstack/react-query";
-import { Brush, Check, CircleAlert, Crosshair, Download, Image as ImageIcon, Loader2, MousePointerClick, Redo2, Scissors, Undo2 } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Brush, Crosshair, Download, Image as ImageIcon, Loader2, MousePointerClick, Redo2, Scissors, Undo2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import { derivedAsset } from "../flow/clip";
 import { useAssetUrl } from "../hooks/assets";
@@ -243,7 +243,7 @@ function EditorBody({ project, config, desktop, onTrim, t }: {
 
   return (
     <div className="flex min-h-[100dvh] flex-col md:h-[100dvh] md:min-h-[640px]">
-      <TopBar title={project.title} saveState={saveState} mock={mock} actions={topActions} />
+      <TopBar title={project.title} saveState={saveState} conflictText={t("conflictEditor")} mock={mock} actions={topActions} />
       {desktop ? (
         <div className="grid min-h-0 flex-1 grid-cols-vfx-shell grid-rows-[minmax(0,1fr)_160px]">
           <aside data-region="left" aria-label={t("effects")} className="scroll-panel row-span-2 flex flex-col gap-5 border-r border-border bg-panel p-3">

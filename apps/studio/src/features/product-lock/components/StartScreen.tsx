@@ -3,7 +3,7 @@
 import type { Preset } from "@oc/contracts";
 import { Button, UploadDrop } from "@oc/ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ImagePlus, Lock, Sparkles } from "lucide-react";
+import { ImagePlus, Sparkles } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { api } from "../api/client";
@@ -65,33 +65,33 @@ export function StartScreen() {
     <div className="flex min-h-screen flex-col">
       <TopBar />
       <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-4 py-6 md:px-8">
-      <div className="grid gap-10 md:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]">
-        <section>
-          <h1 className="mb-2">{t("tagline")}</h1>
-          <p className="mb-6 text-muted">{t("uploadHint")}</p>
-          <UploadDrop accept={ACCEPT} disabled={!!busy} onFile={(f) => start(f, f.name.replace(/\.[^.]+$/, ""))}>
-            <ImagePlus className="h-8 w-8 text-accent" aria-hidden />
-            <span className="text-[15px] font-medium">{busy ?? t("uploadProduct")}</span>
-            <span className="text-xs text-muted">{t("noSpendOnUpload")}</span>
-          </UploadDrop>
-          <div className="mt-4 flex items-center gap-3">
-            <Button variant="secondary" icon={<Sparkles className="h-4 w-4" />} onClick={trySample} disabled={!!busy}>
-              {t("trySample")}
-            </Button>
-          </div>
-          {error && <p role="alert" className="mt-4 rounded-button border border-red-200 bg-red-50 px-3 py-2 text-danger">{error}</p>}
-        </section>
-        <section aria-labelledby="gallery">
-          <div className="mb-3 flex items-center gap-2">
-            <h2 id="gallery" className="text-xs font-semibold uppercase tracking-wide text-muted">{t("presetGallery")}</h2>
-          </div>
-          <p className="mb-3 text-xs text-muted">{t("presetIllustration")}</p>
-          <div className="grid grid-cols-3 gap-3">
-            {(presets.data?.presets ?? []).map((p) => <PresetCard key={p.id} preset={p} />)}
-          </div>
-        </section>
-      </div>
-    </main>
+        <div className="grid gap-10 md:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]">
+          <section>
+            <h1 className="mb-2">{t("tagline")}</h1>
+            <p className="mb-6 text-muted">{t("uploadHint")}</p>
+            <UploadDrop accept={ACCEPT} disabled={!!busy} onFile={(f) => start(f, f.name.replace(/\.[^.]+$/, ""))}>
+              <ImagePlus className="h-8 w-8 text-accent" aria-hidden />
+              <span className="text-[15px] font-medium">{busy ?? t("uploadProduct")}</span>
+              <span className="text-xs text-muted">{t("noSpendOnUpload")}</span>
+            </UploadDrop>
+            <div className="mt-4 flex items-center gap-3">
+              <Button variant="secondary" icon={<Sparkles className="h-4 w-4" />} onClick={trySample} disabled={!!busy}>
+                {t("trySample")}
+              </Button>
+            </div>
+            {error && <p role="alert" className="mt-4 rounded-button border border-red-200 bg-red-50 px-3 py-2 text-danger">{error}</p>}
+          </section>
+          <section aria-labelledby="gallery">
+            <div className="mb-3 flex items-center gap-2">
+              <h2 id="gallery" className="text-xs font-semibold uppercase tracking-wide text-muted">{t("presetGallery")}</h2>
+            </div>
+            <p className="mb-3 text-xs text-muted">{t("presetIllustration")}</p>
+            <div className="grid grid-cols-3 gap-3">
+              {(presets.data?.presets ?? []).map((p) => <PresetCard key={p.id} preset={p} />)}
+            </div>
+          </section>
+        </div>
+      </main>
     </div>
   );
 }
