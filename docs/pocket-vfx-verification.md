@@ -27,8 +27,6 @@ in a browser or on a GPU in this task; the only timing test is `pv_composite::te
 
 ## Known limitations
 
-- **SQLite worker claim race**: with `python -m oc_worker.main --concurrency 2` on SQLite two worker threads can claim the
-  same job. Use PostgreSQL (the compose stack) or `--concurrency 1` for local development.
 - **Thresholds tuned on synthetic fixtures only**: track validity, mask diagnostics (`area_jump`, `holes`), matte QA
   (`halo_risk`, `flicker`), the Blink Out alignment check and the camera-motion classification were set against the committed
   procedural fixtures. Real footage may need retuning; the point-track numbers above are not a claim about real clips.
@@ -41,9 +39,18 @@ in a browser or on a GPU in this task; the only timing test is `pv_composite::te
   takes longer than the lease to decode (no output at all from ffmpeg/ffprobe) would still lapse it. The decoder now scales and
   crops in ffmpeg (same cover-fit geometry as `cover_fit`; pixel values differ slightly from the former OpenCV resize), and a
   trim more than 2 s into the clip seeks there first.
-- **Share links in Product Lock** still live in the result view's local state (Camera Sketch and Pocket VFX read
-  `GET /projects/{id}/shares`); the URL itself is shown only right after creation, since only the token hash is stored.
 - SAM masks are segmentation, not matting; Blink Out never restores a background (it uses the user's clean plate and refuses a mismatch).
+
+Resolved after this verification run:
+
+- **SQLite worker claim race** (fixed): a claim is now a compare-and-set `UPDATE … WHERE` the row is still eligible and
+  `attempts` is unchanged since the `SELECT`; a worker that loses the race sees `rowcount == 0` and picks again, so
+  `--concurrency 2` on SQLite never hands one job to two threads
+  (`worker/test_lease_and_stages::test_concurrent_claims_never_hand_out_the_same_job`). PostgreSQL still takes the row with
+  `FOR UPDATE SKIP LOCKED`, under which the conditional `UPDATE` always matches.
+- **Share links in Product Lock** (fixed): its result view now reads `GET /projects/{id}/shares` like Camera Sketch and Pocket
+  VFX (shared helper `shareRowsFor` in `@oc/web-core`), so a link stays listed and revocable after leaving the view; the URL
+  itself is still shown only right after creation, since only the token hash is stored.
 
 ## Commands run (final state of the branch)
 

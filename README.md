@@ -238,8 +238,6 @@ The bundled plates (`presets/pocket-vfx/plates/`) and SFX (`presets/pocket-vfx/s
 
 ## Known limitations
 
-- SQLite worker claim race: with `--concurrency 2` on SQLite two workers can claim the same job. Use PostgreSQL
-  (the compose stack) or `--concurrency 1` for local development.
 - The layers ZIP holds two RGBA PNG sequences (effect, foreground), one PNG per frame (120 frames each), so it can be large.
 - With `OC_STORAGE_BACKEND=s3` the browser reads signed URLs cross-origin; the bucket needs CORS for the Pocket VFX origin
   (see the CORS note under Camera Sketch, with `http://localhost:3002`).
