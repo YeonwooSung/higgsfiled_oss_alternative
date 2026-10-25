@@ -80,20 +80,25 @@ export const useEditor = create<EditorState>((set, get) => {
         onSaved: (rev) => set({ revision: rev, saveState: saver?.dirty ? "saving" : "saved" }),
         onConflict: async () => {
           const fresh = await api.getProject(project.id);
+          if (get().project?.id !== project.id) return; // another project opened meanwhile
           get().load(fresh);
           set({ saveState: "conflict" });
         },
         onError: () => set({ saveState: "error" }),
       });
+      const same = get().project?.id === project.id;
       const jobs = Object.fromEntries(project.recent_jobs.map((j) => [j.id, j]));
       set({ project, config: clone(project.config), revision: project.current_revision, canUndo: false, canRedo: false,
-        saveState: "saved", jobs: get().project?.id === project.id ? { ...get().jobs, ...jobs } : jobs });
+        saveState: "saved", jobs: same ? { ...get().jobs, ...jobs } : jobs,
+        // the previous project's render selection and result view mean nothing here
+        ...(same ? {} : { selectedRenderJobId: null, view: "compose" as const, tool: "select" as const }) });
     },
 
     refresh: async () => {
       const p = get().project;
       if (!p) return;
       const fresh = await api.getProject(p.id);
+      if (get().project?.id !== fresh.id) return; // another project opened meanwhile
       // Keep local edits; only take server-side lists (assets, jobs).
       set({ project: { ...fresh, config: get().config ?? fresh.config },
         jobs: { ...get().jobs, ...Object.fromEntries(fresh.recent_jobs.map((j) => [j.id, j])) } });

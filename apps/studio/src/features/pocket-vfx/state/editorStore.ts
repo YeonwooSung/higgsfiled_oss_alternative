@@ -149,7 +149,9 @@ export const useEditor = create<EditorState>((set, get) => {
         },
         onSaved: (rev) => set({ revision: rev, saveState: saver?.dirty ? "saving" : "saved" }),
         onConflict: async () => {
-          get().load(await api.getProject(project.id));
+          const fresh = await api.getProject(project.id);
+          if (get().project?.id !== project.id) return; // another project opened meanwhile
+          get().load(fresh);
           set({ saveState: "conflict" });
         },
         onError: () => set({ saveState: "error" }),

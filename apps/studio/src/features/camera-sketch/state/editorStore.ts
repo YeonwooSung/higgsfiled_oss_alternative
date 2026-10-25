@@ -167,6 +167,7 @@ export const useEditor = create<EditorState>((set, get) => {
         },
         onConflict: async () => {
           const fresh = await api.getProject(project.id);
+          if (get().project?.id !== project.id) return; // another project opened meanwhile
           get().load(fresh);
           set({ saveState: "conflict" });
         },
@@ -185,6 +186,7 @@ export const useEditor = create<EditorState>((set, get) => {
       const p = get().project;
       if (!p) return;
       const fresh = await api.getProject(p.id);
+      if (get().project?.id !== fresh.id) return; // another project opened meanwhile
       // Keep local edits; only take server-side lists (assets, jobs).
       set({ project: { ...fresh, config: get().config ?? fresh.config },
         jobs: { ...get().jobs, ...Object.fromEntries(fresh.recent_jobs.map((j) => [j.id, j])) } });

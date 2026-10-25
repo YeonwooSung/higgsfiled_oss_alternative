@@ -323,3 +323,33 @@ describe("jobs belong to the loaded project", () => {
     expect(Object.keys(useEditor.getState().jobs)).toEqual(["jb"]);
   });
 });
+
+describe("late responses for a project that is no longer open are dropped", () => {
+  const job = (id: string) => ({ id, kind: "camera.guide", state: "succeeded", created_at: "2026-01-01T00:00:00Z" }) as unknown as CameraSketchProject["recent_jobs"][number];
+
+  it("refresh() of project A resolving after B opened does not write A into B", async () => {
+    useEditor.getState().load({ ...project(), id: "a" });
+    const late = deferred<CameraSketchProject>();
+    api.getProject.mockReturnValueOnce(late.promise);
+    const pending = useEditor.getState().refresh();
+    useEditor.getState().load({ ...project(), id: "b", recent_jobs: [job("jb")] });
+    late.resolve({ ...project(), id: "a", recent_jobs: [job("ja")] });
+    await pending;
+    expect(useEditor.getState().project?.id).toBe("b");
+    expect(Object.keys(useEditor.getState().jobs)).toEqual(["jb"]);
+  });
+
+  it("a save conflict of project A resolving after B opened does not load A", async () => {
+    useEditor.getState().load({ ...project(), id: "a" });
+    api.patchProject.mockRejectedValueOnce(Object.assign(new Error("conflict"), { status: 409 }));
+    const late = deferred<CameraSketchProject>();
+    api.getProject.mockReturnValueOnce(late.promise);
+    useEditor.getState().update((c) => { c.target.u = 0.3; });
+    await useEditor.getState().flush();
+    useEditor.getState().load({ ...project(), id: "b" });
+    late.resolve({ ...project(), id: "a" });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(useEditor.getState().project?.id).toBe("b");
+    expect(useEditor.getState().saveState).toBe("saved");
+  });
+});
