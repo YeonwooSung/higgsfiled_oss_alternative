@@ -31,6 +31,16 @@ def test_s3_presigned_urls_are_short_lived():
     assert "X-Amz-Expires=300" in s.read_url("s/p/a/product.png", 300)
 
 
+def test_s3_presigned_urls_use_the_public_endpoint():
+    """In compose the API talks to http://minio:9000, but the browser opens the presigned URLs on localhost."""
+    s = S3Storage(bucket="b", endpoint_url="http://minio:9000", region="us-east-1",
+                  access_key="AKIAEXAMPLE", secret_key="secret", public_endpoint_url="http://localhost:9000")
+    url, _, _ = s.upload_url("s/p/a/product.png", ttl=600, mime="image/png", max_bytes=10)
+    assert url.startswith("http://localhost:9000/b/s/p/a/product.png?")
+    assert s.read_url("s/p/a/product.png", 300).startswith("http://localhost:9000/b/s/p/a/product.png?")
+    assert s.s3.meta.endpoint_url == "http://minio:9000"
+
+
 def test_local_read_url_supports_range_requests(app):
     """Result videos must be seekable in the browser: the local read route answers Range with 206."""
     from fastapi.testclient import TestClient

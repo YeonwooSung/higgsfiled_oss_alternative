@@ -13,6 +13,8 @@ x-python: &python
   volumes: [ "oc-data:/data" ]
   depends_on:
     migrate: { condition: service_completed_successfully }
+    # Only with `--profile s3`: the bucket exists before the API hands out upload URLs.
+    minio-init: { condition: service_completed_successfully, required: false }
 
 services:
   postgres:
@@ -51,15 +53,35 @@ services:
     ports: [ "3002:3002" ]
     depends_on: [ api ]
 
-  # S3-compatible storage. Enable with `--profile s3` and OC_STORAGE_BACKEND=s3; the browser must be able to
-  # reach OC_S3_ENDPOINT_URL, and the bucket needs CORS for GET/PUT from the web origin.
+  # S3-compatible storage. Enable with `--profile s3` and, in .env, OC_STORAGE_BACKEND=s3,
+  # OC_S3_ENDPOINT_URL=http://minio:9000 (API/worker) and OC_S3_PUBLIC_ENDPOINT_URL=http://localhost:9000 (the
+  # presigned URLs the browser opens). MinIO has no per-bucket CORS (PutBucketCors is not implemented); its
+  # server-wide allow-list below lets the three web origins PUT uploads and GET with Range cross-origin.
+  # Upstream minio/minio images are no longer published on Docker Hub; pgsty/minio is a maintained MinIO build.
   minio:
-    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
     profiles: [ "s3" ]
     command: ["server", "/data", "--console-address", ":9001"]
-    environment: { MINIO_ROOT_USER: "${AWS_ACCESS_KEY_ID:-minio}", MINIO_ROOT_PASSWORD: "${AWS_SECRET_ACCESS_KEY:-minio-secret}" }
+    environment:
+      MINIO_ROOT_USER: "${AWS_ACCESS_KEY_ID:-minio}"
+      MINIO_ROOT_PASSWORD: "${AWS_SECRET_ACCESS_KEY:-minio-secret}"
+      MINIO_API_CORS_ALLOW_ORIGIN: "http://localhost:3000,http://localhost:3001,http://localhost:3002"
     ports: [ "9000:9000", "9001:9001" ]
     volumes: [ "minio-data:/data" ]
+    healthcheck: { test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"], interval: 2s, retries: 30 }
+
+  # Creates the bucket once MinIO is up (idempotent).
+  minio-init:
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+    profiles: [ "s3" ]
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" && mc mb --ignore-existing "local/$$BUCKET"
+    environment:
+      MINIO_ROOT_USER: "${AWS_ACCESS_KEY_ID:-minio}"
+      MINIO_ROOT_PASSWORD: "${AWS_SECRET_ACCESS_KEY:-minio-secret}"
+      BUCKET: "${OC_S3_BUCKET:-open-creative}"
+    depends_on: { minio: { condition: service_healthy } }
 
 volumes:
   pg-data: {}

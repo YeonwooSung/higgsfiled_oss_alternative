@@ -160,10 +160,16 @@ With `OC_STORAGE_BACKEND=s3` the browser reads signed bucket URLs cross-origin. 
 needs a CORS rule allowing **GET with the `Range` header** (and exposing `Content-Range`, `Accept-Ranges`,
 `Content-Length`) on the bucket, for: preview depth/image fetches, the path overlay on the result page, and
 share-page playback. Uploads additionally need PUT (as for Product Lock). With the default local backend
-(files served through the API) no CORS setup is needed. Example (`mc` / S3 CORS JSON):
+(files served through the API) no CORS setup is needed.
+
+The compose MinIO (`--profile s3`) is set up for this: `minio-init` creates the bucket, and since MinIO does not
+implement per-bucket CORS (`PutBucketCors` is rejected) the server-wide `MINIO_API_CORS_ALLOW_ORIGIN` allows the three
+web origins (`localhost:3000`-`3002`). Set `OC_S3_ENDPOINT_URL=http://minio:9000` for the API/worker and
+`OC_S3_PUBLIC_ENDPOINT_URL=http://localhost:9000` so presigned URLs are signed for the host the browser opens.
+For AWS S3 or another store with bucket CORS, an example rule (S3 CORS JSON):
 
 ```json
-[{"AllowedOrigins": ["http://localhost:3001"], "AllowedMethods": ["GET", "HEAD", "PUT"],
+[{"AllowedOrigins": ["http://localhost:3000", "http://localhost:3001", "http://localhost:3002"], "AllowedMethods": ["GET", "HEAD", "PUT"],
   "AllowedHeaders": ["Range", "Content-Type"], "ExposeHeaders": ["Content-Range", "Accept-Ranges", "Content-Length"],
   "MaxAgeSeconds": 3000}]
 ```

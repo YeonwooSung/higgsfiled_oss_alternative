@@ -35,3 +35,30 @@ Performance targets (30 fps preview, <= 100 ms edit, compile <= 2 s) were not me
 
 Not run: the full `docker compose up` stack (postgres + migrate + api + worker + both webs) and a manual browser
 walk-through of the UI; the PostgreSQL-backed test run (`OC_TEST_DATABASE_URL`); the Python half of the standalone export (`uv sync` in the exported tree).
+
+## Full stack walk-through (2026-10-25)
+
+`docker compose -f infra/docker-compose.yml up --build -d` (Docker 29, `.env` from `.env.example` with a random
+signing secret, `OC_DEFAULT_PROFILE=mock_v1`), then a Playwright (Chromium) walk-through of each web app. Run twice:
+with the default local storage backend, and with `--profile s3` (MinIO, `OC_STORAGE_BACKEND=s3`).
+
+| Step | Result |
+|---|---|
+| Stack: postgres healthy, `migrate` exits 0, api answers `GET /api/v1/capabilities` (mock_v1 available, open_weights_v1 unavailable: no `COMFY_BASE_URL`), worker starts with 2 slots and claims jobs from Postgres (45 jobs across the three apps, all `succeeded`) | PASS |
+| Upload `fixtures/camera-sketch/room.png` (local) / `product.png` (s3) -> Analyze scene (camera.analyze) -> Depth ready, 3D preview | PASS |
+| Sketch framing drag -> server compile -> "The server approved this path"; hole warning + "Apply reduced motion" suggestion on the wide room sketch | PASS |
+| Render Geometry (warning confirm -> "Render anyway") -> Results view, Geometry video with **Mock** + "Path render" badges, measured holes, path overlay | PASS (about 90 s CPU render in the container for room.png) |
+| Downloads: MP4, Path JSON, Guides ZIP, Recipe ZIP | PASS (all four files downloaded) |
+| Create share link -> open `/s/<token>`: plays, labelled "Path render" + **Mock** | PASS |
+| S3: presigned PUT to MinIO, depth/scene image GETs, path overlay JSON fetch, result video Range GETs (206) cross-origin from `localhost:3001`; video seek works; no console errors, no failed requests | PASS (after the fixes below) |
+| Console errors / failed network requests during all runs | none |
+
+Fixed on branch `chore/compose-walkthrough`: `--profile s3` could not start (upstream `minio/minio` images are no longer
+pullable; nothing created the bucket; presigned URLs were signed for the container host `minio:9000`, which the browser
+cannot open). Now: pinned `pgsty/minio` image, a `minio-init` bucket step, `OC_S3_PUBLIC_ENDPOINT_URL` for presigning,
+and `MINIO_API_CORS_ALLOW_ORIGIN` for `localhost:3000`-`3002` (MinIO rejects per-bucket CORS). Preflights from the three
+origins get `Access-Control-Allow-Origin`; another origin gets none. Also fixed: the Product Lock share page did not show
+the Mock badge (Camera Sketch's did).
+
+Still not run: Generate Cinematic on a real deployment (needs Comfy/GPU), performance targets in a browser, the manual
+eval sheet.
