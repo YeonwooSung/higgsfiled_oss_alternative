@@ -15,6 +15,7 @@ import { setTrimDuration, moveTrim } from "../model/trim";
 import { errorText } from "./errors";
 import { TopBar } from "../../../shell/TopBar";
 import { useVfxMock } from "../hooks/capabilities";
+import { ProvenanceBadge } from "../../../shell/ProvenanceBadge";
 import { TrimBar } from "./TrimBar";
 
 type T = (key: keyof Dict, vars?: Record<string, string | number>) => string;
@@ -261,7 +262,11 @@ function TrimEditor({ project, clip, sourceMs, analyze, save, follow, linkError,
   return (
     <main className="grid min-h-0 flex-1 md:grid-cols-[minmax(0,1fr)_300px]">
       <section aria-label={t("trimTitle")} className="flex min-h-0 flex-col gap-4 overflow-y-auto bg-stage p-3 md:p-6">
-        <Steps />
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <Steps />
+          {/* the clip came from another tool's result */}
+          <ProvenanceBadge handoff={project.handoff} />
+        </div>
         <div className="flex min-h-[220px] flex-1 items-center justify-center">
           <div className="relative flex h-full max-h-[48vh] w-full items-center justify-center md:max-h-none">
             {previewUrl ? (

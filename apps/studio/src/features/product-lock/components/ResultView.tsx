@@ -10,6 +10,7 @@ import { useAssetUrl } from "../hooks/assets";
 import { useI18n } from "../i18n";
 import { assetById, useEditor } from "../state/editorStore";
 import { followJob, startJob } from "../state/jobs";
+import { NextSteps } from "../../../shell/NextSteps";
 import { errorText } from "./errors";
 import { ShareLink } from "./ShareView";
 
@@ -76,7 +77,7 @@ export function ResultView() {
       <aside className="scroll-panel w-full shrink-0 space-y-4 rounded-panel border border-border bg-panel p-4 lg:max-h-full lg:w-80">
         <div className="flex flex-wrap gap-2">
           {job.input_revision < revision && <Badge>{t("previousVersion")}</Badge>}
-          {job.model_profile === "mock_v1" && <Badge tone="mock" title={t("mockExplain")}>{t("mock")}</Badge>}
+          {(job.model_profile === "mock_v1" || project.upstream_mock) && <Badge tone="mock" title={t("mockExplain")}>{t("mock")}</Badge>}
         </div>
         {integrity.data && (
           <div className="space-y-2 text-xs">
@@ -110,6 +111,8 @@ export function ResultView() {
         <div className="border-t border-border pt-3">
           <ShareLink key={video?.id} assetId={video?.id} />
         </div>
+        {/* the render (role `render`) goes to Pocket VFX, its cover to Camera Sketch */}
+        {job.state === "succeeded" && <div className="border-t border-border pt-3"><NextSteps app="product-lock" assets={[video, cover]} /></div>}
         {error && <p role="alert" className="text-xs text-danger">{error}</p>}
       </aside>
     </div>

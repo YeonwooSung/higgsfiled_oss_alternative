@@ -37,6 +37,7 @@ import { Timeline } from "./Timeline";
 import { TrackPanel } from "./TrackPanel";
 import { TopBar } from "../../../shell/TopBar";
 import { useVfxMock } from "../hooks/capabilities";
+import { ProvenanceBadge } from "../../../shell/ProvenanceBadge";
 
 type MobileTab = "effect" | "track" | "adjust" | "result";
 
@@ -238,6 +239,7 @@ function EditorBody({ project, config, desktop, onTrim, t }: {
           {t(id === "edit" ? "viewEdit" : "viewResult")}
         </button>
       ))}
+      {project.handoff && <div className="ml-auto min-w-0"><ProvenanceBadge handoff={project.handoff} /></div>}
     </div>
   );
 
@@ -264,6 +266,7 @@ function EditorBody({ project, config, desktop, onTrim, t }: {
         </div>
       ) : (
         <>
+          {project.handoff && <div className="border-b border-border bg-panel px-3 py-1.5"><ProvenanceBadge handoff={project.handoff} /></div>}
           <main className={cx("flex h-[52dvh] min-h-[240px] flex-col", resultScreen && "hidden")}>{stage}</main>
           <div className={cx(resultScreen && "hidden")}>{timeline}</div>
           <nav aria-label={t("editorPanels")} className="border-t border-border bg-panel" data-region="bottom-sheet">

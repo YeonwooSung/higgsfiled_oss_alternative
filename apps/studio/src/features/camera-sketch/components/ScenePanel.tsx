@@ -10,13 +10,17 @@ import { useI18n } from "../i18n";
 import { en, type Dict } from "../i18n/en";
 import { useEditor } from "../state/editorStore";
 import { startJob } from "../state/jobs";
+import { ProvenanceBadge } from "../../../shell/ProvenanceBadge";
 import { errorText } from "./errors";
 
 export function jobLabel(job: Job, t: (k: keyof Dict) => string): string {
   return t(jobLabelKey(job.state, (k) => k in en) as keyof Dict);
 }
 
-/** Analyze scene: runs `camera.analyze` only (depth). No generation job is created from here. */
+/**
+ * Analyze scene: runs `camera.analyze` only (depth). No generation job is created from here. Shows where a handed-off
+ * scene came from.
+ */
 export function AnalyzePanel() {
   const { t } = useI18n();
   const config = useEditor((s) => s.config)!;
@@ -25,6 +29,7 @@ export function AnalyzePanel() {
   const latest = latestJob(jobs, "camera.analyze");
   const state = analysisState(config, latest);
   const saveCode = useEditor((s) => s.saveCode);
+  const handoff = useEditor((s) => s.project?.handoff);
 
   const run = async () => {
     setError(null);
@@ -42,6 +47,8 @@ export function AnalyzePanel() {
 
   return (
     <div className="space-y-3">
+      {/* the scene came from another tool's result */}
+      <ProvenanceBadge handoff={handoff} />
       <Button variant="primary" className="w-full" onClick={run} disabled={state === "no_scene" || state === "running"}
         icon={state === "running" ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <ScanSearch className="h-4 w-4" aria-hidden />}>
         {state === "running" ? t("analyzing") : state === "failed" ? t("retry") : t("analyzeScene")}

@@ -20,6 +20,7 @@ import { guideWarningCodes, isPreviousVersion, qaStatus, targetTrajectory } from
 import { reasonKey } from "../model/sketch";
 import { assetById, useEditor } from "../state/editorStore";
 import { ModeBadge } from "./badges";
+import { NextSteps } from "../../../shell/NextSteps";
 import { ExportMenu } from "./ExportMenu";
 import { ShareLink } from "./ShareView";
 import { SyncedPlayers, type PlayerSource } from "./SyncedPlayers";
@@ -28,6 +29,7 @@ type Tab = "source" | "geometry" | "depth" | "cinematic";
 const TABS: Tab[] = ["source", "geometry", "depth", "cinematic"];
 const TAB_KEY: Record<Tab, keyof Dict> = { source: "tabSource", geometry: "tabGeometry", depth: "tabDepth", cinematic: "tabCinematic" };
 
+const withLabel = (a: { id: string; role: string } | undefined, label: string) => (a ? { id: a.id, role: a.role, label } : undefined);
 const newest = (a: Job, b: Job) => (a.created_at < b.created_at ? 1 : -1);
 const pct = (x: number | null | undefined, d = 1) => (typeof x === "number" && Number.isFinite(x) ? (x * 100).toFixed(d) : "—");
 
@@ -106,7 +108,7 @@ export function ResultView({ mobile = false }: { mobile?: boolean }) {
   }
 
   const isMock = (j: Job | undefined, mock: boolean | undefined) =>
-    !!j && (!!mock || !!caps.data?.profiles.find((p) => p.id === j.model_profile)?.is_mock);
+    !!j && (!!mock || project.upstream_mock || !!caps.data?.profiles.find((p) => p.id === j.model_profile)?.is_mock);
   const geoMock = isMock(guide, gres.mock);
   const cineMock = isMock(cinematic, cres?.mock);
   const prev = (j: Job | undefined) => isPreviousVersion(j, revision) && (
@@ -219,6 +221,14 @@ export function ResultView({ mobile = false }: { mobile?: boolean }) {
             <ShareLink key={`c-${cres.cinematic_video_asset_id}`} assetId={cres.cinematic_video_asset_id} label={t("tabCinematic")} />
           </div>
         )}
+      </div>
+
+      {/* Hand the geometry or cinematic video to Pocket VFX */}
+      <div className="rounded-panel border border-border bg-panel p-3">
+        <NextSteps app="camera-sketch" assets={[
+          withLabel(assetById(project, gres.geometry_video_asset_id), t("tabGeometry")),
+          withLabel(cinematic ? assetById(project, cres?.cinematic_video_asset_id) : undefined, t("tabCinematic")),
+        ]} />
       </div>
     </div>
   );

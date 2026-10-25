@@ -116,6 +116,14 @@ export class ApiClient<C = unknown, P extends { config: C } = { config: C }> {
   revokeShare(id: string) {
     return this.request<void>("DELETE", `/shares/${id}`);
   }
+  /**
+   * Copy a finished result into a new project of `targetApp` (server allowlist). The new project's input is then
+   * inspected like an upload (`inspect_job_id`); the target editor links it itself.
+   */
+  handoff(sourceAssetId: string, targetApp: AppSlug, idempotencyKey: string) {
+    return this.request<{ project_id: string; asset_id: string; app_slug: AppSlug; inspect_job_id: string }>(
+      "POST", "/handoffs", { source_asset_id: sourceAssetId, target_app: targetApp }, { "Idempotency-Key": idempotencyKey });
+  }
 
   /** init → PUT bytes to the short-lived URL → complete (server verifies size and sha256). */
   async uploadAsset(projectId: string, role: AssetRole, blob: Blob, filename: string): Promise<{ asset: Asset; inspect_job_id: string }> {

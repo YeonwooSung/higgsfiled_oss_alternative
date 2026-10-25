@@ -24,6 +24,18 @@ export const en = {
   language: "Language",
   openMenu: "Open menu",
   retry: "Retry",
+  handoffNext: "Next step",
+  handoffToVfx: "Add an effect in Pocket VFX",
+  handoffToCamera: "Move the camera in Camera Sketch",
+  handoffWorking: "Opening…",
+  handoffFrom: "From {tool} result",
+  handoffNotReady: "This result isn't finished yet.",
+  handoffMissing: "This result is no longer available.",
+  handoffNotAllowed: "This result can't be used in that tool.",
+  handoffTooLarge: "This result is larger than that tool accepts.",
+  handoffFailed: "Couldn't open it in the next tool. Try again.",
+  demoChainHint: "Try all three: start in Product Lock, move its cover in Camera Sketch, then add an effect in Pocket VFX.",
+  demoChainLink: "Open Product Lock",
 };
 
 export type Dict = Record<keyof typeof en, string>;

@@ -57,6 +57,18 @@ describe("ApiClient", () => {
     expect(fetcher.mock.calls[1][0]).toBe("/api/v1/projects");
   });
 
+  it("hands a result off to another tool with an Idempotency-Key", async () => {
+    const out = { project_id: "p2", asset_id: "a2", app_slug: "pocket-vfx", inspect_job_id: "j2" };
+    const fetcher = vi.fn(async (_url: string, _init?: RequestInit) => json(201, out));
+    const api = createApiClient("product-lock", fetcher);
+    expect(await api.handoff("a1", "pocket-vfx", "key-h")).toEqual(out);
+    const [url, init] = fetcher.mock.calls[0];
+    expect(url).toBe("/api/v1/handoffs");
+    expect(init!.method).toBe("POST");
+    expect((init!.headers as Record<string, string>)["Idempotency-Key"]).toBe("key-h");
+    expect(JSON.parse(init!.body as string)).toEqual({ source_asset_id: "a1", target_app: "pocket-vfx" });
+  });
+
   it("hashes bytes as lowercase hex sha256", async () => {
     const hex = await sha256Hex(new TextEncoder().encode("abc").buffer as ArrayBuffer);
     expect(hex).toBe("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");

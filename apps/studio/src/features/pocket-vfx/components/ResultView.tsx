@@ -74,7 +74,8 @@ export function ResultView({ selectedId, onSelect }: { selectedId: string | null
   }
 
   const isMockProfile = (id: string) => !!caps.data?.profiles.find((p) => p.id === id)?.is_mock;
-  const mock = isMockResult(result, job.model_profile, isMockProfile);
+  // A render of a clip handed off from a Mock result is marked Mock too.
+  const mock = isMockResult(result, job.model_profile, isMockProfile) || project.upstream_mock;
   const badge = profileBadgeOf(result);
   const roi = roiQaView(result.roi_qa);
   const occ = occlusionView(result, renderConfig?.effect.layer_order);

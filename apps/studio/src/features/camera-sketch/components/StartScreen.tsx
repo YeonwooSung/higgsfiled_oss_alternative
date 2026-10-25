@@ -11,6 +11,7 @@ import { SAMPLES, type SampleId } from "../flow/scene";
 import { PROJECTS_QUERY_KEY } from "../../../shell/tools";
 import { useI18n } from "../i18n";
 import { errorText } from "./errors";
+import { DemoChainHint } from "../../../shell/NextSteps";
 import { TopBar } from "../../../shell/TopBar";
 
 const ACCEPT = "image/png,image/jpeg,image/webp";
@@ -88,6 +89,7 @@ export function StartScreen() {
             </ul>
           </section>
         </div>
+        <div className="mt-8"><DemoChainHint /></div>
       </main>
     </div>
   );
