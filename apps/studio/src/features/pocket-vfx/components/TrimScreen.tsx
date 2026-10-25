@@ -13,7 +13,8 @@ import { useI18n } from "../i18n";
 import type { Dict } from "../i18n/en";
 import { setTrimDuration, moveTrim } from "../model/trim";
 import { errorText } from "./errors";
-import { TopBar } from "./TopBar";
+import { TopBar } from "../../../shell/TopBar";
+import { useVfxMock } from "../hooks/capabilities";
 import { TrimBar } from "./TrimBar";
 
 type T = (key: keyof Dict, vars?: Record<string, string | number>) => string;
@@ -99,7 +100,7 @@ export function TrimScreen({ projectId, onContinue }: { projectId: string; onCon
     autoLink(workId, (c, p) => (workToLink(p.assets, c, analyze) === workId ? { ...c, work_asset_id: workId } : c));
   }, [workId, analyze, autoLink]);
 
-  const status = saveStatus(saveState, t);
+  const status = saveState === "idle" ? undefined : saveState;
   if (query.isError) return <Shell status={status}><Message icon={<CircleAlert className="h-6 w-6 text-danger" aria-hidden />} title={t("projectError")} action /></Shell>;
   if (!project) return <Shell status={status}><Message icon={<Loader2 className="h-6 w-6 animate-spin text-muted" aria-hidden />} title={t("loadingProject")} /></Shell>;
   const shell = (body: ReactNode) => <Shell project={project} status={status}>{body}</Shell>;
@@ -125,17 +126,11 @@ const DERIVATIVE_POLLS = 20;
 const REJECT_KEYS = { reject_unsupported_codec: 1, reject_multiple_video_streams: 1, reject_too_large_dims: 1, reject_too_long: 1,
   reject_too_large: 1, reject_unsupported_format: 1 };
 
-function saveStatus(state: SaveState, t: T): ReactNode {
-  if (state === "saving") return <><Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />{t("saving")}</>;
-  if (state === "error") return <><CircleAlert className="h-3.5 w-3.5 text-danger" aria-hidden />{t("saveFailed")}</>;
-  if (state === "conflict") return <><CircleAlert className="h-3.5 w-3.5 text-warning" aria-hidden />{t("conflict")}</>;
-  return null;
-}
-
-function Shell({ project, status, children }: { project?: PocketVfxProject; status: ReactNode; children: ReactNode }) {
+function Shell({ project, status, children }: { project?: PocketVfxProject; status?: SaveState extends infer S ? Exclude<S, "idle"> : never; children: ReactNode }) {
+  const mock = useVfxMock(project?.config.model_profile, project?.upstream_mock);
   return (
     <div className="flex min-h-screen flex-col md:h-screen">
-      <TopBar title={project?.title} modelProfile={project?.config.model_profile} status={status} />
+      <TopBar title={project?.title} saveState={status} mock={mock} />
       {children}
     </div>
   );

@@ -24,7 +24,8 @@ import { RenderBar } from "./RenderBar";
 import { ResultView } from "./ResultView";
 import { AnalyzePanel, JobStatusList } from "./ScenePanel";
 import { Timeline, usePlayback } from "./Timeline";
-import { TopBar } from "./TopBar";
+import { TopBar } from "../../../shell/TopBar";
+import { TopBarActions } from "./TopBarActions";
 
 type MobileTab = "upload" | "edit" | "result";
 
@@ -215,7 +216,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
     // Desktop: fixed app shell (panels scroll on their own), never shorter than 640px.
     // Mobile (<768px): stage on top, bottom sheet with Upload / Edit / Result tabs; the page scrolls.
     <div className="flex min-h-[100dvh] flex-col md:h-[100dvh] md:min-h-[640px]">
-      <TopBar />
+      <TopBarActions />
       <div className="flex min-h-0 flex-1 flex-col md:grid md:grid-cols-[240px_minmax(0,1fr)_320px] md:grid-rows-[minmax(0,1fr)_140px]">
         <aside data-region="left" aria-label={t("panelLeft")} className="scroll-panel hidden border-r border-border bg-panel md:col-start-1 md:row-span-2 md:row-start-1 md:block">
           {desktop ? <LeftPanel /> : null}

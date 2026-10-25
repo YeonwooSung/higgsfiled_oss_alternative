@@ -11,7 +11,7 @@ import { SAMPLES, type SampleId } from "../flow/scene";
 import { PROJECTS_QUERY_KEY } from "../../../shell/tools";
 import { useI18n } from "../i18n";
 import { errorText } from "./errors";
-import { LanguageToggle } from "./LanguageToggle";
+import { TopBar } from "../../../shell/TopBar";
 
 const ACCEPT = "image/png,image/jpeg,image/webp";
 
@@ -45,14 +45,9 @@ export function StartScreen() {
   };
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-6xl flex-col px-4 py-6 md:px-8">
-      <header className="mb-10 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Video className="h-5 w-5 text-accent" aria-hidden />
-          <span className="text-[15px] font-semibold">{t("appName")}</span>
-        </div>
-        <LanguageToggle />
-      </header>
+    <div className="flex min-h-screen flex-col">
+      <TopBar />
+      <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-4 py-6 md:px-8">
       <div className="grid gap-10 md:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]">
         <section>
           <h1 className="mb-2">{t("tagline")}</h1>
@@ -94,5 +89,6 @@ export function StartScreen() {
         </section>
       </div>
     </main>
+    </div>
   );
 }

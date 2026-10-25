@@ -35,7 +35,8 @@ import { ResultView } from "./ResultView";
 import { Stage } from "./Stage";
 import { Timeline } from "./Timeline";
 import { TrackPanel } from "./TrackPanel";
-import { TopBar } from "./TopBar";
+import { TopBar } from "../../../shell/TopBar";
+import { useVfxMock } from "../hooks/capabilities";
 
 type MobileTab = "effect" | "track" | "adjust" | "result";
 
@@ -128,13 +129,6 @@ function usePlatePreview(project: PocketVfxProject, config: PocketVfxConfig) {
   return seq ? { seq, frames, loopable: false } : null;
 }
 
-function saveText(state: ReturnType<typeof useEditor.getState>["saveState"], t: ReturnType<typeof useI18n>["t"]): ReactNode {
-  if (state === "saving") return <><Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />{t("saving")}</>;
-  if (state === "error") return <><CircleAlert className="h-3.5 w-3.5 text-danger" aria-hidden />{t("saveFailed")}</>;
-  if (state === "conflict") return <><CircleAlert className="h-3.5 w-3.5 text-warning" aria-hidden />{t("conflictEditor")}</>;
-  return <><Check className="h-3.5 w-3.5 text-tracking" aria-hidden />{t("saved")}</>;
-}
-
 export function Editor({ initial, onTrim }: { initial: PocketVfxProject; onTrim: () => Promise<void> }) {
   const { t } = useI18n();
   const desktop = useIsDesktop();
@@ -212,6 +206,7 @@ function EditorBody({ project, config, desktop, onTrim, t }: {
   };
   const resultScreen = desktop ? view === "result" : tab === "result";
   const { undo, redo } = useEditor.getState();
+  const mock = useVfxMock(config.model_profile, project.upstream_mock);
   const topActions = (
     <>
       <Button size="sm" variant="ghost" onClick={() => void back()} disabled={leaving} title={t("backToTrim")}
@@ -248,7 +243,7 @@ function EditorBody({ project, config, desktop, onTrim, t }: {
 
   return (
     <div className="flex min-h-[100dvh] flex-col md:h-[100dvh] md:min-h-[640px]">
-      <TopBar title={project.title} modelProfile={config.model_profile} status={saveText(saveState, t)}>{topActions}</TopBar>
+      <TopBar title={project.title} saveState={saveState} mock={mock} actions={topActions} />
       {desktop ? (
         <div className="grid min-h-0 flex-1 grid-cols-vfx-shell grid-rows-[minmax(0,1fr)_160px]">
           <aside data-region="left" aria-label={t("effects")} className="scroll-panel row-span-2 flex flex-col gap-5 border-r border-border bg-panel p-3">

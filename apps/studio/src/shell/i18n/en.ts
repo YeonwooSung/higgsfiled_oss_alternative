@@ -15,6 +15,14 @@ export const en = {
   navigation: "Navigation",
   closeMenu: "Close menu",
   projectsLoadFailed: "Couldn't load projects",
+  saved: "Saved",
+  saving: "Saving…",
+  saveFailed: "Not saved",
+  conflict: "Changed elsewhere — reloaded",
+  mock: "Mock",
+  mockExplain: "Mock profile: deterministic stand-ins, not real model output.",
+  language: "Language",
+  openMenu: "Open menu",
   retry: "Retry",
 };
 

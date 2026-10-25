@@ -9,7 +9,7 @@ import { BottomPanel } from "./BottomPanel";
 import { Inspector } from "./Inspector";
 import { LeftPanel } from "./LeftPanel";
 import { StageArea } from "./StageArea";
-import { TopBar } from "./TopBar";
+import { TopBarActions } from "./TopBarActions";
 import { cx } from "@oc/ui";
 
 type MobileTab = "product" | "scene" | "output";
@@ -85,7 +85,7 @@ export function Editor({ projectId }: { projectId: string }) {
     // Desktop: fixed app shell (panels scroll on their own) that never gets shorter than 640px —
     // below that the page itself scrolls instead of clipping. Mobile: a normal scrolling page.
     <div className="flex min-h-[100dvh] flex-col md:h-[100dvh] md:min-h-[640px]">
-      <TopBar />
+      <TopBarActions />
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         <aside className="scroll-panel hidden w-[260px] shrink-0 border-r border-border bg-panel md:block">
           <LeftPanel />

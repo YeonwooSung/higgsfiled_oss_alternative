@@ -17,5 +17,13 @@ export const ko: Dict = {
   navigation: "메뉴",
   closeMenu: "메뉴 닫기",
   projectsLoadFailed: "프로젝트를 불러오지 못했습니다",
+  saved: "저장됨",
+  saving: "저장 중…",
+  saveFailed: "저장 안 됨",
+  conflict: "다른 곳에서 변경됨 — 다시 불러왔습니다",
+  mock: "목업",
+  mockExplain: "목업 프로필: 실제 모델 결과가 아닌 결정적 대체 출력입니다.",
+  language: "언어",
+  openMenu: "메뉴 열기",
   retry: "다시 시도",
 };

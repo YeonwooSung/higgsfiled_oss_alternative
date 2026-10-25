@@ -26,7 +26,7 @@ import { CompareView } from "./CompareView";
 import { ExportMenu } from "./ExportMenu";
 import { JobProgress } from "./JobUi";
 import { ShareLink } from "./ShareView";
-import { useCapabilities } from "./TopBar";
+import { useCapabilities } from "../hooks/capabilities";
 
 function Line({ tone, icon, children }: { tone: "ok" | "warn" | "muted"; icon: ReactNode; children: ReactNode }) {
   return (

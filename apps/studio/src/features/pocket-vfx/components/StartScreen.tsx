@@ -9,7 +9,8 @@ import { ACCEPT, clipFileProblem, fetchSample, SAMPLES, startProjectWithClip, ty
 import { PROJECTS_QUERY_KEY } from "../../../shell/tools";
 import { useI18n } from "../i18n";
 import { errorText } from "./errors";
-import { TopBar } from "./TopBar";
+import { TopBar } from "../../../shell/TopBar";
+import { useVfxMock } from "../hooks/capabilities";
 
 /** A file the client already knows the server would refuse (type / size); its message is user text. */
 class ClipFileError extends Error {}
@@ -18,6 +19,7 @@ class ClipFileError extends Error {}
 export function StartScreen() {
   const { t } = useI18n();
   const router = useRouter();
+  const mock = useVfxMock();
   const queryClient = useQueryClient();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -46,7 +48,7 @@ export function StartScreen() {
 
   return (
     <div className="flex min-h-screen flex-col">
-      <TopBar />
+      <TopBar mock={mock} />
       <main className="mx-auto grid w-full max-w-6xl flex-1 content-start gap-10 px-4 py-8 md:grid-cols-[minmax(0,5fr)_minmax(0,6fr)] md:px-8 md:py-12">
         <section>
           <h1 className="mb-2">{t("tagline")}</h1>
