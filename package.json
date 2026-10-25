@@ -3,6 +3,7 @@
   "private": true,
   "packageManager": "pnpm@10.26.1",
   "scripts": {
+    "dev:studio": "pnpm --filter @oc/studio dev",
     "dev:product-lock": "pnpm --filter @oc/product-lock dev",
     "dev:camera-sketch": "pnpm --filter @oc/camera-sketch dev",
     "dev:pocket-vfx": "pnpm --filter @oc/pocket-vfx dev",

@@ -2,7 +2,7 @@
 @tailwind components;
 @tailwind utilities;
 
-:root { color-scheme: dark; --oc-on-accent: #101216; }
+:root { color-scheme: dark; --oc-on-accent: 16 18 22; /* #101216, RGB triplet read by @oc/ui Button */ }
 html, body { background: #101216; color: #F0F3F8; font-size: 14px; line-height: 1.5; }
 h1 { font-size: 20px; line-height: 28px; font-weight: 600; }
 .tabular { font-variant-numeric: tabular-nums; }

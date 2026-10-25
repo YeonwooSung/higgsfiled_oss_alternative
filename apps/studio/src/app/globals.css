@@ -1,0 +1,115 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Per-tool theme scopes. Each class redefines the semantic colours `@oc/ui` and the tools use
+ * (app/panel/stage/ink/muted/border/accent/danger, plus the dark emerald/amber/red badge shades) as
+ * RGB triplets, so tailwind.config.ts can map them to `rgb(var(--oc-x) / <alpha-value>)` and alpha
+ * modifiers such as `bg-panel/90` keep working. The shell chrome uses `theme-camera`; each tool's
+ * route wraps its own subtree in its theme class.
+ */
+/* Camera Sketch (also the shell chrome): its former tailwind.config.ts values. */
+.theme-camera {
+  --oc-app: 16 18 22; /* #101216 */
+  --oc-panel: 25 29 36; /* #191D24 */
+  --oc-stage: 10 12 16; /* #0A0C10 */
+  --oc-ink: 240 243 248; /* #F0F3F8 */
+  --oc-muted: 163 172 185; /* #A3ACB9 */
+  --oc-border: 48 56 69; /* #303845 */
+  --oc-accent: 102 220 242; /* #66DCF2 */
+  --oc-accent-strong: 138 230 247; /* #8AE6F7 */
+  --oc-danger: 255 138 128; /* #FF8A80 */
+  --oc-on-accent: 16 18 22; /* #101216 */
+  --oc-emerald-50: 22 48 58; /* #16303A */
+  --oc-emerald-200: 44 106 122; /* #2C6A7A */
+  --oc-amber-50: 44 37 20; /* #2C2514 */
+  --oc-amber-100: 58 47 20; /* #3A2F14 */
+  --oc-amber-200: 107 84 33; /* #6B5421 */
+  --oc-amber-300: 138 109 43; /* #8A6D2B */
+  --oc-amber-700: 240 186 101; /* #F0BA65 */
+  --oc-amber-800: 240 186 101; /* #F0BA65 */
+  --oc-amber-900: 240 186 101; /* #F0BA65 */
+  --oc-red-50: 58 29 29; /* #3A1D1D */
+  --oc-red-200: 122 58 58; /* #7A3A3A */
+}
+/* Product Lock, dark to match the shell. The stage stays light so product edges read clearly. */
+.theme-product {
+  --oc-app: 18 21 19; /* #121513 */
+  --oc-panel: 26 30 27; /* #1A1E1B */
+  --oc-stage: 233 232 227; /* #E9E8E3 */
+  --oc-ink: 238 242 238; /* #EEF2EE */
+  --oc-muted: 164 173 166; /* #A4ADA6 */
+  --oc-border: 49 56 51; /* #313833 */
+  --oc-accent: 76 195 138; /* #4CC38A */
+  --oc-accent-strong: 111 211 162; /* #6FD3A2 */
+  --oc-danger: 255 138 128; /* #FF8A80 */
+  --oc-on-accent: 18 21 19; /* #121513 */
+  --oc-emerald-50: 22 48 42; /* #16302A */
+  --oc-emerald-200: 46 107 87; /* #2E6B57 */
+  --oc-amber-50: 44 37 20; /* #2C2514 */
+  --oc-amber-100: 58 47 20; /* #3A2F14 */
+  --oc-amber-200: 107 84 33; /* #6B5421 */
+  --oc-amber-300: 138 109 43; /* #8A6D2B */
+  --oc-amber-700: 242 200 107; /* #F2C86B */
+  --oc-amber-800: 242 200 107; /* #F2C86B */
+  --oc-amber-900: 242 200 107; /* #F2C86B */
+  --oc-red-50: 58 29 29; /* #3A1D1D */
+  --oc-red-200: 122 58 58; /* #7A3A3A */
+}
+/* Pocket VFX: its former tailwind.config.ts values. */
+.theme-vfx {
+  --oc-app: 17 17 19; /* #111113 */
+  --oc-panel: 28 28 32; /* #1C1C20 */
+  --oc-stage: 8 8 9; /* #080809 */
+  --oc-ink: 246 245 242; /* #F6F5F2 */
+  --oc-muted: 170 168 174; /* #AAA8AE */
+  --oc-border: 52 52 58; /* #34343A */
+  --oc-accent: 255 154 82; /* #FF9A52 */
+  --oc-accent-strong: 255 178 125; /* #FFB27D */
+  --oc-danger: 255 138 128; /* #FF8A80 */
+  --oc-on-accent: 17 17 19; /* #111113 */
+  --oc-emerald-50: 22 48 42; /* #16302A */
+  --oc-emerald-200: 46 107 87; /* #2E6B57 */
+  --oc-amber-50: 44 37 20; /* #2C2514 */
+  --oc-amber-100: 58 47 20; /* #3A2F14 */
+  --oc-amber-200: 107 84 33; /* #6B5421 */
+  --oc-amber-300: 138 109 43; /* #8A6D2B */
+  --oc-amber-700: 242 200 107; /* #F2C86B */
+  --oc-amber-800: 242 200 107; /* #F2C86B */
+  --oc-amber-900: 242 200 107; /* #F2C86B */
+  --oc-red-50: 58 29 29; /* #3A1D1D */
+  --oc-red-200: 122 58 58; /* #7A3A3A */
+}
+
+.theme-camera, .theme-product, .theme-vfx { color-scheme: dark; }
+
+:root { color-scheme: dark; }
+html { background: #101216; }
+html, body { font-size: 14px; line-height: 1.5; }
+h1 { font-size: 20px; line-height: 28px; font-weight: 600; }
+.tabular { font-variant-numeric: tabular-nums; }
+:focus-visible { outline: 2px solid rgb(var(--oc-accent, 102 220 242)); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0ms !important; animation-duration: 0ms !important; }
+}
+
+/* Product Lock's transparency checkerboard: stays light on the light stage. */
+.checker {
+  background-color: #E9E8E3;
+  background-image: linear-gradient(45deg, #dcdbd5 25%, transparent 25%), linear-gradient(-45deg, #dcdbd5 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #dcdbd5 75%), linear-gradient(-45deg, transparent 75%, #dcdbd5 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+
+/* Visible, thin scrollbars so scrollable panels read as scrollable (macOS hides overlay bars). */
+.scroll-panel {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--oc-border)) transparent;
+  scrollbar-gutter: stable;
+}
+.scroll-panel::-webkit-scrollbar { width: 8px; height: 8px; }
+.scroll-panel::-webkit-scrollbar-thumb { background: rgb(var(--oc-border)); border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+.scroll-panel::-webkit-scrollbar-track { background: transparent; }
