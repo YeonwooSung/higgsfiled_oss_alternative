@@ -4,7 +4,7 @@ Run: uv run python fixtures/camera-sketch/make_parity.py   (also run by make_fix
 The fixture is computed from ``open_creative.camera_sketch.{camera,path,scene}``, the scene
 metadata in ``scenes.json`` (sizes + target uv) and, for ``prepare_z``/``mesh`` only, the committed
 ``room.depth.png``; everything is deterministic.
-``apps/camera-sketch/tests/parity.test.ts`` replays every section through the TS port and
+``apps/studio/tests/camera-sketch/parity.test.ts`` replays every section through the TS port and
 ``nodes/open_creative/tests/test_cs_parity.py`` checks the committed file equals a fresh build.
 
 Sections (add new ones as top-level keys of ``build()``'s dict, e.g. mesh face counts):
@@ -278,7 +278,7 @@ def _room_z() -> tuple[np.ndarray, tuple[float, float]]:
 
 ROOM_SAMPLE_ROWS = list(range(0, 540, 27))  # 20 x 20 sample grid of the 960x540 room depth
 ROOM_SAMPLE_COLS = list(range(0, 960, 48))
-PREVIEW_STRIDE_ROOM = 5  # apps/camera-sketch chooseStride(960, 540): 2*192*108 = 41472 <= 60k
+PREVIEW_STRIDE_ROOM = 5  # apps/studio camera-sketch chooseStride(960, 540): 2*192*108 = 41472 <= 60k
 
 
 def _synthetic_z() -> np.ndarray:

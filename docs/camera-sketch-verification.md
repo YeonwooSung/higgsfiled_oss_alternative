@@ -1,5 +1,7 @@
 # Camera Sketch verification (spec section 13) - mock profile
 
+> Note: the three apps were merged into `apps/studio` on 2026-10-26; paths, ports and compose services below describe the runs as they happened.
+
 Source for the PR body. Branch `feat/camera-sketch`. Everything below ran on the **mock_v1** profile (CPU, no GPU,
 no Comfy). Nothing here claims a Cinematic quality or accuracy figure; see the last row and the eval sheet.
 

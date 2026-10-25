@@ -1,7 +1,7 @@
 """Python -> TS parity fixture for ``oc_api.camera_sketch.jobs.geometry_hash`` (``geometry_hash.v1.json``).
 
 Run: uv run python fixtures/camera-sketch/make_geometry_hash.py
-``apps/camera-sketch/tests/results.test.ts`` recomputes every hash in the browser port
+``apps/studio/tests/camera-sketch/results.test.ts`` recomputes every hash in the browser port
 (``src/model/results.ts::geometryHash``) and ``services/api/tests/test_camera_jobs.py`` checks the
 committed file equals a fresh build. The cases cover integer-valued floats (``50.0``), tiny values that
 Python prints in exponent form (``1e-05``), round-off reprs, ``-0.0``, null/set asset ids and sketches.

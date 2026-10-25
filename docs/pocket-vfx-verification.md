@@ -1,5 +1,7 @@
 # Pocket VFX verification (spec section 14) - mock profile
 
+> Note: the three apps were merged into `apps/studio` on 2026-10-26; paths, ports and compose services below describe the runs as they happened.
+
 Source for the PR body. Branch `feat/pocket-vfx`. Everything below ran on the **mock_v1** profile (CPU, no GPU, no
 Comfy). Masks there are fixture ground truth or GrabCut, and "generated" plates are a procedural stand-in, so nothing here
 says anything about SAM 2.1 or LTX quality. See the last row and the eval sheet.

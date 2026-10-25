@@ -20,7 +20,7 @@ Writes (all silent unless noted):
   clean_plate.png       the empty background of stomp_landscape
   manifest.json         sha256 of every file + GT (display-space hand trajectories per source PTS
                         for rotated_portrait and vfr, frame_numbers PTS + code layout, audio onset)
-stomp_landscape.mp4 and rotated_portrait.mp4 are copied to apps/pocket-vfx/public/samples/.
+stomp_landscape.mp4 and rotated_portrait.mp4 are copied to apps/studio/public/samples/vfx/.
 
 --plates writes the bundled Quick-render plates named in presets/pocket-vfx/presets.v1.json (MIT, procedural
 emissive gray on black, ``open_creative.pocket_vfx.plate.procedural_plate``): <id>.mp4 768x448 and
@@ -28,9 +28,9 @@ emissive gray on black, ``open_creative.pocket_vfx.plate.procedural_plate``): <i
 presets/pocket-vfx/plates/manifest.json (sha256, seed, style, license).
 --sfx writes presets/pocket-vfx/sfx/{impact,aura,blink}_v1.wav (MIT, synthesized, 48 kHz mono 16-bit) and sets each
 preset's ``sfx.peak_offset_ms`` to the measured energy peak of its file (repo presets and the packaged mirror).
---parity writes parity.v1.json: Python reference values the apps/pocket-vfx TS ports must reproduce (frame_index,
+--parity writes parity.v1.json: Python reference values the apps/studio/src/features/pocket-vfx TS ports must reproduce (frame_index,
 frame_count, effect_window, timing_errors, the Impact Wave ring curve and anchor glow, the Energy Aura + plate envelopes, plate_indices); checked by
-apps/pocket-vfx/tests/parity.test.ts and kept fresh by nodes/open_creative/tests/test_pv_parity.py.
+apps/studio/tests/pocket-vfx/parity.test.ts and kept fresh by nodes/open_creative/tests/test_pv_parity.py.
 Fixed seeds and bitexact muxing -> byte-identical outputs on the same FFmpeg/x264 build.
 """
 

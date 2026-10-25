@@ -62,9 +62,7 @@ flowchart TD
 
 | 경로 | 내용 |
 |---|---|
-| apps/product-lock | Product Lock의 독립 Next.js 앱 |
-| apps/camera-sketch | Camera Sketch의 독립 Next.js 앱 |
-| apps/pocket-vfx | Pocket VFX의 독립 Next.js 앱 |
+| apps/studio | 세 도구(Camera Sketch, Product Lock, Pocket VFX)를 하나로 합친 Next.js 앱 (2026-10-26 통합; 이전에는 도구별 독립 앱) |
 | packages/ui | Button, slider, upload, stage, timeline, job panel |
 | packages/contracts | OpenAPI에서 생성한 TS type/client |
 | services/api | FastAPI, DB migration, session, validation |

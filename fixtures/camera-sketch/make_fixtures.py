@@ -4,7 +4,7 @@ Run: uv run python fixtures/camera-sketch/make_fixtures.py
 Writes per scene: <name>.png (RGB), <name>.depth.png (16-bit GT inverse depth, near = bright)
 and scenes.json. Scenes are textured (noise/stripes/grids) so feature tracking has corners to
 follow. Fixed seeds -> byte-identical outputs. The PNGs are also copied to
-apps/camera-sketch/public/samples/. Finally make_parity.py writes parity.v1.json (Python -> TS
+apps/studio/public/samples/camera/. Finally make_parity.py writes parity.v1.json (Python -> TS
 camera-math parity fixture; it only reads scenes.json).
 """
 
