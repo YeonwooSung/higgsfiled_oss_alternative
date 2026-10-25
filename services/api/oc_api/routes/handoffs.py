@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, Header, Request
@@ -22,6 +23,7 @@ from .assets import owned_asset
 from .jobs import _replay
 
 router = APIRouter()
+log = logging.getLogger(__name__)
 
 ENDPOINT = "POST /handoffs"
 
@@ -44,8 +46,22 @@ def _out(project: Project, asset_id: str, job: Job) -> dict:
 
 
 def _replayed(db: DbSession, job: Job) -> dict:
-    """The recorded hand-off: the inspect job points at its project and (via its options) the copied asset."""
-    return _out(db.get(Project, job.project_id), job.options_json["asset_id"], job)
+    """The recorded hand-off: the inspect job points at its project and (via its options) the copied asset.
+
+    A target project deleted since then is gone for the client too (404), never a link to a missing project.
+    """
+    project = db.get(Project, job.project_id)
+    if project is None or project.deleted_at is not None:
+        raise ApiError(404, "not_found", "The project this hand-off created was deleted.")
+    return _out(project, job.options_json["asset_id"], job)
+
+
+def _cleanup(storage, prefix: str) -> None:
+    """Best-effort removal of the copied object; a failure here must not hide the error that got us here."""
+    try:
+        storage.delete_prefix(prefix)
+    except Exception:
+        log.exception("hand-off cleanup failed for %s", prefix)
 
 
 @router.post("/handoffs", status_code=201)
@@ -111,13 +127,13 @@ def create_handoff(body: HandoffCreate, request: Request, db: DbSession = Depend
         db.commit()
     except IntegrityError:  # concurrent request with the same key won the insert
         db.rollback()
-        storage.delete_prefix(prefix)
+        _cleanup(storage, prefix)
         existing = _replay(db, settings, session, ENDPOINT, idempotency_key or "", rhash)
         if existing is None:
             raise
         return _replayed(db, existing)
     except BaseException:
         db.rollback()
-        storage.delete_prefix(prefix)
+        _cleanup(storage, prefix)
         raise
     return _out(project, str(asset_id), job)

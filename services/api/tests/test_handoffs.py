@@ -189,3 +189,30 @@ def test_project_out_handoff_survives_source_delete(app, session_client, project
 def test_plain_project_has_no_handoff(session_client, project):
     got = session_client.get(f"/api/v1/projects/{project['id']}").json()
     assert got["upstream_mock"] is False and got["handoff"] is None
+
+
+def test_replay_after_target_project_deleted_is_404(app, session_client, project):
+    render, _ = finished_output(app, project, "render")
+    first = hand_off(session_client, render, "pocket-vfx", key="k-del")
+    assert first.status_code == 201, first.text
+    assert session_client.delete(f"/api/v1/projects/{first.json()['project_id']}").status_code == 202
+    again = hand_off(session_client, render, "pocket-vfx", key="k-del")
+    assert again.status_code == 404 and again.json()["error"]["code"] == "not_found"
+
+
+def test_cleanup_failure_does_not_mask_the_original_error(app, session_client, project, monkeypatch):
+    render, _ = finished_output(app, project, "render")
+    storage = app.state.storage
+
+    def missing(*_a, **_k):
+        raise FileNotFoundError("gone")
+
+    def broken_cleanup(*_a, **_k):
+        raise OSError("storage down")
+
+    monkeypatch.setattr(storage, "copy", missing)
+    monkeypatch.setattr(storage, "delete_prefix", broken_cleanup)
+    before = project_count(app)
+    r = hand_off(session_client, render, "pocket-vfx")
+    assert r.status_code == 409 and r.json()["error"]["code"] == "asset_missing"
+    assert project_count(app) == before
