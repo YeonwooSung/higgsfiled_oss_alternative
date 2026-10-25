@@ -83,7 +83,7 @@ and in the recipe. It exists so the whole product can be exercised without a GPU
 - Pocket VFX: masks come from the fixture ground truth when the clip matches a fixture, otherwise deterministic GrabCut;
   the "generated" plate is a deterministic procedural stand-in.
 
-**`open_weights_v1` is not integrated yet for any tool.** `GET /api/v1/capabilities` reports it unavailable and
+**`open_weights_v1` is not integrated yet for any tool.** `GET /api/v1/capabilities?app_slug=<tool>` (per tool) reports it unavailable and
 generation requests get HTTP 503. No real inference has been run.
 
 - Product Lock (SAM 2.1 small, FLUX.1-schnell, LTX-2.3): becomes available only after the three API graphs are exported
@@ -227,12 +227,15 @@ Pocket VFX
 With `OC_STORAGE_BACKEND=s3` the browser reads signed bucket URLs cross-origin. The studio web origin
 needs a CORS rule allowing **GET with the `Range` header** (and exposing `Content-Range`, `Accept-Ranges`,
 `Content-Length`) on the bucket, for: preview depth/image fetches, the path overlay on the result page, and
-share-page playback. Uploads additionally need PUT . With the default local backend
+share-page playback. Uploads additionally need PUT. With the default local backend
 (files served through the API) no CORS setup is needed.
 
 The compose MinIO (`--profile s3`) is set up for this: `minio-init` creates the bucket, and since MinIO does not
 implement per-bucket CORS (`PutBucketCors` is rejected) the server-wide `MINIO_API_CORS_ALLOW_ORIGIN` allows the
-studio origin (`http://localhost:3000`; set it in the compose file if the studio is served elsewhere). Set `OC_S3_ENDPOINT_URL=http://minio:9000` for the API/worker and
+studio origin. It defaults to `http://localhost:3000` and is set through `MINIO_API_CORS_ALLOW_ORIGIN` in `.env`
+(comma-separated list) if the studio is served elsewhere; run compose from the repo root with
+`--env-file .env` (as in Run locally) so it takes effect; the variable can also be exported in the shell. Set `OC_S3_ENDPOINT_URL=http://minio:9000`
+for the API/worker and
 `OC_S3_PUBLIC_ENDPOINT_URL=http://localhost:9000` so presigned URLs are signed for the host the browser opens.
 For AWS S3 or another store with bucket CORS, an example rule (S3 CORS JSON):
 
