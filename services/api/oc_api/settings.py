@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     storage_dir: Path = REPO_ROOT / ".data" / "storage"
     s3_bucket: str = "open-creative"
     s3_endpoint_url: str | None = None
+    s3_public_endpoint_url: str | None = None  # browser-facing endpoint for presigned URLs; default s3_endpoint_url
     s3_region: str = "us-east-1"
     signing_secret: str = Field(default="dev-only-change-me", min_length=8)
     public_base_url: str = "http://localhost:3000"

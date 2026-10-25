@@ -158,17 +158,25 @@ def _temp_path(p: Path) -> Path:
 
 class S3Storage:
     def __init__(self, bucket: str, endpoint_url: str | None, region: str,
-                 access_key: str | None = None, secret_key: str | None = None):
+                 access_key: str | None = None, secret_key: str | None = None,
+                 public_endpoint_url: str | None = None):
         import boto3
         from botocore.config import Config
 
         self.bucket = bucket
-        self.s3 = boto3.client("s3", endpoint_url=endpoint_url, region_name=region,
-                               aws_access_key_id=access_key, aws_secret_access_key=secret_key,
-                               config=Config(signature_version="s3v4", s3={"addressing_style": "path"}))
+
+        def client(endpoint: str | None):
+            return boto3.client("s3", endpoint_url=endpoint, region_name=region,
+                                aws_access_key_id=access_key, aws_secret_access_key=secret_key,
+                                config=Config(signature_version="s3v4", s3={"addressing_style": "path"}))
+
+        self.s3 = client(endpoint_url)
+        # Presigned URLs are opened by the browser, and SigV4 signs the host: when the API reaches the bucket on an
+        # internal name (compose: http://minio:9000), sign them for the browser-reachable endpoint instead.
+        self.presigner = client(public_endpoint_url) if public_endpoint_url else self.s3
 
     def upload_url(self, key: str, ttl: int, mime: str, max_bytes: int) -> tuple[str, dict, datetime]:
-        url = self.s3.generate_presigned_url("put_object", Params={"Bucket": self.bucket, "Key": key,
+        url = self.presigner.generate_presigned_url("put_object", Params={"Bucket": self.bucket, "Key": key,
                                                                     "ContentType": mime}, ExpiresIn=ttl)
         return url, {"Content-Type": mime}, datetime.fromtimestamp(time.time() + ttl, UTC)
 
@@ -178,7 +186,7 @@ class S3Storage:
             params["ResponseContentType"] = mime
         if filename:
             params["ResponseContentDisposition"] = f'attachment; filename="{filename}"'
-        return self.s3.generate_presigned_url("get_object", Params=params, ExpiresIn=ttl)
+        return self.presigner.generate_presigned_url("get_object", Params=params, ExpiresIn=ttl)
 
     def put_bytes(self, key: str, data: bytes, mime: str | None = None) -> None:
         self.s3.put_object(Bucket=self.bucket, Key=key, Body=data, **({"ContentType": mime} if mime else {}))
@@ -220,5 +228,6 @@ def make_storage(settings) -> Storage:
         import os
 
         return S3Storage(settings.s3_bucket, settings.s3_endpoint_url, settings.s3_region,
-                         os.environ.get("AWS_ACCESS_KEY_ID"), os.environ.get("AWS_SECRET_ACCESS_KEY"))
+                         os.environ.get("AWS_ACCESS_KEY_ID"), os.environ.get("AWS_SECRET_ACCESS_KEY"),
+                         public_endpoint_url=settings.s3_public_endpoint_url)
     return LocalStorage(settings.storage_dir, settings.signing_secret)
