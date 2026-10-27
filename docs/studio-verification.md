@@ -99,3 +99,38 @@ data), or keep the query cache in step with the store.
 
 Still not run: real inference (Comfy/GPU) for any tool, Generate Cinematic / Generate effect plate on a real
 deployment, Blink Out with a clean plate.
+
+## Fixes after verification (2026-10-27)
+
+Both open failures are fixed on `feat/unified-studio` (commits `723f433`..`86b6f6a`), together with the final review's
+other findings.
+
+- **Bug 1 (fresh visitor 401).** `GET /projects` without a session now answers `200 {"projects": []}` and starts no
+  session (`optional_session` in `services/api/oc_api/deps.py`); the sidebar query also treats a 401 as an empty list
+  (`listProjectsOrEmpty` in `apps/studio/src/shell/projectQuery.ts`). An editor that has to start a session refreshes
+  the sidebar's list (`withSession`).
+- **Bug 2 (Product Lock return: 403 + false 409).** Each editor's project query (Product Lock, Camera Sketch,
+  Pocket VFX) now uses `gcTime: 0` with `staleTime: Infinity` (`editorProjectQuery`), so a remount loads the server's
+  current revision instead of the first cached GET. The three copies of `useAssetUrl` became one shared hook
+  (`apps/studio/src/shell/assetUrl.ts`) that never returns a URL older than 4.5 minutes (server URLs live 300 s) and
+  times its refresh from when the URL was fetched.
+- Also: Product Lock resets the Result view, render selection and tool when another project opens; Product Lock,
+  Camera Sketch and Pocket VFX drop late `refresh()`/conflict responses for a project that is no longer open; a
+  replayed hand-off whose target project was deleted is 404; a failed storage cleanup in `POST /handoffs` is logged
+  and no longer hides the original error.
+
+How it was checked: new unit tests (`tests/shell/projectQuery.test.ts`, `tests/shell/assetUrl.test.ts`, store cases in
+`tests/product-lock/editorStore.test.ts` and `tests/camera-sketch/editorStore.test.ts`, API cases in
+`test_projects.py` and `test_handoffs.py`; the store and API cases fail on the code before the fix), then a local
+re-run (SQLite + local storage, mock profile, production studio build) in Playwright:
+
+| Check | Result |
+|---|---|
+| Fresh browser context on `/camera` | "No projects yet", no console errors, no 4xx, no session cookie set |
+| Product Lock sample -> background -> render -> hand cover to Camera Sketch -> provenance badge back -> edit | `PATCH` 200, no 403/409, no "Changed elsewhere" |
+| Back to the Camera Sketch project from the sidebar (within 5 min) after editing it -> edit again | Earlier edit shown (current revision), `PATCH` 200, no 409 |
+| On Product Lock project A's Result, open project B from the sidebar | B opens on Output with its stage; Result disabled; no errors |
+| Return to Product Lock A 294 s after leaving it (inside the old 403 window) | All images/video load with freshly signed URLs; no 403 |
+| API log over the whole run | 0 responses with 4xx/5xx |
+
+Screenshots: `.superpowers/sdd/2026-10-25-unified-studio/final-fix-*.png` (worktree only).
