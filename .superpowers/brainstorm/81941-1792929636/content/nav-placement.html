@@ -1,0 +1,82 @@
+<h2>기능 전환 메뉴를 어디에 둘까?</h2>
+<p class="subtitle">기본 화면은 Camera Sketch 에디터입니다. 이 에디터는 이미 왼쪽 도구 패널(240px), 가운데 미리보기, 오른쪽 인스펙터(320px), 아래 타임라인으로 가로 공간을 꽉 쓰고 있습니다. 노트북 화면(1280px) 기준으로 그렸습니다.</p>
+
+<style>
+  .ed { display:flex; flex-direction:column; height:260px; border:1px solid #8884; border-radius:6px; overflow:hidden; font-size:11px; }
+  .ed .top { height:28px; display:flex; align-items:center; gap:8px; padding:0 8px; border-bottom:1px solid #8884; background:#8881; }
+  .ed .body { flex:1; display:flex; min-height:0; }
+  .ed .nav { background:#5b6cff22; border-right:1px solid #8884; display:flex; flex-direction:column; gap:6px; padding:8px 6px; }
+  .ed .nav .it { padding:4px 6px; border-radius:4px; white-space:nowrap; }
+  .ed .nav .on { background:#5b6cff55; font-weight:600; }
+  .ed .left { width:52px; border-right:1px solid #8884; padding:6px; color:#888; }
+  .ed .mid { flex:1; display:flex; flex-direction:column; min-width:0; }
+  .ed .stage { flex:1; background:#2223; display:flex; align-items:center; justify-content:center; color:#888; }
+  .ed .tl { height:36px; border-top:1px solid #8884; color:#888; padding:4px 6px; }
+  .ed .right { width:70px; border-left:1px solid #8884; padding:6px; color:#888; }
+  .tabs { display:flex; gap:2px; margin-left:6px; }
+  .tabs span { padding:2px 8px; border-radius:4px; }
+  .tabs .on { background:#5b6cff55; font-weight:600; }
+  .w { color:#888; font-size:11px; margin-top:6px; }
+</style>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>이름이 보이는 사이드바 (요청하신 형태)</h3>
+      <div class="ed">
+        <div class="top"><b>Open Creative</b> / My project</div>
+        <div class="body">
+          <div class="nav" style="width:120px">
+            <div class="it on">🎥 Camera Sketch</div>
+            <div class="it">📦 Product Lock</div>
+            <div class="it">✨ Pocket VFX</div>
+          </div>
+          <div class="left">도구</div>
+          <div class="mid"><div class="stage">미리보기</div><div class="tl">타임라인</div></div>
+          <div class="right">인스펙터</div>
+        </div>
+      </div>
+      <p class="w">이름이 항상 보여 이해하기 쉽습니다. 다만 사이드바가 200px 정도를 계속 차지해서 미리보기가 그만큼 좁아집니다. 접기 버튼을 달면 결국 B처럼 쓰게 됩니다.</p>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>얇은 아이콘 레일 (추천)</h3>
+      <div class="ed">
+        <div class="top"><b>Open Creative</b> / My project</div>
+        <div class="body">
+          <div class="nav" style="width:30px; align-items:center">
+            <div class="it on" title="Camera Sketch">🎥</div>
+            <div class="it" title="Product Lock">📦</div>
+            <div class="it" title="Pocket VFX">✨</div>
+          </div>
+          <div class="left">도구</div>
+          <div class="mid"><div class="stage">미리보기</div><div class="tl">타임라인</div></div>
+          <div class="right">인스펙터</div>
+        </div>
+      </div>
+      <p class="w">사이드바 위치는 그대로 두되 폭을 56px로 줄입니다. 아이콘 아래에 짧은 이름을 붙이고, 마우스를 올리면 툴팁이 뜹니다. 시작 화면처럼 공간이 넉넉한 곳에서는 펼친 상태로 보여줄 수 있습니다. 휴대폰에서는 상단의 메뉴 버튼으로 엽니다. Figma나 VS Code가 쓰는 방식입니다.</p>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>상단 바의 탭</h3>
+      <div class="ed">
+        <div class="top"><b>Open Creative</b>
+          <div class="tabs"><span class="on">Camera Sketch</span><span>Product Lock</span><span>Pocket VFX</span></div>
+          <span style="margin-left:auto">My project</span></div>
+        <div class="body">
+          <div class="left">도구</div>
+          <div class="mid"><div class="stage">미리보기</div><div class="tl">타임라인</div></div>
+          <div class="right">인스펙터</div>
+        </div>
+      </div>
+      <p class="w">가로 공간을 전혀 쓰지 않습니다. 대신 상단 바에 이미 있는 프로젝트 이름, 저장 상태, Mock 표시, 되돌리기, 언어 버튼과 자리를 나눠 써야 합니다. 기능이 더 늘어나면 넘칩니다.</p>
+    </div>
+  </div>
+</div>
